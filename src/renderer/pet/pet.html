@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data:;">
+  <title>桌宠</title>
+  <link rel="stylesheet" href="pet.css">
+</head>
+<body>
+  <div class="pet-stage" id="pet-stage">
+    <!-- 气泡 -->
+    <div class="pet-bubble hidden" id="pet-bubble"></div>
+    <!-- 快捷菜单 -->
+    <div class="pet-menu hidden" id="pet-menu">
+      <div class="pm-it" data-pet="new">＋ 新建任务</div>
+      <div class="pm-it" data-pet="ai">✎ AI 对话</div>
+      <div class="pm-it" data-pet="today">◧ 今日视图</div>
+      <div class="pm-it" data-pet="board">▤ 看板</div>
+      <div class="pm-it" data-pet="cal">▦ 日历</div>
+      <div class="pm-it" data-pet="stat">▦ 统计</div>
+      <div class="pm-it" data-pet="trash">🗑 回收站</div>
+      <div class="pm-it" data-pet="settings">⚙ 设置</div>
+    </div>
+    <!-- 桌宠本体（deepseek酱 鲸鱼娘 sprite 帧动画） -->
+    <div class="pet-wrap" id="pet-wrap">
+      <div class="pet" id="pet">
+        <div class="pet-sprite-frame">
+          <div class="pet-sprite" id="pet-sprite"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <script src="pet.js"></script>
+</body>
+</html>

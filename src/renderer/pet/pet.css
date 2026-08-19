@@ -1,0 +1,132 @@
+/* ============ 桌宠样式 ============ */
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+html, body {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: transparent;
+  font-family: 'Segoe UI', 'Microsoft YaHei', sans-serif;
+  user-select: none;
+}
+
+.pet-stage {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+/* 桌宠本体 */
+.pet-wrap {
+  position: absolute;
+  left: 50%;
+  bottom: 8px;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  cursor: grab;
+  z-index: 5;
+}
+.pet-wrap.dragging { cursor: grabbing; }
+
+.pet {
+  position: relative;
+  width: 160px;
+  height: 170px;
+  transition: transform 0.25s ease;
+}
+.pet:hover { transform: translateY(-3px); }
+.pet.alert { animation: pet-bounce 0.6s ease 2; }
+@keyframes pet-bounce {
+  0%, 100% { transform: translateY(0); }
+  35% { transform: translateY(-12px) rotate(-4deg); }
+  70% { transform: translateY(-5px) rotate(3deg); }
+}
+
+/* ========== deepseek酱 鲸鱼娘 sprite 帧动画 ==========
+ * 精灵图：192x208/帧，8列x9行（1536x1872）
+ * 行映射：0待机 1右跑 2左跑 3挥手 4跳跃 5失败 6等待 7奔跑 8审视
+ * 状态由 JS 通过 --sprite-row / --sprite-frames / --sprite-duration 切换
+ */
+.pet-sprite-frame {
+  position: absolute;
+  left: 50%;
+  bottom: 0;
+  width: 192px;
+  height: 208px;
+  /* 窗口宽 160，等比缩到 160/192 ≈ 0.833，底部对齐站立 */
+  transform: translateX(-50%) scale(0.833);
+  transform-origin: bottom center;
+  pointer-events: none;
+}
+.pet-sprite {
+  --sprite-row: 0;          /* 当前动作所在行 */
+  --sprite-frames: 6;       /* 当前动作帧数 */
+  --sprite-duration: 1100ms;/* 整轮动画时长 */
+  --sprite-sheet-width: 1536px;
+  --sprite-y: calc(var(--sprite-row) * -208px);
+  --sprite-end-x: calc(var(--sprite-frames) * -192px);
+  width: 192px;
+  height: 208px;
+  background-image: url('assets/deepseek.webp');
+  background-repeat: no-repeat;
+  background-size: var(--sprite-sheet-width) auto;
+  animation-name: pet-sprite-play;
+  animation-duration: var(--sprite-duration);
+  animation-timing-function: steps(var(--sprite-frames), end);
+  animation-iteration-count: infinite;
+}
+@keyframes pet-sprite-play {
+  from { background-position: 0 var(--sprite-y); }
+  to { background-position: var(--sprite-end-x) var(--sprite-y); }
+}
+
+/* 气泡 */
+.pet-bubble {
+  position: absolute;
+  bottom: 182px;
+  left: 50%;
+  transform: translateX(-50%);
+  min-width: 150px;
+  max-width: 240px;
+  padding: 8px 12px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.95);
+  color: #2b2f45;
+  font-size: 12px;
+  line-height: 1.45;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.25);
+  white-space: normal;
+  word-break: break-all;
+  text-align: center;
+  z-index: 6;
+}
+.pet-bubble::after {
+  content: ''; position: absolute; bottom: -7px; left: 50%; transform: translateX(-50%);
+  border-left: 8px solid transparent; border-right: 8px solid transparent;
+  border-top: 8px solid rgba(255, 255, 255, 0.95);
+}
+.pet-bubble.hot { background: #fff1f0; border: 1px solid #fca5a5; color: #b91c1c; }
+.pet-bubble.hot::after { border-top-color: #fff1f0; }
+
+/* 快捷菜单 */
+.pet-menu {
+  position: absolute;
+  bottom: 182px;
+  right: 0;
+  width: 148px;
+  padding: 6px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.97);
+  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.3);
+  z-index: 8;
+}
+.pet-menu .pm-it {
+  padding: 7px 10px; border-radius: 8px; font-size: 12.5px;
+  color: #2b2f45; cursor: pointer;
+}
+.pet-menu .pm-it:hover { background: rgba(79, 107, 255, 0.12); color: #4f6bff; }
+
+.hidden { display: none !important; }

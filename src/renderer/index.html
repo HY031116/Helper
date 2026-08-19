@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data:;">
+  <title>工作台助手</title>
+  <link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+  <!-- 自定义标题栏 -->
+  <header class="titlebar">
+    <div class="tb-left">
+      <span class="tb-logo">◐</span>
+      <span class="tb-title" id="tb-title">工作台助手</span>
+      <span class="tb-badge" id="tb-ai-stage">模拟 AI</span>
+    </div>
+    <div class="tb-right">
+      <button class="tb-btn" id="tb-min" title="最小化">─</button>
+      <button class="tb-btn" id="tb-max" title="最大化">□</button>
+      <button class="tb-btn tb-close" id="tb-quit" title="关闭到托盘">✕</button>
+    </div>
+  </header>
+
+  <div class="layout">
+    <!-- 侧边导航 -->
+    <nav class="sidebar">
+      <div class="nav-item active" data-view="today"><span class="nav-ico">◐</span>今天<span class="nav-badge" style="display:none"></span></div>
+      <div class="nav-item" data-view="tasks"><span class="nav-ico">☰</span>所有任务<span class="nav-badge" style="display:none"></span></div>
+      <div class="nav-item" data-view="board"><span class="nav-ico">▤</span>看板</div>
+      <div class="nav-item" data-view="cal"><span class="nav-ico">▦</span>日历</div>
+      <div class="nav-item" data-view="stat"><span class="nav-ico">◫</span>统计</div>
+      <div class="nav-item" data-view="trash"><span class="nav-ico">🗑</span>回收站<span class="nav-badge" style="display:none"></span></div>
+      <div class="nav-spacer"></div>
+      <div class="nav-item" data-view="settings"><span class="nav-ico">⚙</span>设置</div>
+    </nav>
+
+    <!-- 主内容区 -->
+    <main class="content">
+      <!-- 今日视图 -->
+      <section class="view" id="view-today">
+        <div class="view-head">
+          <h2>今天 <span class="today-date" id="today-date"></span></h2>
+          <span class="view-sub" id="today-sub"></span>
+        </div>
+        <div class="view-body" id="today-list"></div>
+      </section>
+
+      <!-- 所有任务 -->
+      <section class="view" id="view-tasks" style="display:none">
+        <div class="view-head">
+          <h2>所有任务</h2>
+          <span class="view-sub" id="tasks-sub"></span>
+        </div>
+        <div class="toolbar">
+          <div id="smart-filters"></div>
+          <div class="quick-add">
+            <input id="search-input" placeholder="搜索标题 / 描述 / 标签 / 项目…">
+            <input id="quick-input" placeholder="输入任务回车创建，支持「明天下午3点 交周报 #工作 紧急」">
+            <button class="btn" id="btn-new">新建任务</button>
+          </div>
+        </div>
+        <div class="view-body" id="tasks-list"></div>
+        <!-- 批量操作栏 -->
+        <div class="batch-bar hidden" id="batch-bar">
+          <span id="batch-count">已选 0 项</span>
+          <button class="btn mini" id="batch-done">✓ 完成</button>
+          <select id="batch-pri" class="batch-pri">
+            <option value="">改优先级…</option>
+            <option value="4">紧急</option>
+            <option value="3">高</option>
+            <option value="2">中</option>
+            <option value="1">低</option>
+          </select>
+          <button class="btn mini danger" id="batch-delete">删除</button>
+          <button class="btn mini ghost" id="batch-clear">取消</button>
+        </div>
+      </section>
+
+      <!-- 看板 -->
+      <section class="view" id="view-board" style="display:none">
+        <div class="view-head">
+          <h2>看板</h2>
+          <span class="view-sub">拖拽卡片到目标列变更状态</span>
+        </div>
+        <div class="view-body" id="board-cols"></div>
+      </section>
+
+      <!-- 日历 -->
+      <section class="view" id="view-cal" style="display:none">
+        <div class="view-head">
+          <h2>日历</h2>
+          <span class="view-sub" id="cal-sub"></span>
+        </div>
+        <div class="view-body" id="cal-body"></div>
+      </section>
+
+      <!-- 统计 -->
+      <section class="view" id="view-stat" style="display:none">
+        <div class="view-head">
+          <h2>统计</h2>
+          <span class="view-sub">未归档任务全集 · 最近 7 个自然日</span>
+        </div>
+        <div class="view-body" id="stat-body"></div>
+      </section>
+
+      <!-- 回收站 -->
+      <section class="view" id="view-trash" style="display:none">
+        <div class="view-head">
+          <h2>回收站</h2>
+          <span class="view-sub">已删除的任务可在此恢复</span>
+        </div>
+        <div class="toolbar" style="display:flex;gap:8px;justify-content:flex-end">
+          <button class="btn mini danger hidden" id="trash-empty">清空回收站</button>
+        </div>
+        <div class="view-body" id="trash-list"></div>
+      </section>
+
+      <!-- 设置 -->
+      <section class="view" id="view-settings" style="display:none">
+        <div class="view-head">
+          <h2>设置</h2>
+          <span class="view-sub">数据与偏好</span>
+        </div>
+        <div class="view-body" id="settings-body"></div>
+      </section>
+    </main>
+
+    <!-- AI 助手面板 -->
+    <aside class="ai-panel" id="ai-panel">
+      <div class="ai-head">
+        <span class="ai-avatar">助</span>
+        <div>
+          <div class="ai-name">工作台助手</div>
+          <div class="ai-stage">模拟 AI · 规则引擎</div>
+        </div>
+        <button class="ai-collapse" id="ai-collapse" title="收起">»</button>
+      </div>
+      <div class="ai-chips" id="ai-chips">
+        <span class="chip" data-prompt="明天下午3点 交周报 #工作 紧急">创建任务</span>
+        <span class="chip" data-prompt="今天我要做什么">查看今日</span>
+        <span class="chip" data-prompt="把 写季度方案 拆成三步">拆分任务</span>
+        <span class="chip" data-prompt="怎么安排今天的优先级">安排建议</span>
+      </div>
+      <div class="ai-chat" id="ai-chat"></div>
+      <div class="ai-input-row">
+        <input id="ai-input" placeholder="用日常话说出你的任务…">
+        <button class="btn" id="ai-send">发送</button>
+      </div>
+    </aside>
+  </div>
+
+  <!-- 任务编辑弹窗 -->
+  <div class="modal-mask hidden" id="modal-mask">
+    <div class="modal">
+      <h5 id="modal-title">新建任务</h5>
+      <label>标题 *</label>
+      <input id="m-title" maxlength="100">
+      <label>描述</label>
+      <textarea id="m-desc" maxlength="500" rows="2" placeholder="补充任务细节…"></textarea>
+      <div class="m-row">
+        <div class="m-col">
+          <label>优先级</label>
+          <select id="m-pri">
+            <option value="4">紧急</option>
+            <option value="3">高</option>
+            <option value="2" selected>中</option>
+            <option value="1">低</option>
+          </select>
+        </div>
+        <div class="m-col">
+          <label>状态</label>
+          <select id="m-status">
+            <option value="todo">待办</option>
+            <option value="doing">进行中</option>
+            <option value="done">已完成</option>
+          </select>
+        </div>
+      </div>
+      <div class="m-row">
+        <div class="m-col">
+          <label>截止日期</label>
+          <div class="due-row">
+            <input id="m-due-date" type="date">
+            <input id="m-due-time" type="time" value="18:00">
+            <button class="btn mini ghost" id="m-due-clear" title="清除截止时间">✕</button>
+          </div>
+        </div>
+        <div class="m-col">
+          <label>标签（逗号分隔）</label>
+          <input id="m-tags" placeholder="工作, 生活">
+        </div>
+      </div>
+      <div class="m-row">
+        <div class="m-col">
+          <label>项目</label>
+          <input id="m-project" placeholder="如：Q3 规划" maxlength="30">
+        </div>
+        <div class="m-col">
+          <label>重复</label>
+          <select id="m-repeat">
+            <option value="">不重复</option>
+            <option value="daily">每天</option>
+            <option value="weekly">每周</option>
+            <option value="monthly">每月</option>
+          </select>
+        </div>
+      </div>
+      <div class="m-row">
+        <div class="m-col">
+          <label>提醒</label>
+          <select id="m-remind">
+            <option value="0">不提醒</option>
+            <option value="10">提前 10 分钟</option>
+            <option value="30" selected>提前 30 分钟</option>
+            <option value="60">提前 1 小时</option>
+          </select>
+        </div>
+      </div>
+      <label>子任务（每行一个，[x] 前缀表示已完成）</label>
+      <textarea id="m-children" rows="3" placeholder="[ ] 搭框架&#10;[ ] 写初稿&#10;[ ] 内部校对"></textarea>
+      <div class="m-actions">
+        <button class="btn ghost danger hidden" id="m-delete">删除</button>
+        <button class="btn ghost hidden" id="m-archive">归档</button>
+        <button class="btn ghost hidden" id="m-unarchive">恢复</button>
+        <div class="m-spacer"></div>
+        <button class="btn ghost" id="m-cancel">取消</button>
+        <button class="btn" id="m-save">创建</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 删除确认 -->
+  <div class="modal-mask hidden" id="confirm-mask">
+    <div class="modal small">
+      <h5>确认删除</h5>
+      <p id="confirm-text">确定要删除这条任务吗？</p>
+      <div class="m-actions">
+        <button class="btn ghost" id="confirm-cancel">取消</button>
+        <button class="btn danger" id="confirm-ok">删除</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast -->
+  <div class="toast-layer" id="toast-layer"></div>
+
+  <script src="js/app.js"></script>
+</body>
+</html>
