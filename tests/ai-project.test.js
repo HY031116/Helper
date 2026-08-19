@@ -726,6 +726,39 @@ test('精细修改：改优先级', () => {
   assert.strictEqual(store.getTask(t.id).pri, 2, '撤销后应恢复原优先级');
 });
 
+test('引擎选择：本地助手模式不调用已配置的真实模型', async () => {
+  reset();
+  const previous = store.getSettings();
+  store.updateSettings({
+    aiStage: 'mock',
+    aiProvider: 'custom',
+    aiBaseUrl: 'https://example.invalid/v1',
+    aiApiKey: 'test-key',
+    aiModel: 'test-model'
+  });
+  const originalFetch = global.fetch;
+  let fetchCalled = false;
+  global.fetch = async () => {
+    fetchCalled = true;
+    throw new Error('不应调用真实模型');
+  };
+  try {
+    const r = await ai.handleAuto('你好');
+    assert.strictEqual(r.engine, 'mock');
+    assert.strictEqual(r.degraded, undefined);
+    assert.strictEqual(fetchCalled, false);
+  } finally {
+    global.fetch = originalFetch;
+    store.updateSettings({
+      aiStage: previous.aiStage,
+      aiProvider: previous.aiProvider,
+      aiBaseUrl: previous.aiBaseUrl,
+      aiApiKey: previous.aiApiKey,
+      aiModel: previous.aiModel
+    });
+  }
+});
+
 test('精细修改：旧撤销不覆盖后续修改', () => {
   reset();
   const t = store.createTask({ title: '写方案', pri: 2 });

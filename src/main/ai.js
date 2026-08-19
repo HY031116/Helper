@@ -1161,8 +1161,8 @@ async function chatWithLLM(text) {
 /* ---------- 对外主入口（自动选择引擎） ---------- */
 async function handleAuto(text) {
   const s = store.getSettings();
-  // 配置了 LLM 则优先用 LLM（更聪明）；否则用增强规则引擎
-  if (isLLMConfigured()) {
+  // 只有用户明确选择真实模型且配置完整时才调用外部服务。
+  if (s.aiStage === 'llm' && isLLMConfigured()) {
     return handleWithLLM(text);
   }
   const { intent, params } = parse(text);

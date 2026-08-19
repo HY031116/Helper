@@ -145,8 +145,8 @@ function rowHTML(t) {
   const overdueCls = isOverdue(t.due, t.status) ? ' overdue-row' : '';
   // hover 快捷操作
   const quickActions = t.status === 'archived'
-    ? `<span class="row-actions"><span class="ra" data-act="unarchive" title="恢复">↩</span><span class="ra" data-act="delete" title="删除">🗑</span></span>`
-    : `<span class="row-actions"><span class="ra" data-act="edit" title="编辑">✎</span><span class="ra" data-act="copy" title="复制">⧉</span><span class="ra" data-act="archive" title="归档">📦</span><span class="ra danger" data-act="delete" title="删除">🗑</span></span>`;
+    ? `<span class="row-actions"><button type="button" class="ra" data-act="unarchive" title="恢复" aria-label="恢复任务">↩</button><button type="button" class="ra danger" data-act="delete" title="删除" aria-label="删除任务">⌫</button></span>`
+    : `<span class="row-actions"><button type="button" class="ra" data-act="edit" title="编辑" aria-label="编辑任务">✎</button><button type="button" class="ra" data-act="copy" title="复制" aria-label="复制任务">⧉</button><button type="button" class="ra" data-act="archive" title="归档" aria-label="归档任务">□</button><button type="button" class="ra danger" data-act="delete" title="删除" aria-label="删除任务">⌫</button></span>`;
   // 详情展开区
   const detailOpen = expandedIds.has('d' + t.id);
   const detailHtml = detailOpen ? `<div class="task-detail">
@@ -159,18 +159,18 @@ function rowHTML(t) {
     ${t.status === 'done' && t.completedAt ? `<div class="td-row"><span class="td-label">完成</span><span class="td-val">${fmtTime(t.completedAt)}</span></div>` : ''}
   </div>` : '';
   return `<div class="task-row${t.status === 'done' ? ' done' : ''}${t.status === 'archived' ? ' archived' : ''}${selected}${overdueCls}" data-id="${t.id}" draggable="true">
-    <span class="task-check" title="完成">${check}</span>
-    <span class="pri-dot p${t.pri}" title="点击切换优先级（当前：${PRI_NAME[t.pri]}）" data-pri-toggle>${PRI_NAME[t.pri]}</span>
-    ${hasChildren ? `<span class="task-expand${expanded ? ' open' : ''}" title="展开子任务">▸</span>` : ''}
+    <button type="button" class="task-check" title="${t.status === 'done' ? '重新打开' : '完成'}" aria-label="${t.status === 'done' ? '重新打开' : '完成任务'}">${check}</button>
+    <button type="button" class="pri-dot p${t.pri}" title="点击切换优先级（当前：${PRI_NAME[t.pri]}）" aria-label="当前${PRI_NAME[t.pri]}优先级，点击切换" data-pri-toggle>${PRI_NAME[t.pri]}</button>
+    ${hasChildren ? `<button type="button" class="task-expand${expanded ? ' open' : ''}" title="${expanded ? '收起' : '展开'}子任务" aria-expanded="${expanded}">▸</button>` : ''}
     <div class="task-main">
-      <div class="tname">${titleHtml}</div>
+      <button type="button" class="tname task-title-btn" aria-expanded="${detailOpen}">${titleHtml}</button>
       ${sub.length ? `<div class="tsub">${sub.join(' · ')}</div>` : ''}
       ${hasChildren && expanded ? `<div class="child-list">${t.children.map((c) => {
         const x = childLabel(c);
-        return `<div class="child-item${x.done ? ' done' : ''}" data-child-id="${x.id}" data-parent-id="${t.id}">
+        return `<button type="button" class="child-item${x.done ? ' done' : ''}" data-child-id="${x.id}" data-parent-id="${t.id}" aria-pressed="${x.done}">
           <span class="child-check">${x.done ? '✓' : ''}</span>
           <span class="child-title">${esc(x.title)}</span>
-        </div>`;
+        </button>`;
       }).join('')}</div>` : ''}
       ${detailHtml}
     </div>
@@ -178,7 +178,7 @@ function rowHTML(t) {
       ${repeatTag}
       ${dueHtml}
       ${doneTime}
-      <span class="statectl s-${t.status}" title="点击流转状态">${STATE_NAME[t.status]}</span>
+      <button type="button" class="statectl s-${t.status}" title="点击流转状态">${STATE_NAME[t.status]}</button>
       ${quickActions}
     </div>
   </div>`;
@@ -701,7 +701,7 @@ function renderSettings() {
   const sw = (key, label, desc) => `
     <div class="set-row">
       <div><div class="sr-t">${label}</div><div class="sr-d">${desc}</div></div>
-      <div class="switch ${s[key] ? 'on' : ''}" data-switch="${key}"></div>
+      <button type="button" class="switch ${s[key] ? 'on' : ''}" data-switch="${key}" role="switch" aria-checked="${!!s[key]}" aria-label="${label}"></button>
     </div>`;
 
   const providers = [
@@ -712,7 +712,10 @@ function renderSettings() {
   ];
 
   let html = `<div class="set-group">
-    ${sw('localOnly', '本地存储', '数据仅保存在本机，不经过任何云服务器')}
+    <div class="set-row privacy-row">
+      <div><div class="sr-t">任务数据</div><div class="sr-d">任务、设置和对话记录保存在本机。使用真实模型时，当前输入和最多 30 条未归档任务摘要会发送给所选服务商。</div></div>
+      <span class="status-badge">本地存储</span>
+    </div>
     ${sw('autoBackup', '自动备份', '每日 22:00 将数据快照备份到备份目录')}
     ${sw('autoStart', '开机自启', '登录系统后后台常驻，不弹主窗口')}
     ${sw('notify', '系统通知提醒', '任务到点经系统通知中心推送')}
@@ -724,7 +727,7 @@ function renderSettings() {
     </div>
     <div class="set-row">
       <div><div class="sr-t">导出与备份</div><div class="sr-d">导出 .json 备份或 .csv 表格</div></div>
-      <div style="display:flex;gap:6px">
+      <div class="setting-actions">
         <button class="btn mini" id="btn-export-json">导出 JSON</button>
         <button class="btn mini" id="btn-export-csv">导出 CSV</button>
         <button class="btn mini" id="btn-import-json">导入 JSON</button>
@@ -732,7 +735,7 @@ function renderSettings() {
     </div>
     <div class="set-row">
       <div><div class="sr-t">备份管理</div><div class="sr-d">查看自动备份，可一键恢复到任意备份点</div></div>
-      <div style="display:flex;gap:6px">
+      <div class="setting-actions">
         <button class="btn mini" id="btn-backup-now">立即备份</button>
         <button class="btn mini" id="btn-backup-to-dir">备份到文件夹</button>
         <button class="btn mini" id="btn-restore-file">从文件恢复</button>
@@ -741,10 +744,10 @@ function renderSettings() {
     <div class="backup-list" id="backup-list" style="margin-top:6px"></div>
     <div class="set-row">
       <div><div class="sr-t">外观主题</div><div class="sr-d">浅色 / 深色 / 跟随系统</div></div>
-      <div class="seg" id="theme-seg">
-        <span class="seg-it ${s.theme === 'light' ? 'active' : ''}" data-theme="light">浅色</span>
-        <span class="seg-it ${s.theme === 'dark' ? 'active' : ''}" data-theme="dark">深色</span>
-        <span class="seg-it ${s.theme === 'auto' ? 'active' : ''}" data-theme="auto">自动</span>
+      <div class="seg" id="theme-seg" role="radiogroup" aria-label="外观主题">
+        <button type="button" role="radio" aria-checked="${s.theme === 'light'}" class="seg-it ${s.theme === 'light' ? 'active' : ''}" data-theme="light">浅色</button>
+        <button type="button" role="radio" aria-checked="${s.theme === 'dark'}" class="seg-it ${s.theme === 'dark' ? 'active' : ''}" data-theme="dark">深色</button>
+        <button type="button" role="radio" aria-checked="${s.theme === 'auto'}" class="seg-it ${s.theme === 'auto' ? 'active' : ''}" data-theme="auto">自动</button>
       </div>
     </div>
   </div>
@@ -752,39 +755,39 @@ function renderSettings() {
   <!-- AI 接入配置 -->
   <div class="set-group">
     <div class="set-row">
-      <div><div class="sr-t">AI 助手引擎</div><div class="sr-d">模拟 AI（规则引擎）无需配置；接入真实模型后由 LLM 识别意图，规则引擎执行</div></div>
-      <div class="seg" id="ai-stage-seg">
-        <span class="seg-it ${s.aiStage === 'mock' ? 'active' : ''}" data-stage="mock">模拟 AI</span>
-        <span class="seg-it ${s.aiStage === 'llm' ? 'active' : ''}" data-stage="llm">真实模型</span>
+      <div><div class="sr-t">AI 助手引擎</div><div class="sr-d">本地助手无需配置；真实模型负责理解意图，任务操作仍由本地执行</div></div>
+      <div class="seg" id="ai-stage-seg" role="radiogroup" aria-label="AI 助手引擎">
+        <button type="button" role="radio" aria-checked="${s.aiStage === 'mock'}" class="seg-it ${s.aiStage === 'mock' ? 'active' : ''}" data-stage="mock">本地助手</button>
+        <button type="button" role="radio" aria-checked="${s.aiStage === 'llm'}" class="seg-it ${s.aiStage === 'llm' ? 'active' : ''}" data-stage="llm">真实模型</button>
       </div>
     </div>
-    <div class="set-row">
+    <div class="set-row ai-config-row">
       <div><div class="sr-t">供应商</div><div class="sr-d">选择模型供应商，或自定义 OpenAI 兼容接口</div></div>
       <select id="ai-provider" style="width:auto;min-width:180px">
         ${providers.map((p) => `<option value="${p.v}" ${s.aiProvider === p.v ? 'selected' : ''}>${p.n}</option>`).join('')}
       </select>
     </div>
-    <div class="set-row">
+    <div class="set-row ai-config-row">
       <div><div class="sr-t">API Base URL</div><div class="sr-d">OpenAI 兼容接口地址</div></div>
       <input id="ai-base-url" type="text" placeholder="https://api.openai.com/v1" value="${esc(s.aiBaseUrl || '')}" style="width:auto;min-width:240px">
     </div>
-    <div class="set-row">
-      <div><div class="sr-t">API Key</div><div class="sr-d">仅保存在本机，不会上传</div></div>
+    <div class="set-row ai-config-row">
+      <div><div class="sr-t">API Key</div><div class="sr-d">保存在本机，请求时仅用于所选服务商鉴权</div></div>
       <input id="ai-api-key" type="password" placeholder="sk-..." value="${esc(s.aiApiKey || '')}" style="width:auto;min-width:240px">
     </div>
-    <div class="set-row">
+    <div class="set-row ai-config-row">
       <div><div class="sr-t">模型名称</div><div class="sr-d">如 gpt-4o-mini / deepseek-chat</div></div>
       <input id="ai-model" type="text" placeholder="gpt-4o-mini" value="${esc(s.aiModel || '')}" style="width:auto;min-width:240px">
     </div>
-    <div class="set-row">
+    <div class="set-row ai-config-row">
       <div><div class="sr-t">温度</div><div class="sr-d">越低越稳定，建议 0.2</div></div>
       <input id="ai-temperature" type="number" min="0" max="2" step="0.1" value="${s.aiTemperature != null ? s.aiTemperature : 0.2}" style="width:auto;min-width:80px">
     </div>
-    <div class="set-row">
+    <div class="set-row ai-config-row">
       <div><div class="sr-t">连接测试</div><div class="sr-d" id="ai-test-result">未测试</div></div>
       <button class="btn mini" id="btn-ai-test">测试连接</button>
     </div>
-    <div class="set-row">
+    <div class="set-row ai-config-row">
       <div><div class="sr-t">保存配置</div><div class="sr-d">保存后 AI 面板将使用所选引擎</div></div>
       <button class="btn mini" id="btn-ai-save">保存 AI 配置</button>
     </div>
@@ -816,10 +819,11 @@ function bindSettingsEvents() {
   $$('#settings-body .switch[data-switch]').forEach((sw) => {
     sw.addEventListener('click', async () => {
       const on = sw.classList.toggle('on');
+      sw.setAttribute('aria-checked', String(on));
       const key = sw.dataset.switch;
       settings[key] = on;
       await window.api.settings.update({ [key]: on });
-      const names = { localOnly: '本地存储', autoBackup: '自动备份', autoStart: '开机自启', notify: '系统通知提醒', petEnabled: '桌面桌宠' };
+      const names = { autoBackup: '自动备份', autoStart: '开机自启', notify: '系统通知提醒', petEnabled: '桌面桌宠' };
       toast(`已${on ? '开启' : '关闭'}「${names[key]}」`);
     });
   });
@@ -827,14 +831,25 @@ function bindSettingsEvents() {
   // AI 引擎切换
   $$('#ai-stage-seg .seg-it').forEach((seg) => {
     seg.addEventListener('click', async () => {
-      $$('#ai-stage-seg .seg-it').forEach((x) => x.classList.remove('active'));
+      $$('#ai-stage-seg .seg-it').forEach((x) => {
+        x.classList.remove('active');
+        x.setAttribute('aria-checked', 'false');
+      });
       seg.classList.add('active');
+      seg.setAttribute('aria-checked', 'true');
       settings.aiStage = seg.dataset.stage;
       await window.api.settings.update({ aiStage: seg.dataset.stage });
+      syncAiConfigVisibility();
       updateAiBadge();
       toast(`AI 引擎已切换为「${seg.textContent}」`);
     });
   });
+
+  function syncAiConfigVisibility() {
+    const show = settings.aiStage === 'llm';
+    $$('#settings-body .ai-config-row').forEach((row) => row.classList.toggle('hidden', !show));
+  }
+  syncAiConfigVisibility();
 
   // 供应商切换时自动填充默认 Base URL 和模型
   $('#ai-provider').addEventListener('change', async () => {
@@ -1005,8 +1020,12 @@ function bindSettingsEvents() {
   loadBackupList();
   $$('#theme-seg .seg-it').forEach((seg) => {
     seg.addEventListener('click', async () => {
-      $$('#theme-seg .seg-it').forEach((x) => x.classList.remove('active'));
+      $$('#theme-seg .seg-it').forEach((x) => {
+        x.classList.remove('active');
+        x.setAttribute('aria-checked', 'false');
+      });
       seg.classList.add('active');
+      seg.setAttribute('aria-checked', 'true');
       settings.theme = seg.dataset.theme;
       await window.api.settings.update({ theme: seg.dataset.theme });
       applyTheme();
@@ -1065,7 +1084,12 @@ function applyTheme() {
 /* ---------- 视图切换 ---------- */
 function switchView(view) {
   currentView = view;
-  $$('.nav-item').forEach((n) => n.classList.toggle('active', n.dataset.view === view));
+  $$('.nav-item').forEach((n) => {
+    const active = n.dataset.view === view;
+    n.classList.toggle('active', active);
+    if (active) n.setAttribute('aria-current', 'page');
+    else n.removeAttribute('aria-current');
+  });
   $$('.view').forEach((v) => { v.style.display = v.id === `view-${view}` ? '' : 'none'; });
   // 切换视图时清除批量选择并隐藏批量栏
   selectedIds.clear();
@@ -1352,23 +1376,28 @@ async function loadChatHistory() {
 function updateAiBadge() {
   const badge = $('#tb-ai-stage');
   if (!badge) return;
+  const panelStage = $('.ai-stage');
   const stage = settings.aiStage || 'mock';
-  const configured = !!(settings.aiApiKey && settings.aiModel);
+  const providerReady = settings.aiProvider !== 'custom' || !!settings.aiBaseUrl;
+  const configured = !!(settings.aiApiKey && settings.aiModel && providerReady);
   if (stage === 'llm' && configured) {
     badge.textContent = '真实模型';
-    badge.style.background = 'rgba(62, 142, 90, 0.1)';
+    if (panelStage) panelStage.textContent = `真实模型 · ${settings.aiModel}`;
+    badge.style.background = 'rgba(47, 125, 91, 0.1)';
     badge.style.color = 'var(--ok)';
-    badge.style.borderColor = 'rgba(62, 142, 90, 0.2)';
+    badge.style.borderColor = 'rgba(47, 125, 91, 0.2)';
   } else if (stage === 'llm' && !configured) {
     badge.textContent = '待配置';
-    badge.style.background = 'rgba(199, 138, 43, 0.1)';
-    badge.style.color = '#B5791F';
-    badge.style.borderColor = 'rgba(199, 138, 43, 0.2)';
+    if (panelStage) panelStage.textContent = '真实模型 · 待配置';
+    badge.style.background = 'rgba(183, 121, 31, 0.1)';
+    badge.style.color = 'var(--warn)';
+    badge.style.borderColor = 'rgba(183, 121, 31, 0.2)';
   } else {
-    badge.textContent = '模拟 AI';
-    badge.style.background = 'rgba(232, 116, 59, 0.1)';
+    badge.textContent = '本地助手';
+    if (panelStage) panelStage.textContent = '本地规则引擎';
+    badge.style.background = 'var(--accent-weak)';
     badge.style.color = 'var(--accent)';
-    badge.style.borderColor = 'rgba(232, 116, 59, 0.2)';
+    badge.style.borderColor = 'rgba(217, 92, 69, 0.2)';
   }
 }
 

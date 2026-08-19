@@ -92,12 +92,11 @@ function init() {
 
 function getDefaultSettings() {
   return {
-    localOnly: true,
     autoBackup: true,
     autoStart: false,
     notify: true,
     theme: 'auto',
-    aiStage: 'llm', // 'mock' | 'llm' 默认 LLM（配置 Key 即生效），未配置时自动降级规则引擎
+    aiStage: 'mock', // 'mock' | 'llm' 默认本地规则引擎，用户显式选择后才调用真实模型
     aiProvider: 'openai', // 'openai' | 'deepseek' | 'custom'
     aiBaseUrl: '',
     aiApiKey: '',
