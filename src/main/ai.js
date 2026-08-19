@@ -65,7 +65,11 @@ function detectIntent(text) {
 }
 
 /* ---------- 任务匹配（支持描述/标签模糊） ---------- */
-function matchTasks(query) {
+function matchTasks(query, taskId) {
+  if (taskId) {
+    const task = store.getTask(taskId);
+    return task ? [task] : [];
+  }
   const q = String(query || '').toLowerCase().trim();
   if (!q) return [];
   return store.getAllTasks().filter((t) =>
@@ -73,6 +77,16 @@ function matchTasks(query) {
     (t.desc || '').toLowerCase().includes(q) ||
     (t.tags || []).some((x) => x.toLowerCase().includes(q))
   );
+}
+
+function toCandidate(task) {
+  return {
+    id: task.id,
+    title: task.title,
+    project: task.project || '',
+    due: task.due || null,
+    status: task.status || 'todo'
+  };
 }
 
 /* 本地日期键 YYYY-MM-DD（避免 toISOString 的 UTC 时区偏移导致跨天统计错误） */
@@ -222,13 +236,13 @@ function doCreate(params) {
 }
 
 function doComplete(params) {
-  const hits = matchTasks(params.target);
+  const hits = matchTasks(params.target, params.taskId);
   if (!hits.length) return { type: 'error', message: `没找到「${params.target}」相关任务` };
   if (hits.length > 1) {
     return {
       type: 'ask',
       message: '你说的是哪一个？',
-      candidates: hits.map((t) => ({ id: t.id, title: t.title }))
+      candidates: hits.map(toCandidate)
     };
   }
   const t = hits[0];
@@ -278,13 +292,13 @@ function doComplete(params) {
 }
 
 function doStart(params) {
-  const hits = matchTasks(params.target);
+  const hits = matchTasks(params.target, params.taskId);
   if (!hits.length) return { type: 'error', message: `没找到「${params.target}」相关任务` };
   if (hits.length > 1) {
     return {
       type: 'ask',
       message: '你说的是哪一个？',
-      candidates: hits.map((t) => ({ id: t.id, title: t.title }))
+      candidates: hits.map(toCandidate)
     };
   }
   const t = hits[0];
@@ -293,13 +307,13 @@ function doStart(params) {
 }
 
 function doDelete(params) {
-  const hits = matchTasks(params.target);
+  const hits = matchTasks(params.target, params.taskId);
   if (!hits.length) return { type: 'error', message: `没找到「${params.target}」相关任务` };
   if (hits.length > 1) {
     return {
       type: 'ask',
       message: '你说的是哪一个？',
-      candidates: hits.map((t) => ({ id: t.id, title: t.title }))
+      candidates: hits.map(toCandidate)
     };
   }
   const t = hits[0];
@@ -402,13 +416,13 @@ function undoAction(undo) {
 
 /* ---------- 精细修改：改优先级/截止/项目/标签/描述 ---------- */
 function doUpdate(params) {
-  const hits = matchTasks(params.target);
+  const hits = matchTasks(params.target, params.taskId);
   if (!hits.length) return { type: 'error', message: `没找到「${params.target}」相关任务` };
   if (hits.length > 1) {
     return {
       type: 'ask',
       message: '你说的是哪一个？',
-      candidates: hits.map((t) => ({ id: t.id, title: t.title }))
+      candidates: hits.map(toCandidate)
     };
   }
   const t = hits[0];
@@ -461,13 +475,13 @@ function doUpdate(params) {
 
 /* ---------- 子任务管理：加子任务 ---------- */
 function doChild(params) {
-  const hits = matchTasks(params.target);
+  const hits = matchTasks(params.target, params.taskId);
   if (!hits.length) return { type: 'error', message: `没找到「${params.target}」相关任务` };
   if (hits.length > 1) {
     return {
       type: 'ask',
       message: '你说的是哪一个？',
-      candidates: hits.map((t) => ({ id: t.id, title: t.title }))
+      candidates: hits.map(toCandidate)
     };
   }
   const t = hits[0];
@@ -492,13 +506,13 @@ function doChild(params) {
 
 /* ---------- 顺延：推迟任务 ---------- */
 function doPostpone(params) {
-  const hits = matchTasks(params.target);
+  const hits = matchTasks(params.target, params.taskId);
   if (!hits.length) return { type: 'error', message: `没找到「${params.target}」相关任务` };
   if (hits.length > 1) {
     return {
       type: 'ask',
       message: '你说的是哪一个？',
-      candidates: hits.map((t) => ({ id: t.id, title: t.title }))
+      candidates: hits.map(toCandidate)
     };
   }
   const t = hits[0];
@@ -519,6 +533,19 @@ function doPostpone(params) {
 function doRestore(params) {
   // 先查回收站
   const deleted = store.getDeletedTasks();
+  if (params.taskId) {
+    const deletedTask = deleted.find((task) => task.id === params.taskId);
+    if (deletedTask) {
+      store.restoreTask(deletedTask.id);
+      return { type: 'restore', task: deletedTask, message: `已从回收站恢复「${deletedTask.title}」`, undoable: false };
+    }
+    const archivedTask = store.getAllTasks().find((task) => task.id === params.taskId && task.status === 'archived');
+    if (archivedTask) {
+      store.unarchiveTask(archivedTask.id);
+      return { type: 'restore', task: archivedTask, message: `已从归档恢复「${archivedTask.title}」`, undoable: false };
+    }
+    return { type: 'error', message: '这个任务已经不在回收站或归档中，请重新查找。' };
+  }
   const q = String(params.target || '').toLowerCase().trim();
   const fromTrash = q ? deleted.filter((t) => t.title.toLowerCase().includes(q)) : deleted;
   if (fromTrash.length === 1) {
@@ -529,7 +556,7 @@ function doRestore(params) {
     return {
       type: 'ask',
       message: '回收站里有多个匹配，你说的是哪一个？',
-      candidates: fromTrash.map((t) => ({ id: t.id, title: t.title }))
+      candidates: fromTrash.map(toCandidate)
     };
   }
   // 再查归档
@@ -543,20 +570,20 @@ function doRestore(params) {
     return {
       type: 'ask',
       message: '归档里有多个匹配，你说的是哪一个？',
-      candidates: fromArch.map((t) => ({ id: t.id, title: t.title }))
+      candidates: fromArch.map(toCandidate)
     };
   }
   return { type: 'error', message: '回收站和归档里都没有找到匹配的任务' };
 }
 
 function doArchive(params) {
-  const hits = matchTasks(params.target);
+  const hits = matchTasks(params.target, params.taskId);
   if (!hits.length) return { type: 'error', message: `没找到「${params.target}」相关任务` };
   if (hits.length > 1) {
     return {
       type: 'ask',
       message: '你说的是哪一个？',
-      candidates: hits.map((t) => ({ id: t.id, title: t.title }))
+      candidates: hits.map(toCandidate)
     };
   }
   const t = hits[0];
@@ -566,13 +593,13 @@ function doArchive(params) {
 }
 
 function doSplit(params) {
-  const hits = matchTasks(params.target);
+  const hits = matchTasks(params.target, params.taskId);
   if (!hits.length) return { type: 'error', message: `没找到「${params.target}」相关任务` };
   if (hits.length > 1) {
     return {
       type: 'ask',
       message: '你说的是哪一个？',
-      candidates: hits.map((t) => ({ id: t.id, title: t.title }))
+      candidates: hits.map(toCandidate)
     };
   }
   const t = hits[0];
@@ -926,7 +953,18 @@ function handle(text) {
   const result = execute(intent, params);
   // 记录最近提到的任务标题（供多轮指代）
   if (result.task && result.task.title) lastMentionedTitle = result.task.title;
-  return Object.assign({ intent, raw: text }, result);
+  return Object.assign({ intent, raw: text, params }, result);
+}
+
+function resolve(intent, params, taskId) {
+  const resolvable = ['complete', 'start', 'delete', 'archive', 'split', 'update', 'child', 'postpone', 'restore'];
+  if (!resolvable.includes(intent)) {
+    return { intent, type: 'error', message: '这个选择已经失效，请重新描述你的操作。' };
+  }
+  const nextParams = Object.assign({}, params, { taskId });
+  const result = execute(intent, nextParams);
+  if (result.task && result.task.title) lastMentionedTitle = result.task.title;
+  return Object.assign({ intent, params: nextParams }, result);
 }
 
 /* ============================================================
@@ -1133,14 +1171,14 @@ async function handleWithLLM(text) {
     }
     const result = execute(intent, params);
     if (result.task && result.task.title) lastMentionedTitle = result.task.title;
-    return Object.assign({ intent, raw: text, engine: 'llm' }, result);
+    return Object.assign({ intent, raw: text, params, engine: 'llm' }, result);
   } catch (e) {
     console.error('[ai] LLM 调用失败，降级到规则引擎:', e.message);
     // 降级：规则引擎解析 + 执行
     const { intent, params } = parse(text);
     const result = execute(intent, params);
     if (result.task && result.task.title) lastMentionedTitle = result.task.title;
-    return Object.assign({ intent, raw: text, engine: 'mock', degraded: true, degradeReason: e.message }, result);
+    return Object.assign({ intent, raw: text, params, engine: 'mock', degraded: true, degradeReason: e.message }, result);
   }
 }
 
@@ -1169,7 +1207,7 @@ async function handleAuto(text) {
   const { intent, params } = parse(text);
   const result = execute(intent, params);
   if (result.task && result.task.title) lastMentionedTitle = result.task.title;
-  return Object.assign({ intent, raw: text, engine: 'mock' }, result);
+  return Object.assign({ intent, raw: text, params, engine: 'mock' }, result);
 }
 
 /* ---------- 测试连接 ---------- */
@@ -1189,4 +1227,4 @@ async function testConnection() {
   }
 }
 
-module.exports = { handle, handleAuto, parse, parseWithLLM, undoAction, testConnection, isLLMConfigured, getLLMConfig, callLLM, INTENTS, PROVIDERS };
+module.exports = { handle, handleAuto, resolve, parse, parseWithLLM, undoAction, testConnection, isLLMConfigured, getLLMConfig, callLLM, INTENTS, PROVIDERS };

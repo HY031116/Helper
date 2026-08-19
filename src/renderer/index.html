@@ -134,7 +134,7 @@
     </main>
 
     <!-- AI 助手面板 -->
-    <aside class="ai-panel" id="ai-panel">
+    <aside class="ai-panel" id="ai-panel" aria-label="工作台助手">
       <div class="ai-head">
         <span class="ai-avatar">助</span>
         <div>
@@ -149,11 +149,11 @@
         <button type="button" class="chip" data-prompt="把 写季度方案 拆成三步">拆分任务</button>
         <button type="button" class="chip" data-prompt="怎么安排今天的优先级">安排建议</button>
       </div>
-      <div class="ai-chat" id="ai-chat"></div>
-      <div class="ai-input-row">
-        <input id="ai-input" placeholder="用日常话说出你的任务…">
-        <button class="btn" id="ai-send">发送</button>
-      </div>
+      <div class="ai-chat" id="ai-chat" role="log" aria-live="polite" aria-relevant="additions" aria-busy="false"></div>
+      <form class="ai-input-row" id="ai-form">
+        <textarea id="ai-input" rows="1" maxlength="1000" aria-label="给工作台助手发消息，Enter 发送，Shift+Enter 换行" placeholder="描述任务，或继续补充…"></textarea>
+        <button type="submit" class="btn" id="ai-send">发送</button>
+      </form>
     </aside>
   </div>
 

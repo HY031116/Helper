@@ -28,6 +28,7 @@ let quickParseToken = 0;
 let quickParseCache = { raw: '', parsed: null };
 let modalSaving = false;
 let modalReturnFocus = null;
+let aiSending = false;
 
 /* ---------- 工具 ---------- */
 const $ = (sel) => document.querySelector(sel);
@@ -1442,16 +1443,48 @@ async function unarchiveEditingTask() {
 }
 
 /* ---------- AI 对话 ---------- */
-function addMsg(role, text, extra) {
-  const chat = $('#ai-chat');
+function createMessage(role, text, ts) {
   const el = document.createElement('div');
   el.className = `msg ${role}`;
-  const time = new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
-  el.innerHTML = `<span>${esc(text)}</span><span class="mt">${time}</span>`;
+  const body = document.createElement('span');
+  body.className = 'msg-text';
+  body.textContent = text;
+  const meta = document.createElement('span');
+  meta.className = 'mt';
+  meta.textContent = new Date(ts || Date.now()).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+  el.append(body, meta);
+  return el;
+}
+
+function scrollChat() {
+  const chat = $('#ai-chat');
+  chat.scrollTop = chat.scrollHeight;
+}
+
+function addMsg(role, text, extra) {
+  const chat = $('#ai-chat');
+  const el = createMessage(role, text);
   if (extra) el.appendChild(extra);
   chat.appendChild(el);
-  chat.scrollTop = chat.scrollHeight;
+  scrollChat();
   return el;
+}
+
+function setAiBusy(busy) {
+  aiSending = busy;
+  const chat = $('#ai-chat');
+  const send = $('#ai-send');
+  chat.setAttribute('aria-busy', String(busy));
+  send.disabled = busy;
+  send.textContent = busy ? '处理中' : '发送';
+  $$('#ai-chips .chip').forEach((chip) => { chip.disabled = busy; });
+  $$('.turn-action').forEach((action) => { action.disabled = busy; });
+}
+
+function resizeAiInput() {
+  const input = $('#ai-input');
+  input.style.height = 'auto';
+  input.style.height = `${Math.min(input.scrollHeight, 112)}px`;
 }
 
 function opCard(result) {
@@ -1466,11 +1499,13 @@ function opCard(result) {
     split: '已拆分',
     update: '已更新',
     child: '已添加子任务',
-    postpone: '已顺延'
+    postpone: '已顺延',
+    restore: '已恢复'
   };
   card.innerHTML = `<div class="op-title">${titles[result.type] || '操作'}</div>`;
   if (result.undoable && result.undo) {
-    const undo = document.createElement('span');
+    const undo = document.createElement('button');
+    undo.type = 'button';
     undo.className = 'undo';
     undo.textContent = '撤销';
     undo.addEventListener('click', async () => {
@@ -1493,45 +1528,160 @@ function opCard(result) {
   return card;
 }
 
+function turnActions(items, label) {
+  const bar = document.createElement('div');
+  bar.className = 'turn-actions';
+  bar.setAttribute('role', 'group');
+  bar.setAttribute('aria-label', label || '下一步');
+  items.forEach((item) => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'turn-action';
+    button.textContent = item.label;
+    button.disabled = aiSending;
+    button.addEventListener('click', item.run);
+    bar.appendChild(button);
+  });
+  return bar;
+}
+
+function getFollowUps(result) {
+  const byType = {
+    create: [{ label: '查看今日', prompt: '今天我要做什么' }],
+    complete: [{ label: '安排剩余任务', prompt: '怎么安排今天的优先级' }],
+    start: [{ label: '查看进行中', prompt: '我有哪些进行中的任务' }],
+    update: [{ label: '查看今日', prompt: '今天我要做什么' }],
+    child: [{ label: '查看今日', prompt: '今天我要做什么' }],
+    split: [{ label: '安排优先级', prompt: '怎么安排今天的优先级' }],
+    query: [{ label: '安排优先级', prompt: '怎么安排今天的优先级' }],
+    suggest: [{ label: '查看今日', prompt: '今天我要做什么' }],
+    summary: [{ label: '查看统计', prompt: '今天完成了多少' }],
+    stats: [{ label: '查看今日', prompt: '今天我要做什么' }]
+  };
+  return byType[result.type] || [];
+}
+
+function candidateLabel(candidate) {
+  const context = [];
+  if (candidate.project) context.push(`◈ ${candidate.project}`);
+  if (candidate.due) context.push(candidate.due);
+  if (candidate.status) context.push(STATE_NAME[candidate.status] || candidate.status);
+  return context.length ? `${candidate.title} · ${context.join(' · ')}` : candidate.title;
+}
+
+function retryAction(retry) {
+  let actions;
+  actions = turnActions([{
+    label: '重试',
+    run: () => {
+      actions.remove();
+      retry();
+    }
+  }], '错误恢复');
+  return actions;
+}
+
+async function runAiTurn(request, retry) {
+  if (aiSending) return;
+  setAiBusy(true);
+  const pending = addMsg('ai', '正在理解…');
+  pending.classList.add('pending');
+  try {
+    let result;
+    try {
+      result = await request();
+    } catch (e) {
+      pending.classList.remove('pending');
+      pending.classList.add('error');
+      pending.querySelector('.msg-text').textContent = `暂时没有处理成功：${e.message}`;
+      pending.appendChild(retryAction(retry));
+      return;
+    }
+
+    try {
+      pending.classList.remove('pending', 'error');
+      pending.querySelector('.msg-text').textContent = result.message;
+
+      if (result.degraded) {
+        const tip = document.createElement('div');
+        tip.className = 'ai-notice';
+        tip.textContent = '模型暂时无法连接，已切换到本地助手';
+        pending.appendChild(tip);
+      }
+
+      const operationTypes = ['create', 'complete', 'start', 'delete', 'archive', 'split', 'update', 'child', 'postpone', 'restore'];
+      if (operationTypes.includes(result.type)) pending.appendChild(opCard(result));
+
+      if (result.type === 'ask' && result.candidates && result.candidates.length) {
+        const choices = turnActions(result.candidates.map((candidate) => {
+          const label = candidateLabel(candidate);
+          return {
+            label,
+            run: async () => {
+              choices.querySelectorAll('button').forEach((button) => { button.disabled = true; });
+              choices.remove();
+              await resolveCandidate(result, candidate, label);
+            }
+          };
+        }), '选择任务');
+        pending.appendChild(choices);
+      } else {
+        const followUps = getFollowUps(result);
+        if (followUps.length) {
+          pending.appendChild(turnActions(followUps.map((item) => ({
+            label: item.label,
+            run: () => sendPrompt(item.prompt)
+          }))));
+        }
+      }
+    } catch (e) {
+      pending.classList.remove('pending');
+      pending.querySelector('.msg-text').textContent = result.message;
+      toast(`回复已收到，但附加操作没有完整显示：${esc(e.message)}`, 5000, null, 'warn');
+    }
+
+    try {
+      await refreshTasks();
+    } catch (e) {
+      toast(`操作已完成，但任务列表刷新失败：${esc(e.message)}`, 5000, null, 'warn');
+    }
+  } finally {
+    setAiBusy(false);
+    scrollChat();
+    $('#ai-input').focus();
+  }
+}
+
+async function resolveCandidate(result, candidate, label) {
+  if (aiSending) return;
+  addMsg('user', label);
+  await runResolvedTurn(result, candidate, label);
+}
+
+async function runResolvedTurn(result, candidate, label) {
+  await runAiTurn(() => window.api.ai.resolve(
+    result.intent,
+    result.params,
+    candidate.id,
+    label
+  ), () => runResolvedTurn(result, candidate, label));
+}
+
+async function runPrompt(raw) {
+  await runAiTurn(() => window.api.ai.handle(raw), () => runPrompt(raw));
+}
+
 async function sendPrompt(text) {
   const input = $('#ai-input');
-  const raw = (text || input.value).trim();
-  if (!raw) return;
-  input.value = '';
-  addMsg('user', raw);
-  const typing = addMsg('ai', '…');
-  try {
-    const result = await window.api.ai.handle(raw);
-    // 打字机效果
-    const msgEl = typing.querySelector('span');
-    const full = result.message;
-    msgEl.textContent = '';
-    const chat = $('#ai-chat');
-    let i = 0;
-    const typeTimer = setInterval(() => {
-      i += 2;
-      msgEl.textContent = full.slice(0, i);
-      chat.scrollTop = chat.scrollHeight;
-      if (i >= full.length) {
-        clearInterval(typeTimer);
-        msgEl.textContent = full;
-      }
-    }, 12);
-    // 降级提示：LLM 失败时自动回退规则引擎
-    if (result.degraded) {
-      const tip = document.createElement('div');
-      tip.style.cssText = 'font-size:11px;color:#B5791F;margin-top:6px;background:rgba(199,138,43,0.08);border:1px solid rgba(199,138,43,0.2);border-radius:8px;padding:6px 10px;';
-      tip.textContent = '⚠ 模型暂时连不上，已改用本地助手继续帮你';
-      typing.appendChild(tip);
-    }
-    const operationTypes = ['create', 'complete', 'start', 'delete', 'archive', 'split', 'update', 'child', 'postpone'];
-    if (operationTypes.includes(result.type)) {
-      typing.appendChild(opCard(result));
-    }
-    await refreshTasks();
-  } catch (e) {
-    typing.querySelector('span').textContent = '出错了：' + e.message;
+  const fromComposer = typeof text !== 'string';
+  const raw = (fromComposer ? input.value : text).trim();
+  if (!raw || aiSending) return;
+  if (fromComposer) {
+    input.value = '';
+    resizeAiInput();
   }
+  addMsg('user', raw);
+  await runPrompt(raw);
 }
 
 /* ---------- 聊天历史 ---------- */
@@ -1542,13 +1692,9 @@ async function loadChatHistory() {
     const chat = $('#ai-chat');
     chat.innerHTML = '';
     log.slice(-50).forEach((entry) => {
-      const el = document.createElement('div');
-      el.className = `msg ${entry.role}`;
-      const time = new Date(entry.ts).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
-      el.innerHTML = `<span>${esc(entry.text)}</span><span class="mt">${time}</span>`;
-      chat.appendChild(el);
+      chat.appendChild(createMessage(entry.role, entry.text, entry.ts));
     });
-    chat.scrollTop = chat.scrollHeight;
+    scrollChat();
   } catch (e) {
     // 历史加载失败不阻塞
   }
@@ -1864,8 +2010,16 @@ function bindEvents() {
   });
 
   // AI
-  $('#ai-send').addEventListener('click', () => sendPrompt());
-  $('#ai-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') sendPrompt(); });
+  $('#ai-form').addEventListener('submit', (e) => {
+    e.preventDefault();
+    sendPrompt();
+  });
+  $('#ai-input').addEventListener('input', resizeAiInput);
+  $('#ai-input').addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' || e.shiftKey || e.isComposing) return;
+    e.preventDefault();
+    sendPrompt();
+  });
   $('#ai-collapse').addEventListener('click', () => {
     const panel = $('#ai-panel');
     const collapsed = panel.classList.toggle('collapsed');

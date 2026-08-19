@@ -46,6 +46,7 @@ function loadRendererRuntime(elements) {
     document: {
       querySelector: (selector) => elements[selector] || null,
       querySelectorAll: () => [],
+      createElement: (tag) => elements.__createElement ? elements.__createElement(tag) : null,
       addEventListener: () => {}
     },
     window: {},
@@ -216,6 +217,99 @@ test('真实模型设置明确数据范围并校验自定义服务地址', () =>
   assert.match(app, /最多 30 条未归档任务摘要会发送给所选服务商/);
   assert.match(app, /settings\.aiProvider !== 'custom' \|\| !!settings\.aiBaseUrl/);
   assert.match(app, /s\.aiStage === 'llm'/);
+});
+
+test('助手输入支持多行、提交中状态和失败重试', () => {
+  assert.match(html, /id="ai-chat" role="log"[^>]+aria-live="polite"[^>]+aria-busy="false"/);
+  assert.match(html, /<form class="ai-input-row" id="ai-form">\s*<textarea id="ai-input" rows="1" maxlength="1000"/);
+  assert.match(app, /#ai-form'\)\.addEventListener\('submit'/);
+  assert.match(app, /e\.key !== 'Enter' \|\| e\.shiftKey \|\| e\.isComposing/);
+  assert.match(app, /if \(!raw \|\| aiSending\) return/);
+  assert.match(app, /pending\.querySelector\('\.msg-text'\)\.textContent = `暂时没有处理成功/);
+  assert.match(app, /function retryAction\(retry\)/);
+  assert.match(app, /actions\.remove\(\);\s*retry\(\)/);
+  assert.match(app, /操作已完成，但任务列表刷新失败/);
+  assert.match(css, /\.ai-input-row textarea \{/);
+
+  const attrs = {};
+  const send = { disabled: false, textContent: '' };
+  const run = loadRendererRuntime({
+    '#ai-chat': { setAttribute: (name, value) => { attrs[name] = value; } },
+    '#ai-send': send
+  });
+  run('setAiBusy(true)');
+  assert.strictEqual(attrs['aria-busy'], 'true');
+  assert.strictEqual(send.disabled, true);
+  assert.strictEqual(send.textContent, '处理中');
+  run('setAiBusy(false)');
+  assert.strictEqual(send.textContent, '发送');
+});
+
+test('助手刷新失败不重新执行命令，重试操作触发后立即消费', async () => {
+  const makeElement = () => ({
+    children: [],
+    listeners: {},
+    removed: false,
+    appendChild(child) { this.children.push(child); },
+    setAttribute() {},
+    addEventListener(name, listener) { this.listeners[name] = listener; },
+    remove() { this.removed = true; }
+  });
+  const input = { focus() {} };
+  const run = loadRendererRuntime({ '#ai-input': input, __createElement: makeElement });
+
+  const retryBar = run(`retryAction(() => { globalThis.__retryCount = (globalThis.__retryCount || 0) + 1; })`);
+  retryBar.children[0].listeners.click();
+  assert.strictEqual(retryBar.removed, true);
+  assert.strictEqual(run('globalThis.__retryCount'), 1);
+
+  const busyBar = run(`aiSending = true; turnActions([{ label: '候选', run() {} }])`);
+  assert.strictEqual(busyBar.children[0].disabled, true);
+  run('aiSending = false');
+
+  await run(`(async () => {
+    const message = { textContent: '' };
+    const pending = {
+      classList: { add() {}, remove() {} },
+      querySelector() { return message; },
+      appendChild() {}
+    };
+    let requested = 0;
+    let retryShown = 0;
+    const notices = [];
+    addMsg = () => pending;
+    setAiBusy = () => {};
+    scrollChat = () => {};
+    retryAction = () => { retryShown += 1; return {}; };
+    refreshTasks = async () => { throw new Error('刷新中断'); };
+    toast = (text) => { notices.push(text); };
+    await runAiTurn(async () => {
+      requested += 1;
+      return { type: 'info', message: '操作成功' };
+    }, () => {});
+    globalThis.__turnResult = { requested, retryShown, notices, message: message.textContent };
+  })()`);
+  const result = JSON.parse(run('JSON.stringify(globalThis.__turnResult)'));
+  assert.strictEqual(result.requested, 1);
+  assert.strictEqual(result.retryShown, 0);
+  assert.strictEqual(result.message, '操作成功');
+  assert.match(result.notices[0], /任务列表刷新失败/);
+});
+
+test('助手歧义选择走结构化解析，并提供上下文下一步', () => {
+  assert.match(main, /ipcMain\.handle\('ai:resolve'/);
+  assert.match(preload, /resolve: \(intent, params, taskId, label\) => ipcRenderer\.invoke\('ai:resolve'/);
+  assert.match(app, /window\.api\.ai\.resolve\(/);
+  assert.match(app, /result\.type === 'ask' && result\.candidates/);
+  assert.match(css, /\.turn-actions \{/);
+
+  const run = loadRendererRuntime({});
+  const followUps = JSON.parse(run(`JSON.stringify(getFollowUps({ type: 'complete' }))`));
+  assert.deepStrictEqual(followUps, [{ label: '安排剩余任务', prompt: '怎么安排今天的优先级' }]);
+  assert.strictEqual(
+    run(`candidateLabel({ title: '季度方案', project: 'Q3', due: '2026-08-20 18:00', status: 'doing' })`),
+    '季度方案 · ◈ Q3 · 2026-08-20 18:00 · 进行中'
+  );
 });
 
 test('主题和 AI 引擎分段控件暴露并同步选中状态', () => {

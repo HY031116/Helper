@@ -263,6 +263,12 @@ function registerIpc() {
     store.appendChat({ role: 'ai', text: result.message, ts: Date.now() });
     return result;
   });
+  ipcMain.handle('ai:resolve', (e, intent, params, taskId, label) => {
+    const result = ai.resolve(intent, params, taskId);
+    store.appendChat({ role: 'user', text: label, ts: Date.now() });
+    store.appendChat({ role: 'ai', text: result.message, ts: Date.now() });
+    return result;
+  });
   ipcMain.handle('ai:test', async () => {
     return await ai.testConnection();
   });

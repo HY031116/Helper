@@ -578,6 +578,55 @@ test('扩充：明天要交周报吗 → 不误判 create', () => {
   assert.notStrictEqual(r.intent, 'create');
 });
 
+test('歧义选择：按任务 ID 继续原操作，不重新猜测任务名', () => {
+  reset();
+  const first = store.createTask({ title: '产品方案 A', pri: 2 });
+  const second = store.createTask({ title: '产品方案 B', pri: 2 });
+  const ask = ai.handle('把 产品方案 改成紧急');
+
+  assert.strictEqual(ask.type, 'ask');
+  assert.strictEqual(ask.intent, 'update');
+  assert.strictEqual(ask.params.pri, 4);
+  assert.strictEqual(ask.candidates.length, 2);
+  assert.deepStrictEqual(ask.candidates[1], {
+    id: second.id,
+    title: '产品方案 B',
+    project: '',
+    due: null,
+    status: 'todo'
+  });
+
+  const result = ai.resolve(ask.intent, ask.params, second.id);
+  assert.strictEqual(result.type, 'update');
+  assert.strictEqual(store.getTask(first.id).pri, 2);
+  assert.strictEqual(store.getTask(second.id).pri, 4);
+});
+
+test('歧义选择：拒绝不支持的意图', () => {
+  reset();
+  const task = store.createTask({ title: '保留任务' });
+  const result = ai.resolve('batch', { text: '清除所有任务' }, task.id);
+  assert.strictEqual(result.type, 'error');
+  assert.ok(store.getTask(task.id));
+});
+
+test('歧义选择：可按任务 ID 从回收站恢复指定任务', () => {
+  reset();
+  const first = store.createTask({ title: '恢复候选 A' });
+  const second = store.createTask({ title: '恢复候选 B' });
+  store.deleteTask(first.id);
+  store.deleteTask(second.id);
+
+  const ask = ai.handle('恢复 恢复候选');
+  assert.strictEqual(ask.type, 'ask');
+  assert.strictEqual(ask.intent, 'restore');
+
+  const result = ai.resolve(ask.intent, ask.params, second.id);
+  assert.strictEqual(result.type, 'restore');
+  assert.ok(store.getTask(second.id));
+  assert.ok(store.getDeletedTasks().some((task) => task.id === first.id));
+});
+
 /* ============ 24. 查询筛选 ============ */
 test('筛选：我有哪些紧急任务 → pri=4', () => {
   reset();

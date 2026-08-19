@@ -37,6 +37,7 @@ contextBridge.exposeInMainWorld('api', {
   /* AI */
   ai: {
     handle: (text) => ipcRenderer.invoke('ai:handle', text),
+    resolve: (intent, params, taskId, label) => ipcRenderer.invoke('ai:resolve', intent, params, taskId, label),
     test: () => ipcRenderer.invoke('ai:test'),
     config: () => ipcRenderer.invoke('ai:config'),
     parse: (text) => ipcRenderer.invoke('ai:parse', text),
