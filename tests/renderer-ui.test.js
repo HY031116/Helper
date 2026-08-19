@@ -4,6 +4,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const vm = require('node:vm');
 
 const ROOT = path.join(__dirname, '..');
 const html = fs.readFileSync(path.join(ROOT, 'src/renderer/index.html'), 'utf8');
@@ -30,12 +31,36 @@ function contrastRatio(a, b) {
   return (Math.max(first, second) + 0.05) / (Math.min(first, second) + 0.05);
 }
 
+function loadRendererRuntime(elements) {
+  const context = vm.createContext({
+    console,
+    Date,
+    Set,
+    Map,
+    Math,
+    JSON,
+    setTimeout,
+    clearTimeout,
+    document: {
+      querySelector: (selector) => elements[selector] || null,
+      querySelectorAll: () => [],
+      addEventListener: () => {}
+    },
+    window: {},
+    navigator: {}
+  });
+  vm.runInContext(app, context);
+  return (source) => vm.runInContext(source, context);
+}
+
 test('主导航和任务工具栏使用可聚焦控件', () => {
   assert.match(html, /<nav class="sidebar" aria-label="主导航">/);
   assert.match(html, /<button type="button" class="nav-item active"[^>]+aria-current="page"/);
   assert.doesNotMatch(html, /<div class="nav-item/);
-  assert.match(html, /<div class="task-tools">\s*<input id="search-input" aria-label="搜索任务"/);
-  assert.match(html, /<div class="quick-add">\s*<input id="quick-input"/);
+  assert.match(html, /<div class="task-search-row">\s*<input id="search-input" type="search" aria-label="搜索任务"/);
+  assert.match(html, /<div class="quick-add">\s*<input id="quick-input" aria-label="快速添加任务"/);
+  assert.match(html, /id="btn-quick-add">快速添加<\/button>/);
+  assert.match(html, /id="btn-new">详细创建<\/button>/);
 });
 
 test('高频任务操作和设置开关暴露键盘与状态语义', () => {
@@ -44,6 +69,67 @@ test('高频任务操作和设置开关暴露键盘与状态语义', () => {
   assert.match(app, /class="task-expand\$\{[^}]+\}"[^>]+aria-expanded=/);
   assert.match(app, /class="tname task-title-btn" aria-expanded=/);
   assert.match(app, /role="switch" aria-checked=/);
+  assert.match(html, /<button type="button" class="chip" data-prompt=/);
+  assert.match(app, /<button type="button" class="fchip [^`]+aria-pressed=/);
+});
+
+test('快速添加同时支持按钮和回车，并防止重复提交', () => {
+  assert.match(app, /async function createQuickTask\(\)/);
+  assert.match(app, /if \(!raw \|\| button\.disabled\) return/);
+  assert.match(app, /#btn-quick-add'\)\.addEventListener\('click', createQuickTask\)/);
+  assert.match(app, /if \(e\.key !== 'Enter'\) return;\s*e\.preventDefault\(\);\s*createQuickTask\(\)/);
+});
+
+test('批量模式显式进入，只保留当前可见任务并禁用空操作', () => {
+  assert.match(html, /id="btn-select-mode" aria-pressed="false">批量操作/);
+  assert.match(html, /id="batch-bar"[\s\S]*?<div class="view-body" id="tasks-list">/);
+  assert.match(html, /id="batch-done" disabled/);
+  assert.match(html, /id="batch-delete" disabled/);
+  assert.match(app, /visibleTaskIds = list\.map\(\(t\) => t\.id\)/);
+  assert.match(app, /selectedIds = new Set\(\[\.\.\.selectedIds\]\.filter\(\(id\) => visibleSet\.has\(id\)\)\)/);
+  assert.match(app, /completableCount = tasks\.filter\(\(t\) => selectedIds\.has\(t\.id\) && t\.status !== 'done' && t\.status !== 'archived'\)\.length/);
+  assert.match(app, /window\.api\.tasks\.batchComplete\(ids\)/);
+  assert.match(app, /function setBatchMode\(enabled, shouldRender = true\)/);
+  assert.match(app, /class="task-main"\$\{batchMode \? ' inert' : ''\}/);
+  assert.match(app, /\.task-row\[data-id="\$\{id\}"\] \.task-check/);
+  assert.match(app, /if \(active\) active\.focus\(\)/);
+  assert.match(css, /\.task-row\.selecting \.task-check \{[\s\S]*?background: transparent; animation: none;/);
+  assert.match(css, /\.batch-bar \{\s*position: sticky; top: 0; margin-bottom: 12px;/);
+});
+
+test('批量栏实际按可完成任务数更新状态', () => {
+  const classes = new Set(['hidden']);
+  const elements = {
+    '#batch-bar': { classList: { add: (name) => classes.add(name), remove: (name) => classes.delete(name) } },
+    '#batch-count': { textContent: '' },
+    '#batch-done': { disabled: true, textContent: '', title: '' },
+    '#batch-pri': { disabled: true },
+    '#batch-delete': { disabled: true },
+    '#batch-select-all': { disabled: true, textContent: '' }
+  };
+  const run = loadRendererRuntime(elements);
+
+  run(`
+    tasks = [
+      { id: 1, status: 'todo' },
+      { id: 2, status: 'done' },
+      { id: 3, status: 'archived' }
+    ];
+    batchMode = true;
+    visibleTaskIds = [1, 2, 3];
+    selectedIds = new Set([1, 2, 3]);
+    renderBatchBar();
+  `);
+
+  assert.strictEqual(classes.has('hidden'), false);
+  assert.strictEqual(elements['#batch-count'].textContent, '已选 3 项');
+  assert.strictEqual(elements['#batch-done'].disabled, false);
+  assert.strictEqual(elements['#batch-done'].textContent, '✓ 完成 1 项');
+  assert.strictEqual(elements['#batch-done'].title, '已完成或已归档任务将自动跳过');
+
+  run(`selectedIds = new Set([2, 3]); renderBatchBar();`);
+  assert.strictEqual(elements['#batch-done'].disabled, true);
+  assert.strictEqual(elements['#batch-done'].textContent, '✓ 完成');
 });
 
 test('真实模型设置明确数据范围并校验自定义服务地址', () => {

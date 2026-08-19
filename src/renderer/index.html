@@ -52,30 +52,35 @@
           <span class="view-sub" id="tasks-sub"></span>
         </div>
         <div class="toolbar">
-          <div id="smart-filters"></div>
+          <div id="smart-filters" role="group" aria-label="任务筛选"></div>
           <div class="task-tools">
-            <input id="search-input" aria-label="搜索任务" placeholder="搜索标题、描述、标签或项目">
+            <div class="task-search-row">
+              <input id="search-input" type="search" aria-label="搜索任务" placeholder="搜索标题、描述、标签或项目">
+              <button type="button" class="btn mini ghost" id="btn-select-mode" aria-pressed="false">批量操作</button>
+            </div>
             <div class="quick-add">
-            <input id="quick-input" placeholder="输入任务回车创建，支持「明天下午3点 交周报 #工作 紧急」">
-            <button class="btn" id="btn-new">新建任务</button>
+              <input id="quick-input" aria-label="快速添加任务" placeholder="例如：明天下午3点 交周报 #工作 紧急">
+              <button type="button" class="btn" id="btn-quick-add">快速添加</button>
+              <button type="button" class="btn ghost" id="btn-new">详细创建</button>
             </div>
           </div>
         </div>
-        <div class="view-body" id="tasks-list"></div>
         <!-- 批量操作栏 -->
         <div class="batch-bar hidden" id="batch-bar">
-          <span id="batch-count">已选 0 项</span>
-          <button class="btn mini" id="batch-done">✓ 完成</button>
-          <select id="batch-pri" class="batch-pri">
+          <span id="batch-count" aria-live="polite">请选择任务</span>
+          <button type="button" class="btn mini ghost" id="batch-select-all">全选当前</button>
+          <button type="button" class="btn mini" id="batch-done" disabled>✓ 完成</button>
+          <select id="batch-pri" class="batch-pri" aria-label="批量修改优先级" disabled>
             <option value="">改优先级…</option>
             <option value="4">紧急</option>
             <option value="3">高</option>
             <option value="2">中</option>
             <option value="1">低</option>
           </select>
-          <button class="btn mini danger" id="batch-delete">删除</button>
-          <button class="btn mini ghost" id="batch-clear">取消</button>
+          <button type="button" class="btn mini danger" id="batch-delete" disabled>删除</button>
+          <button type="button" class="btn mini ghost" id="batch-clear">退出批量</button>
         </div>
+        <div class="view-body" id="tasks-list"></div>
       </section>
 
       <!-- 看板 -->
@@ -138,10 +143,10 @@
         <button class="ai-collapse" id="ai-collapse" title="收起">»</button>
       </div>
       <div class="ai-chips" id="ai-chips">
-        <span class="chip" data-prompt="明天下午3点 交周报 #工作 紧急">创建任务</span>
-        <span class="chip" data-prompt="今天我要做什么">查看今日</span>
-        <span class="chip" data-prompt="把 写季度方案 拆成三步">拆分任务</span>
-        <span class="chip" data-prompt="怎么安排今天的优先级">安排建议</span>
+        <button type="button" class="chip" data-prompt="明天下午3点 交周报 #工作 紧急">创建任务</button>
+        <button type="button" class="chip" data-prompt="今天我要做什么">查看今日</button>
+        <button type="button" class="chip" data-prompt="把 写季度方案 拆成三步">拆分任务</button>
+        <button type="button" class="chip" data-prompt="怎么安排今天的优先级">安排建议</button>
       </div>
       <div class="ai-chat" id="ai-chat"></div>
       <div class="ai-input-row">

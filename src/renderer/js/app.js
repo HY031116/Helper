@@ -18,6 +18,8 @@ calCursor.setDate(1);
 let calSelected = null;
 let statInited = false;
 let selectedIds = new Set(); // 批量选择
+let batchMode = false;
+let visibleTaskIds = [];
 let expandedIds = new Set(); // 展开的子任务
 let trashList = []; // 回收站列表
 let reportWeek = 0; // 周报选择的周（0=本周, -1=上周, 1=下周）
@@ -128,8 +130,9 @@ function rowHTML(t) {
   const dueHtml = t.due
     ? `<span class="tdue${isOverdue(t.due, t.status) ? ' over' : ''}" title="${esc(t.due)}">${esc(relDue(t.due))}</span>`
     : '';
-  const check = t.status === 'done' ? '✓' : '';
-  const selected = selectedIds.has(t.id) ? ' sel' : '';
+  const isSelected = selectedIds.has(t.id);
+  const check = batchMode ? (isSelected ? '✓' : '') : (t.status === 'done' ? '✓' : '');
+  const selected = isSelected ? ' sel' : '';
   const hasChildren = t.children && t.children.length;
   const expanded = expandedIds.has(t.id);
   const repeatTag = t.repeat ? `<span class="repeat-chip">↻ ${t.repeat === 'daily' ? '每天' : t.repeat === 'weekly' ? '每周' : '每月'}</span>` : '';
@@ -158,11 +161,14 @@ function rowHTML(t) {
     <div class="td-row"><span class="td-label">创建</span><span class="td-val">${fmtTime(t.createdAt)}</span></div>
     ${t.status === 'done' && t.completedAt ? `<div class="td-row"><span class="td-label">完成</span><span class="td-val">${fmtTime(t.completedAt)}</span></div>` : ''}
   </div>` : '';
-  return `<div class="task-row${t.status === 'done' ? ' done' : ''}${t.status === 'archived' ? ' archived' : ''}${selected}${overdueCls}" data-id="${t.id}" draggable="true">
-    <button type="button" class="task-check" title="${t.status === 'done' ? '重新打开' : '完成'}" aria-label="${t.status === 'done' ? '重新打开' : '完成任务'}">${check}</button>
-    <button type="button" class="pri-dot p${t.pri}" title="点击切换优先级（当前：${PRI_NAME[t.pri]}）" aria-label="当前${PRI_NAME[t.pri]}优先级，点击切换" data-pri-toggle>${PRI_NAME[t.pri]}</button>
-    ${hasChildren ? `<button type="button" class="task-expand${expanded ? ' open' : ''}" title="${expanded ? '收起' : '展开'}子任务" aria-expanded="${expanded}">▸</button>` : ''}
-    <div class="task-main">
+  const checkLabel = batchMode
+    ? `${isSelected ? '取消选择' : '选择'}任务「${t.title}」`
+    : (t.status === 'done' ? '重新打开' : '完成任务');
+  return `<div class="task-row${t.status === 'done' ? ' done' : ''}${t.status === 'archived' ? ' archived' : ''}${batchMode ? ' selecting' : ''}${selected}${overdueCls}" data-id="${t.id}" draggable="${!batchMode}">
+    <button type="button" class="task-check" title="${esc(checkLabel)}" aria-label="${esc(checkLabel)}" aria-pressed="${batchMode ? isSelected : t.status === 'done'}">${check}</button>
+    <button type="button" class="pri-dot p${t.pri}" title="点击切换优先级（当前：${PRI_NAME[t.pri]}）" aria-label="当前${PRI_NAME[t.pri]}优先级，点击切换" data-pri-toggle${batchMode ? ' tabindex="-1"' : ''}>${PRI_NAME[t.pri]}</button>
+    ${hasChildren ? `<button type="button" class="task-expand${expanded ? ' open' : ''}" title="${expanded ? '收起' : '展开'}子任务" aria-expanded="${expanded}"${batchMode ? ' tabindex="-1"' : ''}>▸</button>` : ''}
+    <div class="task-main"${batchMode ? ' inert' : ''}>
       <button type="button" class="tname task-title-btn" aria-expanded="${detailOpen}">${titleHtml}</button>
       ${sub.length ? `<div class="tsub">${sub.join(' · ')}</div>` : ''}
       ${hasChildren && expanded ? `<div class="child-list">${t.children.map((c) => {
@@ -174,7 +180,7 @@ function rowHTML(t) {
       }).join('')}</div>` : ''}
       ${detailHtml}
     </div>
-    <div class="task-meta">
+    <div class="task-meta"${batchMode ? ' inert' : ''}>
       ${repeatTag}
       ${dueHtml}
       ${doneTime}
@@ -339,6 +345,9 @@ function renderTasks() {
     }
     return b.pri - a.pri;
   });
+  visibleTaskIds = list.map((t) => t.id);
+  const visibleSet = new Set(visibleTaskIds);
+  selectedIds = new Set([...selectedIds].filter((id) => visibleSet.has(id)));
   renderList($('#tasks-list'), list);
   const done = tasks.filter((t) => !t._deleted && t.status === 'done').length;
   const total = tasks.filter((t) => !t._deleted && t.status !== 'archived').length;
@@ -369,28 +378,28 @@ function renderSmartFilters() {
   const tags = [...tagSet].slice(0, 8);
 
   let html = `<div class="smart-row">
-    ${smart.map((s) => `<span class="fchip ${currentFilter === s.k ? 'active' : ''}" data-filter="${s.k}">${s.n}</span>`).join('')}
+    ${smart.map((s) => `<button type="button" class="fchip ${currentFilter === s.k ? 'active' : ''}" aria-pressed="${currentFilter === s.k}" data-filter="${s.k}">${s.n}</button>`).join('')}
   </div>`;
   if (projs.length) {
     html += `<div class="smart-row smart-sub">
       <span class="smart-label">项目</span>
-      ${projs.map((p) => `<span class="fchip ${currentFilter === 'proj:' + p ? 'active' : ''}" data-filter="proj:${esc(p)}">◈ ${esc(p)}</span>`).join('')}
+      ${projs.map((p) => `<button type="button" class="fchip ${currentFilter === 'proj:' + p ? 'active' : ''}" aria-pressed="${currentFilter === 'proj:' + p}" data-filter="proj:${esc(p)}">◈ ${esc(p)}</button>`).join('')}
     </div>`;
   }
   if (tags.length) {
     html += `<div class="smart-row smart-sub">
       <span class="smart-label">标签</span>
-      ${tags.map((t) => `<span class="fchip ${currentFilter === 'tag:' + t ? 'active' : ''}" data-filter="tag:${esc(t)}">#${esc(t)}</span>`).join('')}
+      ${tags.map((t) => `<button type="button" class="fchip ${currentFilter === 'tag:' + t ? 'active' : ''}" aria-pressed="${currentFilter === 'tag:' + t}" data-filter="tag:${esc(t)}">#${esc(t)}</button>`).join('')}
     </div>`;
   }
   wrap.innerHTML = html;
   // 绑定事件
   $$('#smart-filters .fchip').forEach((c) => {
     c.addEventListener('click', () => {
-      $$('#smart-filters .fchip').forEach((x) => x.classList.remove('active'));
-      c.classList.add('active');
       currentFilter = c.dataset.filter;
       renderTasks();
+      const active = $$('#smart-filters .fchip').find((x) => x.dataset.filter === currentFilter);
+      if (active) active.focus();
     });
   });
 }
@@ -399,12 +408,35 @@ function renderSmartFilters() {
 function renderBatchBar() {
   const bar = $('#batch-bar');
   if (!bar) return;
-  if (selectedIds.size === 0) {
+  if (!batchMode) {
     bar.classList.add('hidden');
     return;
   }
   bar.classList.remove('hidden');
-  $('#batch-count').textContent = `已选 ${selectedIds.size} 项`;
+  const count = selectedIds.size;
+  const completableCount = tasks.filter((t) => selectedIds.has(t.id) && t.status !== 'done' && t.status !== 'archived').length;
+  $('#batch-count').textContent = count ? `已选 ${count} 项` : '请选择任务';
+  const doneButton = $('#batch-done');
+  doneButton.disabled = completableCount === 0;
+  doneButton.textContent = completableCount ? `✓ 完成 ${completableCount} 项` : '✓ 完成';
+  doneButton.title = count > completableCount ? '已完成或已归档任务将自动跳过' : '';
+  $('#batch-pri').disabled = count === 0;
+  $('#batch-delete').disabled = count === 0;
+  const selectAll = $('#batch-select-all');
+  const allSelected = visibleTaskIds.length > 0 && visibleTaskIds.every((id) => selectedIds.has(id));
+  selectAll.disabled = visibleTaskIds.length === 0;
+  selectAll.textContent = allSelected ? '取消全选' : '全选当前';
+}
+
+function setBatchMode(enabled, shouldRender = true) {
+  batchMode = enabled;
+  selectedIds.clear();
+  const trigger = $('#btn-select-mode');
+  if (trigger) {
+    trigger.setAttribute('aria-pressed', String(enabled));
+    trigger.textContent = enabled ? '退出批量' : '批量操作';
+  }
+  if (shouldRender) renderTasks();
 }
 
 /* ---------- 视图：看板 ---------- */
@@ -1091,10 +1123,8 @@ function switchView(view) {
     else n.removeAttribute('aria-current');
   });
   $$('.view').forEach((v) => { v.style.display = v.id === `view-${view}` ? '' : 'none'; });
-  // 切换视图时清除批量选择并隐藏批量栏
-  selectedIds.clear();
-  const batchBar = $('#batch-bar');
-  if (batchBar) batchBar.classList.add('hidden');
+  // 切换视图时退出批量模式，避免隐藏选择残留。
+  setBatchMode(false, false);
   // 视图切换动画
   const activeView = document.getElementById(`view-${view}`);
   if (activeView) {
@@ -1452,35 +1482,47 @@ function bindEvents() {
   });
 
   // 快建：支持自然语言（如「明天下午3点 交周报 #工作 紧急」）
-  $('#quick-input').addEventListener('keydown', async (e) => {
-    if (e.key === 'Enter') {
-      const raw = e.target.value.trim();
-      if (!raw) return;
-      try {
-        const parsed = await window.api.ai.parse(raw);
-        if (parsed.intent === 'create' && parsed.params.title) {
-          const p = parsed.params;
-          await window.api.tasks.create({
-            title: p.title,
-            pri: p.pri || 2,
-            due: p.due || null,
-            tags: p.tags || []
-          });
-          e.target.value = '';
-          toast(`已创建「${p.title}」${p.due ? ' · ' + p.due : ''}`);
-        } else {
-          // 非创建意图：退化为纯标题创建
-          await window.api.tasks.create({ title: raw, pri: 2 });
-          e.target.value = '';
-          toast(`已创建「${raw}」`);
-        }
-      } catch (err) {
-        toast('创建失败：' + err.message);
+  async function createQuickTask() {
+    const input = $('#quick-input');
+    const button = $('#btn-quick-add');
+    const raw = input.value.trim();
+    if (!raw || button.disabled) return;
+    button.disabled = true;
+    button.textContent = '添加中…';
+    try {
+      const parsed = await window.api.ai.parse(raw);
+      if (parsed.intent === 'create' && parsed.params.title) {
+        const p = parsed.params;
+        await window.api.tasks.create({
+          title: p.title,
+          pri: p.pri || 2,
+          due: p.due || null,
+          tags: p.tags || []
+        });
+        input.value = '';
+        toast(`已创建「${p.title}」${p.due ? ' · ' + p.due : ''}`);
+      } else {
+        await window.api.tasks.create({ title: raw, pri: 2 });
+        input.value = '';
+        toast(`已创建「${raw}」`);
       }
       await refreshTasks();
+      input.focus();
+    } catch (err) {
+      toast('创建失败：' + err.message);
+    } finally {
+      button.disabled = false;
+      button.textContent = '快速添加';
     }
+  }
+  $('#quick-input').addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter') return;
+    e.preventDefault();
+    createQuickTask();
   });
+  $('#btn-quick-add').addEventListener('click', createQuickTask);
   $('#btn-new').addEventListener('click', () => openModal(null));
+  $('#btn-select-mode').addEventListener('click', () => setBatchMode(!batchMode));
 
   // 看板拖拽
   $('#board-cols').addEventListener('dragstart', (e) => {
@@ -1609,18 +1651,30 @@ function bindEvents() {
   });
 
   // 批量操作
+  $('#batch-select-all').addEventListener('click', () => {
+    const allSelected = visibleTaskIds.length > 0 && visibleTaskIds.every((id) => selectedIds.has(id));
+    selectedIds = allSelected ? new Set() : new Set(visibleTaskIds);
+    renderTasks();
+  });
   $('#batch-done').addEventListener('click', async () => {
     const ids = Array.from(selectedIds);
-    await window.api.tasks.batchUpdate(ids, { status: 'done' });
-    selectedIds.clear();
-    toast(`已完成 ${ids.length} 项任务`);
+    if (!ids.length) return;
+    const result = await window.api.tasks.batchComplete(ids);
+    setBatchMode(false, false);
+    const generated = result.generated && result.generated.length;
+    const detail = [
+      result.skipped ? `跳过 ${result.skipped} 项` : '',
+      generated ? `已安排 ${generated} 个下次任务` : ''
+    ].filter(Boolean).join(' · ');
+    toast(`已完成 ${result.completed} 项任务${detail ? ' · ' + detail : ''}`);
     await refreshTasks();
   });
   $('#batch-delete').addEventListener('click', async () => {
     const ids = Array.from(selectedIds);
+    if (!ids.length) return;
     confirmDialog(`确定删除选中的 ${ids.length} 项任务吗？`, async () => {
       await window.api.tasks.batchDelete(ids);
-      selectedIds.clear();
+      setBatchMode(false, false);
       toast(`已删除 ${ids.length} 项任务`, 3000, null, 'ok');
       await refreshTasks();
     });
@@ -1629,16 +1683,14 @@ function bindEvents() {
     const pri = parseInt($('#batch-pri').value, 10);
     if (!pri) return;
     const ids = Array.from(selectedIds);
+    if (!ids.length) return;
     await window.api.tasks.batchUpdate(ids, { pri });
-    selectedIds.clear();
+    setBatchMode(false, false);
     $('#batch-pri').value = '';
     toast(`已更新 ${ids.length} 项任务优先级`);
     await refreshTasks();
   });
-  $('#batch-clear').addEventListener('click', () => {
-    selectedIds.clear();
-    renderAll();
-  });
+  $('#batch-clear').addEventListener('click', () => setBatchMode(false));
 
   // 回收站
   $('#trash-empty').addEventListener('click', async () => {
@@ -1738,7 +1790,7 @@ function bindEvents() {
       const pri = parseInt(e.key, 10);
       const ids = Array.from(selectedIds);
       window.api.tasks.batchUpdate(ids, { pri });
-      selectedIds.clear();
+      setBatchMode(false, false);
       toast(`已设为${PRI_NAME[pri]}优先级`);
       refreshTasks();
       return;
@@ -1768,10 +1820,9 @@ function bindEvents() {
       openModal(null);
       return;
     }
-    // Esc 取消选择
+    // Esc 退出批量模式
     if (e.key === 'Escape') {
-      selectedIds.clear();
-      renderAll();
+      if (batchMode) setBatchMode(false);
     }
   });
 }
@@ -1814,6 +1865,11 @@ async function onTaskClick(e) {
     postponeTask(id, days);
     return;
   }
+  const selectionRow = e.target.closest('.task-row');
+  if (batchMode && currentView === 'tasks' && selectionRow) {
+    toggleSelect(parseInt(selectionRow.dataset.id, 10));
+    return;
+  }
   // hover 快捷操作
   const ra = e.target.closest('.ra');
   if (ra) {
@@ -1851,7 +1907,8 @@ async function onTaskClick(e) {
   }
   // 多选（Ctrl/Shift 点击或点击勾选框左侧区域）
   if (e.target.classList.contains('task-check')) {
-    if (e.ctrlKey || e.metaKey || e.shiftKey) {
+    if (currentView === 'tasks' && (e.ctrlKey || e.metaKey || e.shiftKey)) {
+      setBatchMode(true, false);
       toggleSelect(t.id);
       return;
     }
@@ -1944,7 +2001,9 @@ async function toggleChild(parentId, childId) {
 function toggleSelect(id) {
   if (selectedIds.has(id)) selectedIds.delete(id);
   else selectedIds.add(id);
-  renderAll();
+  renderTasks();
+  const control = document.querySelector(`.task-row[data-id="${id}"] .task-check`);
+  if (control) control.focus({ preventScroll: true });
 }
 
 async function toggleDone(t) {

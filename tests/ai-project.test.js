@@ -406,6 +406,24 @@ test('批量：batchUpdate 批量完成', () => {
   assert.strictEqual(store.getTask(b.id).status, 'done');
 });
 
+test('批量完成：重复任务生成下一次并跳过已完成与归档任务', () => {
+  reset();
+  const recurring = store.createTask({ title: '每日复盘', repeat: 'daily', due: '2026-08-18 20:00' });
+  const done = store.createTask({ title: '已经完成' });
+  const archived = store.createTask({ title: '已经归档' });
+  store.completeTask(done.id);
+  store.archiveTask(archived.id);
+
+  const result = store.batchComplete([recurring.id, done.id, archived.id, recurring.id]);
+
+  assert.strictEqual(result.completed, 1);
+  assert.strictEqual(result.skipped, 2);
+  assert.strictEqual(result.generated.length, 1);
+  assert.strictEqual(result.generated[0].due, '2026-08-19 20:00');
+  assert.strictEqual(store.getTask(recurring.id).status, 'done');
+  assert.strictEqual(store.getTask(archived.id).status, 'archived');
+});
+
 test('批量：batchDelete 批量删除进回收站', () => {
   reset();
   const a = store.createTask({ title: '批量删1' });

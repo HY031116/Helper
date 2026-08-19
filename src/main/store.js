@@ -245,6 +245,29 @@ function batchUpdate(ids, patch) {
   return updated;
 }
 
+function batchComplete(ids) {
+  const results = [];
+  let skipped = 0;
+  const uniqueIds = [...new Set(Array.isArray(ids) ? ids : [])];
+  uniqueIds.forEach((id) => {
+    const task = getTask(id);
+    if (!task || task.status === 'done' || task.status === 'archived') {
+      skipped++;
+      return;
+    }
+    try {
+      results.push(completeTask(id));
+    } catch (e) {
+      skipped++;
+    }
+  });
+  return {
+    completed: results.length,
+    skipped,
+    generated: results.filter((result) => result.next).map((result) => result.next)
+  };
+}
+
 function batchDelete(ids) {
   ids.forEach((id) => {
     try { deleteTask(id); } catch (e) { /* skip */ }
@@ -642,6 +665,7 @@ module.exports = {
   getDeletedTasks,
   emptyTrash,
   batchUpdate,
+  batchComplete,
   batchDelete,
   reorderTasks,
   completeTask,
