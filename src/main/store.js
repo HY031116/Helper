@@ -409,6 +409,50 @@ function backup() {
   return file;
 }
 
+/* 列出备份目录中的所有备份文件（含时间、大小） */
+function listBackups() {
+  ensureDir(BACKUP_DIR);
+  return fs.readdirSync(BACKUP_DIR)
+    .filter((f) => f.startsWith('tasks-') && f.endsWith('.json'))
+    .map((f) => {
+      const full = path.join(BACKUP_DIR, f);
+      const stat = fs.statSync(full);
+      // 从文件名解析时间戳：tasks-2026-08-19T10-30-00.json
+      const m = f.match(/tasks-(\d{4}-\d{2}-\d{2})T(\d{2})-(\d{2})-(\d{2})/);
+      let time = '';
+      if (m) time = `${m[1]} ${m[2]}:${m[3]}:${m[4]}`;
+      return { name: f, path: full, size: stat.size, time };
+    })
+    .sort((a, b) => (a.name < b.name ? 1 : -1)); // 新的在前
+}
+
+/* 从指定备份文件恢复任务数据（覆盖当前任务） */
+function restoreFromBackup(filePath) {
+  if (!filePath) throw new Error('未指定备份文件');
+  const raw = fs.readFileSync(filePath, 'utf-8');
+  const data = JSON.parse(raw);
+  const list = Array.isArray(data) ? data : (data.tasks || []);
+  if (!Array.isArray(list)) throw new Error('备份文件格式不正确');
+  // 恢复前先做一次当前数据备份，防止误操作丢失
+  backup();
+  tasks = list.map((t) => Object.assign({}, t));
+  // 重新计算最大 id
+  seq = 100;
+  tasks.forEach((t) => { if (t.id > seq) seq = t.id; });
+  saveTasks();
+  return { ok: true, count: tasks.length };
+}
+
+/* 一键备份到外部指定文件夹（防止数据目录丢失） */
+function backupToDir(dir) {
+  if (!dir) throw new Error('未指定目标文件夹');
+  ensureDir(dir);
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+  const file = path.join(dir, `work-helper-backup-${stamp}.json`);
+  fs.copyFileSync(TASKS_FILE, file);
+  return file;
+}
+
 /* ---------- 导出 ---------- */
 function exportJSON() {
   return JSON.stringify(getAllTasks(), null, 2);
@@ -428,6 +472,160 @@ function exportCSV() {
 /* ---------- 保存 ---------- */
 function saveTasks() {
   writeJson(TASKS_FILE, tasks);
+}
+
+/* ---------- 周报生成 ---------- */
+/**
+ * 生成周报 Markdown
+ * @param {number} weekOffset 0=本周, -1=上周, 1=下周
+ * @returns {string} Markdown 周报文本
+ */
+function generateWeeklyReport(weekOffset) {
+  const offset = Number(weekOffset) || 0;
+  const now = new Date();
+  // 计算本周一（周一为一周起点）
+  const day = now.getDay() || 7; // 周日=7
+  const monday = new Date(now);
+  monday.setDate(now.getDate() - (day - 1) + offset * 7);
+  monday.setHours(0, 0, 0, 0);
+  const sunday = new Date(monday);
+  sunday.setDate(monday.getDate() + 6);
+  sunday.setHours(23, 59, 59, 999);
+
+  const pad = (n) => (n < 10 ? '0' + n : '' + n);
+  const fmt = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  const weekLabel = `${fmt(monday)} ~ ${fmt(sunday)}`;
+
+  const all = tasks.filter((t) => !t._deleted);
+  const inWeek = (t) => {
+    if (!t.completedAt) return false;
+    const c = new Date(t.completedAt);
+    return c >= monday && c <= sunday;
+  };
+  const dueInWeek = (t) => {
+    if (!t.due) return false;
+    const d = new Date(t.due.replace(' ', 'T') + ':00');
+    return d >= monday && d <= sunday;
+  };
+
+  const doneThisWeek = all.filter((t) => t.status === 'done' && inWeek(t));
+  const doingNow = all.filter((t) => t.status === 'doing');
+  const todoNow = all.filter((t) => t.status === 'todo');
+  const dueThisWeek = all.filter((t) => t.status !== 'done' && t.status !== 'archived' && dueInWeek(t));
+
+  // 按项目统计本周完成
+  const projAcc = {};
+  doneThisWeek.forEach((t) => {
+    const p = t.project || '未分类';
+    if (!projAcc[p]) projAcc[p] = [];
+    projAcc[p].push(t);
+  });
+
+  // 按标签统计本周完成
+  const tagAcc = {};
+  doneThisWeek.forEach((t) => (t.tags || []).forEach((tag) => {
+    if (!tagAcc[tag]) tagAcc[tag] = [];
+    tagAcc[tag].push(t);
+  }));
+
+  const lines = [];
+  lines.push(`# 工作周报（${weekLabel}）`);
+  lines.push('');
+  lines.push(`> 生成时间：${new Date().toLocaleString('zh-CN')}`);
+  lines.push('');
+  lines.push('## 一、本周概览');
+  lines.push('');
+  lines.push(`- ✅ 本周完成：**${doneThisWeek.length}** 项`);
+  lines.push(`- 🔄 进行中：**${doingNow.length}** 项`);
+  lines.push(`- 📋 待办：**${todoNow.length}** 项`);
+  lines.push(`- ⏰ 本周到期未完成：**${dueThisWeek.length}** 项`);
+  lines.push('');
+
+  lines.push('## 二、本周完成明细');
+  lines.push('');
+  if (doneThisWeek.length) {
+    doneThisWeek
+      .slice()
+      .sort((a, b) => (a.completedAt || 0) - (b.completedAt || 0))
+      .forEach((t, i) => {
+        const c = t.completedAt ? new Date(t.completedAt) : null;
+        const dayStr = c ? `${c.getMonth() + 1}/${c.getDate()}` : '';
+        const priStr = { 4: '🔴', 3: '🟠', 2: '🟡', 1: '⚪' }[t.pri] || '';
+        const proj = t.project ? `（${t.project}）` : '';
+        lines.push(`${i + 1}. ${priStr} ${t.title}${proj} — ${dayStr}`);
+        if (t.desc) lines.push(`   - ${t.desc}`);
+      });
+  } else {
+    lines.push('（本周暂无完成任务）');
+  }
+  lines.push('');
+
+  lines.push('## 三、按项目统计');
+  lines.push('');
+  if (Object.keys(projAcc).length) {
+    Object.keys(projAcc)
+      .sort((a, b) => projAcc[b].length - projAcc[a].length)
+      .forEach((p) => {
+        lines.push(`- **${p}**：完成 ${projAcc[p].length} 项`);
+      });
+  } else {
+    lines.push('（无）');
+  }
+  lines.push('');
+
+  lines.push('## 四、按标签统计');
+  lines.push('');
+  if (Object.keys(tagAcc).length) {
+    Object.keys(tagAcc)
+      .sort((a, b) => tagAcc[b].length - tagAcc[a].length)
+      .forEach((tag) => {
+        lines.push(`- **#${tag}**：完成 ${tagAcc[tag].length} 项`);
+      });
+  } else {
+    lines.push('（无）');
+  }
+  lines.push('');
+
+  lines.push('## 五、当前进行中');
+  lines.push('');
+  if (doingNow.length) {
+    doingNow.forEach((t) => {
+      const due = t.due ? `（截止 ${t.due}）` : '';
+      lines.push(`- ${t.title}${due}`);
+    });
+  } else {
+    lines.push('（无进行中任务）');
+  }
+  lines.push('');
+
+  lines.push('## 六、本周到期未完成');
+  lines.push('');
+  if (dueThisWeek.length) {
+    dueThisWeek
+      .slice()
+      .sort((a, b) => (a.due || '').localeCompare(b.due || ''))
+      .forEach((t) => {
+        lines.push(`- ${t.title}（${t.due}）`);
+      });
+  } else {
+    lines.push('（无）');
+  }
+  lines.push('');
+
+  lines.push('## 七、下周计划建议');
+  lines.push('');
+  const nextTodo = all.filter((t) => t.status === 'todo' && t.due)
+    .sort((a, b) => (a.due || '').localeCompare(b.due || ''));
+  if (nextTodo.length) {
+    nextTodo.slice(0, 10).forEach((t) => {
+      lines.push(`- [ ] ${t.title}（${t.due}）`);
+    });
+  } else {
+    lines.push('（暂无带截止时间的待办）');
+  }
+  lines.push('');
+
+  return lines.join('\n');
 }
 
 module.exports = {
@@ -458,6 +656,10 @@ module.exports = {
   appendChat,
   clearChat,
   backup,
+  listBackups,
+  restoreFromBackup,
+  backupToDir,
   exportJSON,
-  exportCSV
+  exportCSV,
+  generateWeeklyReport
 };

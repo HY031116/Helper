@@ -620,11 +620,72 @@ function renderStat() {
     </div>`;
   }
 
-  $('#stat-body').innerHTML = html;
-}
+  // 周报生成
+  html += `<div class="stat-chart-row" style="margin-top:14px">
+    <div style="flex:1">
+      <div style="font-size:12.5px;font-weight:700;margin-bottom:8px">📄 周报生成</div>
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+        <div class="seg" id="report-week-seg">
+          <span class="seg-it" data-week="-1">上周</span>
+          <span class="seg-it active" data-week="0">本周</span>
+          <span class="seg-it" data-week="1">下周</span>
+        </div>
+        <button class="btn mini" id="btn-report-gen">生成周报</button>
+        <button class="btn mini" id="btn-report-copy" style="display:none">复制</button>
+        <button class="btn mini" id="btn-report-download" style="display:none">下载 .md</button>
+      </div>
+      <div id="report-preview" style="margin-top:10px;max-height:320px;overflow:auto;background:rgba(0,0,0,0.03);border-radius:10px;padding:12px;font-size:12px;line-height:1.6;white-space:pre-wrap;font-family:Consolas,monospace;color:var(--ink);display:none"></div>
+    </div>
+  </div>`;
 
-/* ---------- 视图：设置 ---------- */
-function renderSettings() {
+  $('#stat-body').innerHTML = html;
+
+  // 周报：选择周
+  let reportWeek = 0;
+  $$('#report-week-seg .seg-it').forEach((seg) => {
+    seg.addEventListener('click', () => {
+      $$('#report-week-seg .seg-it').forEach((x) => x.classList.remove('active'));
+      seg.classList.add('active');
+      reportWeek = parseInt(seg.dataset.week, 10);
+    });
+  });
+  // 周报：生成
+  $('#btn-report-gen').addEventListener('click', async () => {
+    const preview = $('#report-preview');
+    const copyBtn = $('#btn-report-copy');
+    const dlBtn = $('#btn-report-download');
+    try {
+      const md = await window.api.data.weeklyReport(reportWeek);
+      preview.textContent = md;
+      preview.style.display = 'block';
+      copyBtn.style.display = '';
+      dlBtn.style.display = '';
+      toast('周报已生成');
+    } catch (e) {
+      toast('周报生成失败：' + e.message);
+    }
+  });
+  // 周报：复制
+  $('#btn-report-copy').addEventListener('click', async () => {
+    const md = $('#report-preview').textContent;
+    try {
+      await navigator.clipboard.writeText(md);
+      toast('周报已复制到剪贴板', 2000, null, 'ok');
+    } catch (e) {
+      toast('复制失败，请手动选择复制');
+    }
+  });
+  // 周报：下载 .md
+  $('#btn-report-download').addEventListener('click', () => {
+    const md = $('#report-preview').textContent;
+    const blob = new Blob([md], { type: 'text/markdown;charset=utf-8' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `工作周报-${new Date().toISOString().slice(0, 10)}.md`;
+    a.click();
+    toast('周报已下载');
+  });
+}
   const s = settings;
   const sw = (key, label, desc) => `
     <div class="set-row">
@@ -658,6 +719,15 @@ function renderSettings() {
         <button class="btn mini" id="btn-import-json">导入 JSON</button>
       </div>
     </div>
+    <div class="set-row">
+      <div><div class="sr-t">备份管理</div><div class="sr-d">查看自动备份，可一键恢复到任意备份点</div></div>
+      <div style="display:flex;gap:6px">
+        <button class="btn mini" id="btn-backup-now">立即备份</button>
+        <button class="btn mini" id="btn-backup-to-dir">备份到文件夹</button>
+        <button class="btn mini" id="btn-restore-file">从文件恢复</button>
+      </div>
+    </div>
+    <div class="backup-list" id="backup-list" style="margin-top:6px"></div>
     <div class="set-row">
       <div><div class="sr-t">外观主题</div><div class="sr-d">浅色 / 深色 / 跟随系统</div></div>
       <div class="seg" id="theme-seg">
@@ -852,6 +922,76 @@ function bindSettingsEvents() {
     });
     input.click();
   });
+
+  // 备份管理
+  async function loadBackupList() {
+    const box = $('#backup-list');
+    if (!box) return;
+    try {
+      const list = await window.api.data.listBackups();
+      if (!list.length) {
+        box.innerHTML = '<div style="font-size:12px;color:var(--muted);padding:4px 2px">暂无备份，点击「立即备份」创建第一份</div>';
+        return;
+      }
+      box.innerHTML = list.map((b) => `
+        <div style="display:flex;align-items:center;gap:8px;padding:5px 8px;border-radius:8px;background:rgba(232,116,59,0.06);margin-bottom:4px;font-size:12px">
+          <span style="flex:1;color:var(--muted);font-family:Consolas,monospace">${esc(b.time || b.name)}</span>
+          <span style="color:var(--muted)">${(b.size / 1024).toFixed(1)} KB</span>
+          <button class="btn mini" data-restore="${esc(b.path)}">恢复</button>
+        </div>`).join('');
+      box.querySelectorAll('[data-restore]').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+          const filePath = btn.dataset.restore;
+          confirmDialog('确定要恢复到该备份点吗？当前数据会先自动备份，然后被该备份覆盖。', async () => {
+            try {
+              const res = await window.api.data.restoreBackup(filePath);
+              if (res.ok) {
+                tasks = await window.api.tasks.getAll();
+                renderAll();
+                toast(`已恢复到备份点（${res.count} 条任务）`, 3000, null, 'ok');
+              }
+            } catch (e) {
+              toast('恢复失败：' + e.message);
+            }
+          }, '恢复');
+        });
+      });
+    } catch (e) {
+      box.innerHTML = '<div style="font-size:12px;color:var(--danger)">备份列表加载失败</div>';
+    }
+  }
+
+  $('#btn-backup-now').addEventListener('click', async () => {
+    try {
+      await window.api.data.backup();
+      toast('已创建备份');
+      loadBackupList();
+    } catch (e) {
+      toast('备份失败：' + e.message);
+    }
+  });
+  $('#btn-backup-to-dir').addEventListener('click', async () => {
+    const res = await window.api.data.backupToDir();
+    if (res.ok) toast(`已备份到：${res.file}`, 4000, null, 'ok');
+    else if (res.error) toast('备份失败：' + res.error);
+  });
+  $('#btn-restore-file').addEventListener('click', async () => {
+    const res = await window.api.data.pickBackupFile();
+    if (!res.ok) return;
+    confirmDialog('确定要从该文件恢复吗？当前数据会先自动备份，然后被该文件覆盖。', async () => {
+      try {
+        const r = await window.api.data.restoreBackup(res.file);
+        if (r.ok) {
+          tasks = await window.api.tasks.getAll();
+          renderAll();
+          toast(`已从文件恢复（${r.count} 条任务）`, 3000, null, 'ok');
+        }
+      } catch (e) {
+        toast('恢复失败：' + e.message);
+      }
+    }, '恢复');
+  });
+  loadBackupList();
   $$('#theme-seg .seg-it').forEach((seg) => {
     seg.addEventListener('click', async () => {
       $$('#theme-seg .seg-it').forEach((x) => x.classList.remove('active'));

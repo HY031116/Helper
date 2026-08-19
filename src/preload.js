@@ -50,7 +50,12 @@ contextBridge.exposeInMainWorld('api', {
     exportCSV: () => ipcRenderer.invoke('data:exportCSV'),
     backup: () => ipcRenderer.invoke('data:backup'),
     getDir: () => ipcRenderer.invoke('data:getDir'),
-    pickDir: () => ipcRenderer.invoke('data:pickDir')
+    pickDir: () => ipcRenderer.invoke('data:pickDir'),
+    listBackups: () => ipcRenderer.invoke('data:listBackups'),
+    restoreBackup: (filePath) => ipcRenderer.invoke('data:restoreBackup', filePath),
+    backupToDir: () => ipcRenderer.invoke('data:backupToDir'),
+    pickBackupFile: () => ipcRenderer.invoke('data:pickBackupFile'),
+    weeklyReport: (weekOffset) => ipcRenderer.invoke('data:weeklyReport', weekOffset)
   },
   /* 桌宠 */
   pet: {

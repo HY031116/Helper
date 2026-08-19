@@ -286,6 +286,31 @@ function registerIpc() {
   ipcMain.handle('data:exportCSV', () => store.exportCSV());
   ipcMain.handle('data:backup', () => store.backup());
   ipcMain.handle('data:getDir', () => store.getDataDir());
+  ipcMain.handle('data:listBackups', () => store.listBackups());
+  ipcMain.handle('data:restoreBackup', (e, filePath) => store.restoreFromBackup(filePath));
+  ipcMain.handle('data:backupToDir', async () => {
+    const res = await dialog.showOpenDialog(mainWindow, {
+      title: '选择备份保存文件夹',
+      properties: ['openDirectory', 'createDirectory']
+    });
+    if (res.canceled || !res.filePaths.length) return { ok: false };
+    try {
+      const file = store.backupToDir(res.filePaths[0]);
+      return { ok: true, file };
+    } catch (err) {
+      return { ok: false, error: err.message };
+    }
+  });
+  ipcMain.handle('data:pickBackupFile', async () => {
+    const res = await dialog.showOpenDialog(mainWindow, {
+      title: '选择要恢复的备份文件',
+      filters: [{ name: 'JSON 备份', extensions: ['json'] }],
+      properties: ['openFile']
+    });
+    if (res.canceled || !res.filePaths.length) return { ok: false };
+    return { ok: true, file: res.filePaths[0] };
+  });
+  ipcMain.handle('data:weeklyReport', (e, weekOffset) => store.generateWeeklyReport(weekOffset));
   ipcMain.handle('data:pickDir', async () => {
     const res = await dialog.showOpenDialog(mainWindow, {
       title: '选择数据目录',

@@ -653,3 +653,59 @@ test('批量：清空回收站', () => {
   assert.strictEqual(r.type, 'batch');
   assert.strictEqual(store.getDeletedTasks().length, 0, '回收站应清空');
 });
+
+/* ============ 备份与恢复 ============ */
+test('备份：创建备份并列出', () => {
+  reset();
+  const file = store.backup();
+  assert.ok(file, '应返回备份文件路径');
+  const list = store.listBackups();
+  assert.ok(Array.isArray(list), '应返回备份列表');
+  assert.ok(list.length >= 1, '至少有一份备份');
+  assert.ok(list[0].name && list[0].path && list[0].size >= 0, '备份项应含名称/路径/大小');
+});
+
+test('备份：从备份恢复覆盖当前数据', () => {
+  reset();
+  // 先创建一份备份（含当前种子数据）
+  const file = store.backup();
+  // 清空并新增一条任务，模拟数据变化
+  store.clearAllTasks();
+  store.createTask({ title: '临时任务' });
+  assert.strictEqual(store.getAllTasks().length, 1, '当前应只有临时任务');
+  // 恢复到备份点
+  const res = store.restoreFromBackup(file);
+  assert.strictEqual(res.ok, true);
+  assert.ok(res.count > 1, '恢复后任务数应多于 1');
+  assert.ok(!store.getAllTasks().some((t) => t.title === '临时任务'), '临时任务应被覆盖');
+});
+
+test('备份：备份到外部目录', () => {
+  reset();
+  const dir = path.join(DATA_DIR, 'external-backup');
+  const file = store.backupToDir(dir);
+  assert.ok(file, '应返回外部备份文件路径');
+  assert.ok(fs.existsSync(file), '外部备份文件应存在');
+});
+
+/* ============ 周报生成 ============ */
+test('周报：生成本周 Markdown 周报', () => {
+  reset();
+  // 完成一条任务，确保有完成记录
+  const t = store.createTask({ title: '周报测试任务', project: '测试项目', tags: ['工作'] });
+  store.completeTask(t.id);
+  const md = store.generateWeeklyReport(0);
+  assert.ok(md.includes('# 工作周报'), '应包含周报标题');
+  assert.ok(md.includes('本周完成'), '应包含本周概览');
+  assert.ok(md.includes('周报测试任务'), '应包含完成的任务');
+  assert.ok(md.includes('测试项目'), '应包含项目统计');
+  assert.ok(md.includes('工作'), '应包含标签统计');
+});
+
+test('周报：上周/下周偏移不报错', () => {
+  reset();
+  const last = store.generateWeeklyReport(-1);
+  const next = store.generateWeeklyReport(1);
+  assert.ok(last.includes('# 工作周报'));
+  assert.ok(next.includes('# 工作周报'));
+});
