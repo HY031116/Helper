@@ -719,6 +719,22 @@ test('精细修改：改优先级', () => {
   assert.strictEqual(r.type, 'update');
   const updated = store.getTask(t.id);
   assert.strictEqual(updated.pri, 4, '优先级应改为紧急');
+  assert.deepStrictEqual(r.undo.patch, { pri: 2 });
+  assert.deepStrictEqual(r.undo.expected, { pri: 4 });
+  const undone = ai.undoAction(r.undo);
+  assert.strictEqual(undone.ok, true);
+  assert.strictEqual(store.getTask(t.id).pri, 2, '撤销后应恢复原优先级');
+});
+
+test('精细修改：旧撤销不覆盖后续修改', () => {
+  reset();
+  const t = store.createTask({ title: '写方案', pri: 2 });
+  const r = ai.handle('把 写方案 改成紧急');
+  store.updateTask(t.id, { pri: 3 });
+  const undone = ai.undoAction(r.undo);
+  assert.strictEqual(undone.ok, false);
+  assert.strictEqual(undone.reason, 'conflict');
+  assert.strictEqual(store.getTask(t.id).pri, 3, '冲突时应保留后续修改');
 });
 
 test('精细修改：改截止时间', () => {
@@ -766,6 +782,9 @@ test('子任务：加子任务', () => {
   assert.strictEqual(r.intent, 'child');
   const updated = store.getTask(t.id);
   assert.ok(updated.children.some((c) => (c.title || c) === '搭框架'), '应添加子任务「搭框架」');
+  const undone = ai.undoAction(r.undo);
+  assert.strictEqual(undone.ok, true);
+  assert.strictEqual(store.getTask(t.id).children.length, 0, '撤销后应移除新增子任务');
 });
 
 test('顺延：推迟任务', () => {
@@ -775,6 +794,9 @@ test('顺延：推迟任务', () => {
   assert.strictEqual(r.intent, 'postpone');
   const updated = store.getTask(t.id);
   assert.ok(updated.due.includes('2026-08-23'), '应推迟 3 天');
+  const undone = ai.undoAction(r.undo);
+  assert.strictEqual(undone.ok, true);
+  assert.strictEqual(store.getTask(t.id).due, '2026-08-20 15:00', '撤销后应恢复原截止时间');
 });
 
 test('恢复：从回收站恢复', () => {

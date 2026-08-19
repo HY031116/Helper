@@ -1251,17 +1251,36 @@ function addMsg(role, text, extra) {
 function opCard(result) {
   const card = document.createElement('div');
   card.className = 'op-card';
-  const titles = { create: '已创建', complete: '已完成', start: '已开始', delete: '已删除', archive: '已归档', split: '已拆分' };
+  const titles = {
+    create: '已创建',
+    complete: '已完成',
+    start: '已开始',
+    delete: '已删除',
+    archive: '已归档',
+    split: '已拆分',
+    update: '已更新',
+    child: '已添加子任务',
+    postpone: '已顺延'
+  };
   card.innerHTML = `<div class="op-title">${titles[result.type] || '操作'}</div>`;
   if (result.undoable && result.undo) {
     const undo = document.createElement('span');
     undo.className = 'undo';
     undo.textContent = '撤销';
     undo.addEventListener('click', async () => {
-      await window.api.ai.undo(result.undo);
-      await refreshTasks();
-      toast('已撤销');
-      card.remove();
+      try {
+        const undoResult = await window.api.ai.undo(result.undo);
+        if (undoResult && undoResult.ok === false) {
+          toast(esc(undoResult.message || '无法撤销'), 4000, null, 'warn');
+          undo.remove();
+          return;
+        }
+        await refreshTasks();
+        toast('已撤销');
+        card.remove();
+      } catch (e) {
+        toast(`撤销失败：${esc(e.message)}`, 4000, null, 'err');
+      }
     });
     card.appendChild(undo);
   }
@@ -1299,7 +1318,8 @@ async function sendPrompt(text) {
       tip.textContent = '⚠ 模型暂时连不上，已改用本地助手继续帮你';
       typing.appendChild(tip);
     }
-    if (result.type === 'create' || result.type === 'complete' || result.type === 'start' || result.type === 'delete' || result.type === 'archive' || result.type === 'split') {
+    const operationTypes = ['create', 'complete', 'start', 'delete', 'archive', 'split', 'update', 'child', 'postpone'];
+    if (operationTypes.includes(result.type)) {
       typing.appendChild(opCard(result));
     }
     await refreshTasks();

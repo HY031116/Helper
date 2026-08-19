@@ -273,13 +273,7 @@ function registerIpc() {
     return { ...cfg, configured: ai.isLLMConfigured() };
   });
   ipcMain.handle('ai:undo', (e, undo) => {
-    if (undo && undo.action === 'restore') {
-      return store.restoreTask(undo.id);
-    }
-    if (undo && undo.action === 'unarchive') {
-      return store.unarchiveTask(undo.id);
-    }
-    return null;
+    return ai.undoAction(undo);
   });
   ipcMain.handle('chat:get', () => store.getChatLog());
   ipcMain.handle('chat:clear', () => store.clearChat());

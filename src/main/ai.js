@@ -365,6 +365,40 @@ function doBatch(params) {
   return { type: 'error', message: '没太明白要批量做什么，试试「清除所有任务」「全部完成」「把紧急任务都删掉」' };
 }
 
+function cloneUndoValue(value) {
+  if (value === undefined || value === null || typeof value !== 'object') return value;
+  return JSON.parse(JSON.stringify(value));
+}
+
+function snapshotFields(source, keys) {
+  return keys.reduce((acc, key) => {
+    acc[key] = cloneUndoValue(source[key]);
+    return acc;
+  }, {});
+}
+
+function undoValuesEqual(actual, expected) {
+  return JSON.stringify(actual) === JSON.stringify(expected);
+}
+
+function undoAction(undo) {
+  if (!undo || !undo.action) return null;
+  if (undo.action === 'restore') return store.restoreTask(undo.id);
+  if (undo.action === 'unarchive') return store.unarchiveTask(undo.id);
+  if (undo.action !== 'update' || !undo.id || !undo.patch || !undo.expected) return null;
+
+  const task = store.getTask(undo.id);
+  if (!task) {
+    return { ok: false, reason: 'missing', message: '任务已不存在，无法撤销' };
+  }
+  const keys = Object.keys(undo.patch);
+  const hasConflict = keys.some((key) => !undoValuesEqual(task[key], undo.expected[key]));
+  if (hasConflict) {
+    return { ok: false, reason: 'conflict', message: '任务后来又被修改过，本次撤销未执行' };
+  }
+  return { ok: true, task: store.updateTask(undo.id, undo.patch) };
+}
+
 /* ---------- 精细修改：改优先级/截止/项目/标签/描述 ---------- */
 function doUpdate(params) {
   const hits = matchTasks(params.target);
@@ -410,13 +444,17 @@ function doUpdate(params) {
   if (!Object.keys(patch).length) {
     return { type: 'error', message: '没听清要改什么，试试「把 交周报 改成紧急」「把 写方案 改到明天下午3点」' };
   }
+  const keys = Object.keys(patch);
+  // 必须在 updateTask 之前保存原值，因为 updateTask 会原地修改 t。
+  const undoPatch = snapshotFields(t, keys);
   store.updateTask(t.id, patch);
+  const expectedPatch = snapshotFields(t, keys);
   return {
     type: 'update',
     task: t,
     message: `已更新「${t.title}」：${changes.join('，')}`,
     undoable: true,
-    undo: { action: 'restore', id: t.id }
+    undo: { action: 'update', id: t.id, patch: undoPatch, expected: expectedPatch }
   };
 }
 
@@ -433,7 +471,8 @@ function doChild(params) {
   }
   const t = hits[0];
   if (!params.childTitle) return { type: 'error', message: '没听清要加什么子任务，试试「给 写方案 加子任务 搭框架」' };
-  const children = (t.children || []).map((c) => (typeof c === 'string' ? { title: c, done: false } : c));
+  const prevChildren = cloneUndoValue((t.children || []).map((c) => (typeof c === 'string' ? { title: c, done: false } : c)));
+  const children = prevChildren.slice();
   children.push({ title: params.childTitle, done: false });
   store.updateTask(t.id, { children });
   return {
@@ -441,7 +480,12 @@ function doChild(params) {
     task: t,
     message: `已给「${t.title}」添加子任务「${params.childTitle}」`,
     undoable: true,
-    undo: { action: 'restore', id: t.id }
+    undo: {
+      action: 'update',
+      id: t.id,
+      patch: { children: prevChildren },
+      expected: { children: cloneUndoValue(t.children) }
+    }
   };
 }
 
@@ -459,13 +503,14 @@ function doPostpone(params) {
   const t = hits[0];
   if (!t.due) return { type: 'error', message: `「${t.title}」没有截止时间，无法顺延` };
   const days = params.days || 1;
+  const prevDue = t.due;
   const updated = store.postponeTask(t.id, days);
   return {
     type: 'postpone',
     task: t,
     message: `已把「${t.title}」顺延到 ${updated.due}`,
     undoable: true,
-    undo: { action: 'restore', id: t.id }
+    undo: { action: 'update', id: t.id, patch: { due: prevDue }, expected: { due: updated.due } }
   };
 }
 
@@ -1143,4 +1188,4 @@ async function testConnection() {
   }
 }
 
-module.exports = { handle, handleAuto, parse, parseWithLLM, testConnection, isLLMConfigured, getLLMConfig, callLLM, INTENTS, PROVIDERS };
+module.exports = { handle, handleAuto, parse, parseWithLLM, undoAction, testConnection, isLLMConfigured, getLLMConfig, callLLM, INTENTS, PROVIDERS };
