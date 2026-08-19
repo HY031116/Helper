@@ -350,8 +350,9 @@ function doBatch(params) {
   if (isComplete) {
     const pending = targets.filter((t) => t.status !== 'done');
     if (!pending.length) return { type: 'info', message: '没有需要完成的任务' };
-    store.batchUpdate(pending.map((t) => t.id), { status: 'done' });
-    return { type: 'batch', message: `已完成 ${pending.length} 项任务 🎉`, undoable: false };
+    const result = store.batchComplete(pending.map((t) => t.id));
+    const nextText = result.generated.length ? `，并安排 ${result.generated.length} 个下次任务` : '';
+    return { type: 'batch', message: `已完成 ${result.completed} 项任务${nextText} 🎉`, undoable: false };
   }
 
   // 删除操作：默认删除未完成任务（保留已完成）

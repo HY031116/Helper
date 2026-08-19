@@ -234,6 +234,7 @@ function registerIpc() {
   ipcMain.handle('tasks:clearAll', () => store.clearAllTasks());
   ipcMain.handle('tasks:import', (e, list) => store.importTasks(list));
   ipcMain.handle('tasks:complete', (e, id) => store.completeTask(id));
+  ipcMain.handle('tasks:saveAndComplete', (e, id, data) => store.saveAndCompleteTask(id, data));
   ipcMain.handle('tasks:postpone', (e, id, days) => store.postponeTask(id, days));
   ipcMain.handle('tasks:reorder', (e, ids) => store.reorderTasks(ids));
   ipcMain.handle('tasks:batchUpdate', (e, ids, patch) => store.batchUpdate(ids, patch));

@@ -121,7 +121,7 @@ function nextId() {
   return ++seq;
 }
 
-function createTask(data) {
+function createTaskRecord(data) {
   const task = {
     id: nextId(),
     title: String(data.title || '').trim(),
@@ -135,11 +135,18 @@ function createTask(data) {
     remind: [0, 10, 30, 60].includes(Number(data.remind)) ? Number(data.remind) : 30,
     children: normalizeChildren(data.children),
     completedAt: data.completedAt || null,
+    repeatSourceId: data.repeatSourceId != null ? Number(data.repeatSourceId) : null,
+    repeatNextId: data.repeatNextId != null ? Number(data.repeatNextId) : null,
     order: data.order != null ? Number(data.order) : Date.now(),
     createdAt: Date.now()
   };
   if (!task.title) throw new Error('标题不能为空');
   tasks.push(task);
+  return task;
+}
+
+function createTask(data) {
+  const task = createTaskRecord(data);
   saveTasks();
   return task;
 }
@@ -157,9 +164,7 @@ function normalizeChildren(children) {
   }).filter((c) => c.title);
 }
 
-function updateTask(id, patch) {
-  const t = getTask(id);
-  if (!t) throw new Error('任务不存在');
+function applyTaskPatch(t, patch) {
   if (patch.title !== undefined) {
     const title = String(patch.title).trim();
     if (!title) throw new Error('标题不能为空');
@@ -181,6 +186,13 @@ function updateTask(id, patch) {
   if (patch.remind !== undefined && [0, 10, 30, 60].includes(Number(patch.remind))) t.remind = Number(patch.remind);
   if (patch.children !== undefined) t.children = normalizeChildren(patch.children);
   if (patch.order !== undefined) t.order = Number(patch.order);
+  return t;
+}
+
+function updateTask(id, patch) {
+  const t = getTask(id);
+  if (!t) throw new Error('任务不存在');
+  applyTaskPatch(t, patch);
   saveTasks();
   return t;
 }
@@ -303,30 +315,76 @@ function nextDueForRepeat(repeat, due) {
  * 完成任务：若为重复任务，自动生成下一次任务
  * 返回 { task, next } next 为生成的下一次任务（可能为 null）
  */
+function findRepeatSuccessor(t, nextDue) {
+  if (t.repeatNextId != null) {
+    const linked = tasks.find((candidate) => candidate.id === t.repeatNextId);
+    if (linked) return linked;
+  }
+  const linked = tasks.find((candidate) => candidate.repeatSourceId === t.id);
+  if (linked) return linked;
+  if (!nextDue) return null;
+  // 兼容升级前已经生成、但尚未写入链路字段的后继任务。
+  return tasks.find((candidate) =>
+    candidate.id !== t.id &&
+    candidate.title === t.title &&
+    candidate.due === nextDue &&
+    candidate.repeat === t.repeat &&
+    (candidate.project || '') === (t.project || '')
+  ) || null;
+}
+
+function completeTaskRecord(t) {
+  const wasDone = t.status === 'done';
+  const nextDue = nextDueForRepeat(t.repeat, t.due);
+  let successor = findRepeatSuccessor(t, nextDue);
+  if (successor) {
+    t.repeatNextId = successor.id;
+    if (successor.repeatSourceId == null) successor.repeatSourceId = t.id;
+  }
+  if (wasDone) {
+    return { task: t, next: successor && !successor._deleted ? successor : null, alreadyDone: true };
+  }
+  t.status = 'done';
+  t.completedAt = Date.now();
+  if (!successor && nextDue) {
+    successor = createTaskRecord({
+      title: t.title,
+      desc: t.desc,
+      pri: t.pri,
+      due: nextDue,
+      tags: t.tags,
+      project: t.project,
+      repeat: t.repeat,
+      remind: t.remind,
+      children: t.children,
+      repeatSourceId: t.id
+    });
+    t.repeatNextId = successor.id;
+  }
+  return { task: t, next: successor && !successor._deleted ? successor : null, alreadyDone: false };
+}
+
 function completeTask(id) {
   const t = getTask(id);
   if (!t) throw new Error('任务不存在');
-  t.status = 'done';
-  t.completedAt = Date.now();
-  let next = null;
-  if (t.repeat && t.due) {
-    const nextDue = nextDueForRepeat(t.repeat, t.due);
-    if (nextDue) {
-      next = createTask({
-        title: t.title,
-        desc: t.desc,
-        pri: t.pri,
-        due: nextDue,
-        tags: t.tags,
-        project: t.project,
-        repeat: t.repeat,
-        remind: t.remind,
-        children: t.children
-      });
-    }
-  }
+  const result = completeTaskRecord(t);
   saveTasks();
-  return { task: t, next };
+  return result;
+}
+
+function saveAndCompleteTask(id, data) {
+  const pendingData = Object.assign({}, data, { status: 'todo' });
+  let task;
+  if (id == null) {
+    task = createTaskRecord(pendingData);
+  } else {
+    task = getTask(id);
+    if (!task) throw new Error('任务不存在');
+    applyTaskPatch(task, pendingData);
+  }
+  const result = completeTaskRecord(task);
+  saveTasks();
+  return result;
 }
 
 /* ---------- 顺延：过期任务推迟到明天 ---------- */
@@ -669,6 +727,7 @@ module.exports = {
   batchDelete,
   reorderTasks,
   completeTask,
+  saveAndCompleteTask,
   postponeTask,
   clearAllTasks,
   importTasks,

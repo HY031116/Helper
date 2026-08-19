@@ -10,6 +10,8 @@ const ROOT = path.join(__dirname, '..');
 const html = fs.readFileSync(path.join(ROOT, 'src/renderer/index.html'), 'utf8');
 const app = fs.readFileSync(path.join(ROOT, 'src/renderer/js/app.js'), 'utf8');
 const css = fs.readFileSync(path.join(ROOT, 'src/renderer/css/app.css'), 'utf8');
+const main = fs.readFileSync(path.join(ROOT, 'src/main.js'), 'utf8');
+const preload = fs.readFileSync(path.join(ROOT, 'src/preload.js'), 'utf8');
 
 function cssVar(block, name) {
   const match = block.match(new RegExp(`--${name}:\\s*(#[0-9A-Fa-f]{6})`));
@@ -53,6 +55,22 @@ function loadRendererRuntime(elements) {
   return (source) => vm.runInContext(source, context);
 }
 
+function fakeClassList(initial) {
+  const values = new Set(initial || []);
+  return {
+    add: (name) => values.add(name),
+    remove: (name) => values.delete(name),
+    toggle: (name, force) => {
+      if (force === undefined) {
+        if (values.has(name)) values.delete(name);
+        else values.add(name);
+      } else if (force) values.add(name);
+      else values.delete(name);
+    },
+    contains: (name) => values.has(name)
+  };
+}
+
 test('主导航和任务工具栏使用可聚焦控件', () => {
   assert.match(html, /<nav class="sidebar" aria-label="主导航">/);
   assert.match(html, /<button type="button" class="nav-item active"[^>]+aria-current="page"/);
@@ -78,6 +96,68 @@ test('快速添加同时支持按钮和回车，并防止重复提交', () => {
   assert.match(app, /if \(!raw \|\| button\.disabled\) return/);
   assert.match(app, /#btn-quick-add'\)\.addEventListener\('click', createQuickTask\)/);
   assert.match(app, /if \(e\.key !== 'Enter'\) return;\s*e\.preventDefault\(\);\s*createQuickTask\(\)/);
+  assert.match(app, /toast\(`已创建「\$\{esc\(p\.title\)\}」/);
+  assert.match(app, /toast\(`已创建「\$\{esc\(raw\)\}」`\)/);
+});
+
+test('快速添加预览展示解析结果并明确普通任务兜底', () => {
+  const preview = { classList: fakeClassList(['hidden']), innerHTML: '' };
+  const run = loadRendererRuntime({ '#quick-preview': preview });
+
+  run(`renderQuickPreview('明天下午3点 交周报 #工作 紧急', {
+    intent: 'create',
+    params: { title: '交周报', pri: 4, tags: ['工作'] }
+  })`);
+  assert.strictEqual(preview.classList.contains('hidden'), false);
+  assert.strictEqual(preview.classList.contains('fallback'), false);
+  assert.match(preview.innerHTML, /识别结果/);
+  assert.match(preview.innerHTML, /交周报/);
+  assert.match(preview.innerHTML, /紧急优先级/);
+  assert.match(preview.innerHTML, /#工作/);
+
+  run(`renderQuickPreview('买牛奶', { intent: 'chat', params: {} })`);
+  assert.strictEqual(preview.classList.contains('fallback'), true);
+  assert.match(preview.innerHTML, /普通任务/);
+  assert.match(preview.innerHTML, /买牛奶/);
+  assert.match(app, /token !== quickParseToken \|\| \$\('#quick-input'\)\.value\.trim\(\) !== value/);
+});
+
+test('任务编辑使用语义表单、内联校验和提交中状态', () => {
+  assert.match(html, /id="modal-mask" aria-hidden="true">\s*<div class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">/);
+  assert.match(html, /<form id="task-form" novalidate>/);
+  assert.match(html, /id="m-title"[^>]+required aria-describedby="m-title-error"/);
+  assert.match(html, /id="modal-error" role="alert"/);
+  assert.match(html, /type="submit" class="btn" id="m-save"/);
+  assert.match(app, /#task-form'\)\.addEventListener\('submit', saveModal\)/);
+  assert.match(app, /save\.setAttribute\('aria-busy', String\(busy\)\)/);
+  assert.match(app, /restoreModalFocus\(\)/);
+  assert.match(app, /shouldComplete = data\.status === 'done'/);
+  assert.match(app, /completion = await window\.api\.tasks\.saveAndComplete\(editingTask \? editingTask\.id : null, data\)/);
+  assert.match(main, /ipcMain\.handle\('tasks:saveAndComplete', \(e, id, data\) => store\.saveAndCompleteTask\(id, data\)\)/);
+  assert.match(preload, /saveAndComplete: \(id, data\) => ipcRenderer\.invoke\('tasks:saveAndComplete', id, data\)/);
+
+  const title = { attrs: {}, setAttribute(name, value) { this.attrs[name] = value; }, focus() {} };
+  const error = { textContent: '', classList: fakeClassList(['hidden']) };
+  const run = loadRendererRuntime({ '#m-title': title, '#m-title-error': error });
+  run(`setTitleError('请输入任务标题')`);
+  assert.strictEqual(title.attrs['aria-invalid'], 'true');
+  assert.strictEqual(error.textContent, '请输入任务标题');
+  assert.strictEqual(error.classList.contains('hidden'), false);
+  run(`setTitleError('')`);
+  assert.strictEqual(title.attrs['aria-invalid'], 'false');
+  assert.strictEqual(error.classList.contains('hidden'), true);
+});
+
+test('确认框遵循安全的原生键盘行为', () => {
+  assert.match(html, /role="alertdialog" aria-modal="true" aria-labelledby="confirm-title" aria-describedby="confirm-text"/);
+  assert.match(app, /if \(e\.key === 'Tab'\) trapFocus\(mask, e\)/);
+  assert.doesNotMatch(app, /if \(e\.key === 'Enter'\) \{ onOkClick\(\); \}/);
+});
+
+test('所有界面完成入口复用重复任务完成语义', () => {
+  assert.match(app, /if \(col\.dataset\.col === 'done'\) \{\s*await toggleDone\(t\)/);
+  assert.match(app, /if \(next === 'done'\) await toggleDone\(t\)/);
+  assert.match(app, /if \(t\.status === 'done'\) \{\s*await window\.api\.tasks\.update\(t\.id, \{ status: 'todo' \}\)/);
 });
 
 test('批量模式显式进入，只保留当前可见任务并禁用空操作', () => {

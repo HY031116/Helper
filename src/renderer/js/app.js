@@ -23,6 +23,11 @@ let visibleTaskIds = [];
 let expandedIds = new Set(); // 展开的子任务
 let trashList = []; // 回收站列表
 let reportWeek = 0; // 周报选择的周（0=本周, -1=上周, 1=下周）
+let quickParseTimer = null;
+let quickParseToken = 0;
+let quickParseCache = { raw: '', parsed: null };
+let modalSaving = false;
+let modalReturnFocus = null;
 
 /* ---------- 工具 ---------- */
 const $ = (sel) => document.querySelector(sel);
@@ -84,25 +89,44 @@ function confirmDialog(message, onOk, okText) {
   const text = $('#confirm-text');
   const okBtn = $('#confirm-ok');
   const cancelBtn = $('#confirm-cancel');
+  const returnFocus = document.activeElement;
   text.textContent = message;
   okBtn.textContent = okText || '删除';
   mask.classList.remove('hidden');
+  mask.setAttribute('aria-hidden', 'false');
   const onOkClick = () => { cleanup(); onOk(); };
   const onKey = (e) => {
     if (e.key === 'Escape') { cleanup(); }
-    if (e.key === 'Enter') { onOkClick(); }
+    if (e.key === 'Tab') trapFocus(mask, e);
   };
   function cleanup() {
     mask.classList.add('hidden');
+    mask.setAttribute('aria-hidden', 'true');
     cancelBtn.removeEventListener('click', cleanup);
     okBtn.removeEventListener('click', onOkClick);
     document.removeEventListener('keydown', onKey);
+    if (returnFocus && returnFocus.isConnected) returnFocus.focus();
   }
   cancelBtn.addEventListener('click', cleanup);
   okBtn.addEventListener('click', onOkClick);
   document.addEventListener('keydown', onKey);
   // 焦点交给「取消」（默认安全选项），避免误触破坏性操作
   cancelBtn.focus();
+}
+
+function trapFocus(container, event) {
+  const focusable = Array.from(container.querySelectorAll('button, input, select, textarea, [tabindex]'))
+    .filter((el) => !el.disabled && el.tabIndex !== -1 && !el.closest('.hidden'));
+  if (!focusable.length) return;
+  const first = focusable[0];
+  const last = focusable[focusable.length - 1];
+  if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault();
+    last.focus();
+  } else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault();
+    first.focus();
+  }
 }
 
 /* ---------- 任务行渲染 ---------- */
@@ -220,6 +244,67 @@ function relDue(due) {
   if (diffDays > 0 && diffDays <= 7) return `${diffDays} 天后 ${timeStr}`;
   if (diffDays < 0 && diffDays >= -7) return `${-diffDays} 天前 ${timeStr}`;
   return `${d.getMonth() + 1}/${d.getDate()} ${timeStr}`;
+}
+
+function quickPreviewModel(raw, parsed) {
+  const value = String(raw || '').trim();
+  if (!value) return null;
+  const params = parsed && parsed.params;
+  const isCreate = parsed && parsed.intent === 'create' && params && params.title;
+  if (!isCreate) {
+    return { label: '普通任务', title: value, fallback: true, meta: ['中优先级'] };
+  }
+  const meta = [];
+  if (params.due) meta.push(relDue(params.due));
+  meta.push(`${PRI_NAME[params.pri || 2]}优先级`);
+  (params.tags || []).forEach((tag) => meta.push(`#${tag}`));
+  return { label: '识别结果', title: params.title, fallback: false, meta };
+}
+
+function renderQuickPreview(raw, parsed) {
+  const preview = $('#quick-preview');
+  if (!preview) return;
+  const model = quickPreviewModel(raw, parsed);
+  if (!model) {
+    preview.classList.add('hidden');
+    preview.classList.remove('fallback');
+    preview.innerHTML = '';
+    return;
+  }
+  preview.classList.remove('hidden');
+  preview.classList.toggle('fallback', model.fallback);
+  preview.innerHTML = `<span class="quick-preview-label">${model.label}</span>
+    <strong class="quick-preview-title" title="${esc(model.title)}">${esc(model.title)}</strong>
+    <span class="quick-preview-meta">${model.meta.map((item) => `<span class="quick-preview-chip">${esc(item)}</span>`).join('')}</span>`;
+}
+
+function resetQuickPreview() {
+  clearTimeout(quickParseTimer);
+  quickParseToken++;
+  quickParseCache = { raw: '', parsed: null };
+  renderQuickPreview('', null);
+}
+
+function scheduleQuickPreview(raw) {
+  clearTimeout(quickParseTimer);
+  const value = String(raw || '').trim();
+  if (!value) {
+    resetQuickPreview();
+    return;
+  }
+  const token = ++quickParseToken;
+  quickParseTimer = setTimeout(async () => {
+    try {
+      const parsed = await window.api.ai.parse(value);
+      if (token !== quickParseToken || $('#quick-input').value.trim() !== value) return;
+      quickParseCache = { raw: value, parsed };
+      renderQuickPreview(value, parsed);
+    } catch (e) {
+      if (token !== quickParseToken) return;
+      quickParseCache = { raw: value, parsed: null };
+      renderQuickPreview(value, null);
+    }
+  }, 180);
 }
 
 /* 搜索关键词高亮（text 已转义） */
@@ -1178,6 +1263,11 @@ function splitDue(due) {
 }
 
 function openModal(task) {
+  const active = document.activeElement;
+  modalReturnFocus = {
+    element: active,
+    selector: task ? `.task-row[data-id="${task.id}"] .task-title-btn` : (active && active.id ? `#${active.id}` : '#btn-new')
+  };
   editingTask = task || null;
   $('#modal-title').textContent = task ? '编辑任务' : '新建任务';
   $('#m-title').value = task ? task.title : '';
@@ -1200,19 +1290,67 @@ function openModal(task) {
   $('#m-delete').classList.toggle('hidden', !task);
   $('#m-archive').classList.toggle('hidden', !task || task.status === 'archived');
   $('#m-unarchive').classList.toggle('hidden', !task || task.status !== 'archived');
-  $('#m-save').textContent = task ? '保存' : '创建';
-  $('#modal-mask').classList.remove('hidden');
+  setTitleError('');
+  setModalError('');
+  setModalBusy(false);
+  const mask = $('#modal-mask');
+  mask.classList.remove('hidden');
+  mask.setAttribute('aria-hidden', 'false');
   $('#m-title').focus();
 }
 
-function closeModal() {
-  $('#modal-mask').classList.add('hidden');
-  editingTask = null;
+function restoreModalFocus() {
+  if (!modalReturnFocus) return;
+  const target = modalReturnFocus.element && modalReturnFocus.element.isConnected
+    ? modalReturnFocus.element
+    : $(modalReturnFocus.selector);
+  modalReturnFocus = null;
+  if (target) target.focus({ preventScroll: true });
 }
 
-async function saveModal() {
+function closeModal(shouldRestoreFocus = true) {
+  if (modalSaving) return;
+  const mask = $('#modal-mask');
+  mask.classList.add('hidden');
+  mask.setAttribute('aria-hidden', 'true');
+  editingTask = null;
+  if (shouldRestoreFocus) restoreModalFocus();
+}
+
+function setTitleError(message) {
+  const title = $('#m-title');
+  const error = $('#m-title-error');
+  title.setAttribute('aria-invalid', String(!!message));
+  error.textContent = message || '';
+  error.classList.toggle('hidden', !message);
+}
+
+function setModalError(message) {
+  const error = $('#modal-error');
+  error.textContent = message || '';
+  error.classList.toggle('hidden', !message);
+}
+
+function setModalBusy(busy) {
+  modalSaving = busy;
+  const save = $('#m-save');
+  save.disabled = busy;
+  save.setAttribute('aria-busy', String(busy));
+  save.textContent = busy ? '保存中…' : (editingTask ? '保存' : '创建');
+  $$('#task-form button[type="button"]').forEach((button) => { button.disabled = busy; });
+}
+
+async function saveModal(event) {
+  if (event) event.preventDefault();
+  if (modalSaving) return;
   const title = $('#m-title').value.trim();
-  if (!title) { $('#m-title').style.borderColor = '#C4453B'; return; }
+  if (!title) {
+    setTitleError('请输入任务标题');
+    $('#m-title').focus();
+    return;
+  }
+  setTitleError('');
+  setModalError('');
   // 解析子任务文本：每行一个，[x] 前缀表示已完成
   const children = $('#m-children').value.split('\n').map((l) => l.trim()).filter(Boolean).map((l) => {
     const m = l.match(/^\[(x|X| )\]\s*(.*)$/);
@@ -1235,15 +1373,29 @@ async function saveModal() {
     remind: parseInt($('#m-remind').value, 10),
     children
   };
-  if (editingTask) {
-    await window.api.tasks.update(editingTask.id, data);
-    toast(`已保存「${title}」`);
-  } else {
-    await window.api.tasks.create(data);
-    toast(`已创建「${title}」`);
+  const wasEditing = !!editingTask;
+  const shouldComplete = data.status === 'done' && (!editingTask || editingTask.status !== 'done');
+  let completion = null;
+  try {
+    setModalBusy(true);
+    if (shouldComplete) {
+      completion = await window.api.tasks.saveAndComplete(editingTask ? editingTask.id : null, data);
+    } else if (editingTask) {
+      await window.api.tasks.update(editingTask.id, data);
+    } else {
+      await window.api.tasks.create(data);
+    }
+  } catch (err) {
+    setModalError(`保存失败：${err.message}`);
+    return;
+  } finally {
+    setModalBusy(false);
   }
-  closeModal();
+  closeModal(false);
   await refreshTasks();
+  restoreModalFocus();
+  const nextText = completion && completion.next ? ` · 已安排下一次（${completion.next.due}）` : '';
+  toast(`${wasEditing ? '已保存' : '已创建'}「${esc(title)}」${nextText}`, nextText ? 5000 : 3000, null, 'ok');
 }
 
 async function deleteEditingTask() {
@@ -1488,9 +1640,12 @@ function bindEvents() {
     const raw = input.value.trim();
     if (!raw || button.disabled) return;
     button.disabled = true;
+    button.setAttribute('aria-busy', 'true');
     button.textContent = '添加中…';
     try {
-      const parsed = await window.api.ai.parse(raw);
+      const parsed = quickParseCache.raw === raw && quickParseCache.parsed
+        ? quickParseCache.parsed
+        : await window.api.ai.parse(raw);
       if (parsed.intent === 'create' && parsed.params.title) {
         const p = parsed.params;
         await window.api.tasks.create({
@@ -1500,21 +1655,24 @@ function bindEvents() {
           tags: p.tags || []
         });
         input.value = '';
-        toast(`已创建「${p.title}」${p.due ? ' · ' + p.due : ''}`);
+        toast(`已创建「${esc(p.title)}」${p.due ? ' · ' + esc(p.due) : ''}`);
       } else {
         await window.api.tasks.create({ title: raw, pri: 2 });
         input.value = '';
-        toast(`已创建「${raw}」`);
+        toast(`已创建「${esc(raw)}」`);
       }
+      resetQuickPreview();
       await refreshTasks();
       input.focus();
     } catch (err) {
-      toast('创建失败：' + err.message);
+      toast('创建失败：' + esc(err.message), 4000, null, 'err');
     } finally {
       button.disabled = false;
+      button.setAttribute('aria-busy', 'false');
       button.textContent = '快速添加';
     }
   }
+  $('#quick-input').addEventListener('input', (e) => scheduleQuickPreview(e.target.value));
   $('#quick-input').addEventListener('keydown', (e) => {
     if (e.key !== 'Enter') return;
     e.preventDefault();
@@ -1579,9 +1737,13 @@ function bindEvents() {
       }
       return;
     }
-    await window.api.tasks.update(t.id, { status: col.dataset.col });
-    toast(`「${t.title}」已移至「${STATE_NAME[col.dataset.col]}」`);
-    await refreshTasks();
+    if (col.dataset.col === 'done') {
+      await toggleDone(t);
+    } else {
+      await window.api.tasks.update(t.id, { status: col.dataset.col });
+      toast(`「${t.title}」已移至「${STATE_NAME[col.dataset.col]}」`);
+      await refreshTasks();
+    }
   });
   // 看板卡片点击编辑
   $('#board-cols').addEventListener('click', (e) => {
@@ -1747,7 +1909,10 @@ function bindEvents() {
 
   // 弹窗
   $('#m-cancel').addEventListener('click', closeModal);
-  $('#m-save').addEventListener('click', saveModal);
+  $('#task-form').addEventListener('submit', saveModal);
+  $('#m-title').addEventListener('input', () => {
+    if ($('#m-title').value.trim()) setTitleError('');
+  });
   $('#m-delete').addEventListener('click', deleteEditingTask);
   $('#m-archive').addEventListener('click', archiveEditingTask);
   $('#m-unarchive').addEventListener('click', unarchiveEditingTask);
@@ -1756,13 +1921,10 @@ function bindEvents() {
     $('#m-due-time').value = '18:00';
   });
   $('#modal-mask').addEventListener('click', (e) => { if (e.target === $('#modal-mask')) closeModal(); });
-  // 弹窗快捷键：Enter 保存（textarea 除外）、Esc 关闭
+  // 表单原生处理 Enter 提交；此处负责 Esc 和焦点循环。
   $('#modal-mask').addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && e.target.tagName !== 'TEXTAREA') {
-      e.preventDefault();
-      saveModal();
-    }
     if (e.key === 'Escape') closeModal();
+    if (e.key === 'Tab') trapFocus($('#modal-mask'), e);
   });
 
   // 主进程事件
@@ -2007,6 +2169,12 @@ function toggleSelect(id) {
 }
 
 async function toggleDone(t) {
+  if (t.status === 'done') {
+    await window.api.tasks.update(t.id, { status: 'todo' });
+    toast(`已重新打开「${t.title}」`);
+    await refreshTasks();
+    return;
+  }
   // 使用 completeTask：重复任务自动生成下一次
   const res = await window.api.tasks.complete(t.id);
   if (res.next) {
@@ -2033,8 +2201,11 @@ async function postponeTask(id, days) {
 
 async function cycleState(t) {
   const next = STATE_NEXT[t.status] || 'todo';
-  await window.api.tasks.update(t.id, { status: next });
-  await refreshTasks();
+  if (next === 'done') await toggleDone(t);
+  else {
+    await window.api.tasks.update(t.id, { status: next });
+    await refreshTasks();
+  }
 }
 
 function onCalClick(e) {

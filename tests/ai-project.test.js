@@ -363,6 +363,84 @@ test('重复任务：每周任务顺延 7 天', () => {
   assert.strictEqual(res.next.due, '2026-08-25 18:00');
 });
 
+test('重复任务：重新打开或重复完成不会复制下一次任务', () => {
+  reset();
+  const task = store.createTask({ title: '每日站会', repeat: 'daily', due: '2026-08-18 09:00' });
+  const first = store.completeTask(task.id);
+  store.updateTask(task.id, { status: 'todo' });
+  const reopened = store.completeTask(task.id);
+  const repeated = store.completeTask(task.id);
+  const successors = store.getAllTasks().filter((t) => t.repeatSourceId === task.id);
+
+  assert.strictEqual(successors.length, 1);
+  assert.strictEqual(reopened.next.id, first.next.id);
+  assert.strictEqual(repeated.next.id, first.next.id);
+  assert.strictEqual(repeated.alreadyDone, true);
+  assert.strictEqual(store.getTask(task.id).repeatNextId, first.next.id);
+});
+
+test('重复任务：升级前生成的下一次任务会被复用并补齐链路', () => {
+  reset();
+  const source = store.createTask({
+    title: '旧版每日任务',
+    repeat: 'daily',
+    due: '2026-08-18 09:00',
+    status: 'done'
+  });
+  const legacyNext = store.createTask({
+    title: '旧版每日任务',
+    repeat: 'daily',
+    due: '2026-08-19 09:00'
+  });
+  store.updateTask(source.id, { status: 'todo' });
+
+  const result = store.completeTask(source.id);
+  const matches = store.getAllTasks().filter((t) => t.title === source.title && t.due === legacyNext.due);
+  assert.strictEqual(matches.length, 1);
+  assert.strictEqual(result.next.id, legacyNext.id);
+  assert.strictEqual(store.getTask(source.id).repeatNextId, legacyNext.id);
+  assert.strictEqual(store.getTask(legacyNext.id).repeatSourceId, source.id);
+});
+
+test('保存并完成：新建和编辑均保留完整完成语义', () => {
+  reset();
+  const originalRename = fs.renameSync;
+  let writes = 0;
+  let created;
+  let updated;
+  try {
+    fs.renameSync = (...args) => {
+      writes++;
+      return originalRename(...args);
+    };
+    created = store.saveAndCompleteTask(null, {
+      title: '每日整理',
+      repeat: 'daily',
+      due: '2026-08-18 19:00',
+      pri: 3
+    });
+    assert.strictEqual(writes, 1, '新建并完成应只写盘一次');
+
+    const existing = store.createTask({ title: '待完善', due: '2026-08-20 18:00' });
+    writes = 0;
+    updated = store.saveAndCompleteTask(existing.id, {
+      title: '已经完善',
+      due: '2026-08-21 18:00',
+      pri: 4,
+      status: 'done'
+    });
+    assert.strictEqual(writes, 1, '编辑并完成应只写盘一次');
+  } finally {
+    fs.renameSync = originalRename;
+  }
+  assert.strictEqual(created.task.status, 'done');
+  assert.strictEqual(created.next.due, '2026-08-19 19:00');
+  assert.strictEqual(updated.task.title, '已经完善');
+  assert.strictEqual(updated.task.pri, 4);
+  assert.strictEqual(updated.task.status, 'done');
+  assert.ok(updated.task.completedAt);
+});
+
 test('重复任务：无截止时间不生成', () => {
   reset();
   const t = store.createTask({ title: '无截止重复', repeat: 'daily', due: null });
@@ -632,11 +710,19 @@ test('批量：清除所有任务', () => {
 
 test('批量：全部完成', () => {
   reset();
+  const originalPending = store.getAllTasks().filter((t) => t.status !== 'done' && t.status !== 'archived');
+  const recurring = originalPending.find((t) => t.repeat && t.due);
   const r = ai.handle('全部任务都完成');
   assert.strictEqual(r.intent, 'batch');
   assert.strictEqual(r.type, 'batch');
-  const pending = store.getAllTasks().filter((t) => t.status !== 'done');
-  assert.strictEqual(pending.length, 0, '所有任务应已完成');
+  originalPending.forEach((task) => {
+    assert.strictEqual(store.getTask(task.id).status, 'done', `原任务「${task.title}」应已完成`);
+  });
+  if (recurring) {
+    const generated = store.getAllTasks().find((t) => t.id !== recurring.id && t.title === recurring.title && t.status === 'todo');
+    assert.ok(generated, '重复任务应生成下一次待办');
+    assert.ok(r.message.includes('下次任务'));
+  }
 });
 
 test('批量：按优先级删除紧急任务', () => {

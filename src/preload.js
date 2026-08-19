@@ -20,6 +20,7 @@ contextBridge.exposeInMainWorld('api', {
     clearAll: () => ipcRenderer.invoke('tasks:clearAll'),
     import: (list) => ipcRenderer.invoke('tasks:import', list),
     complete: (id) => ipcRenderer.invoke('tasks:complete', id),
+    saveAndComplete: (id, data) => ipcRenderer.invoke('tasks:saveAndComplete', id, data),
     postpone: (id, days) => ipcRenderer.invoke('tasks:postpone', id, days),
     reorder: (ids) => ipcRenderer.invoke('tasks:reorder', ids),
     batchUpdate: (ids, patch) => ipcRenderer.invoke('tasks:batchUpdate', ids, patch),

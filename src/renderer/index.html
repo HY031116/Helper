@@ -63,6 +63,7 @@
               <button type="button" class="btn" id="btn-quick-add">快速添加</button>
               <button type="button" class="btn ghost" id="btn-new">详细创建</button>
             </div>
+            <div class="quick-preview hidden" id="quick-preview" role="status" aria-live="polite"></div>
           </div>
         </div>
         <!-- 批量操作栏 -->
@@ -157,93 +158,97 @@
   </div>
 
   <!-- 任务编辑弹窗 -->
-  <div class="modal-mask hidden" id="modal-mask">
-    <div class="modal">
+  <div class="modal-mask hidden" id="modal-mask" aria-hidden="true">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
       <h5 id="modal-title">新建任务</h5>
-      <label>标题 *</label>
-      <input id="m-title" maxlength="100">
-      <label>描述</label>
-      <textarea id="m-desc" maxlength="500" rows="2" placeholder="补充任务细节…"></textarea>
-      <div class="m-row">
-        <div class="m-col">
-          <label>优先级</label>
-          <select id="m-pri">
-            <option value="4">紧急</option>
-            <option value="3">高</option>
-            <option value="2" selected>中</option>
-            <option value="1">低</option>
-          </select>
-        </div>
-        <div class="m-col">
-          <label>状态</label>
-          <select id="m-status">
-            <option value="todo">待办</option>
-            <option value="doing">进行中</option>
-            <option value="done">已完成</option>
-          </select>
-        </div>
-      </div>
-      <div class="m-row">
-        <div class="m-col">
-          <label>截止日期</label>
-          <div class="due-row">
-            <input id="m-due-date" type="date">
-            <input id="m-due-time" type="time" value="18:00">
-            <button class="btn mini ghost" id="m-due-clear" title="清除截止时间">✕</button>
+      <form id="task-form" novalidate>
+        <label for="m-title">标题 *</label>
+        <input id="m-title" maxlength="100" required aria-describedby="m-title-error">
+        <div class="field-error hidden" id="m-title-error" aria-live="polite"></div>
+        <label for="m-desc">描述</label>
+        <textarea id="m-desc" maxlength="500" rows="2" placeholder="补充任务细节…"></textarea>
+        <div class="m-row">
+          <div class="m-col">
+            <label for="m-pri">优先级</label>
+            <select id="m-pri">
+              <option value="4">紧急</option>
+              <option value="3">高</option>
+              <option value="2" selected>中</option>
+              <option value="1">低</option>
+            </select>
+          </div>
+          <div class="m-col">
+            <label for="m-status">状态</label>
+            <select id="m-status">
+              <option value="todo">待办</option>
+              <option value="doing">进行中</option>
+              <option value="done">已完成</option>
+            </select>
           </div>
         </div>
-        <div class="m-col">
-          <label>标签（逗号分隔）</label>
-          <input id="m-tags" placeholder="工作, 生活">
+        <div class="m-row">
+          <div class="m-col">
+            <label for="m-due-date">截止日期</label>
+            <div class="due-row">
+              <input id="m-due-date" type="date">
+              <input id="m-due-time" type="time" value="18:00" aria-label="截止时间">
+              <button type="button" class="btn mini ghost" id="m-due-clear" title="清除截止时间" aria-label="清除截止时间">✕</button>
+            </div>
+          </div>
+          <div class="m-col">
+            <label for="m-tags">标签（逗号分隔）</label>
+            <input id="m-tags" placeholder="工作, 生活">
+          </div>
         </div>
-      </div>
-      <div class="m-row">
-        <div class="m-col">
-          <label>项目</label>
-          <input id="m-project" placeholder="如：Q3 规划" maxlength="30">
+        <div class="m-row">
+          <div class="m-col">
+            <label for="m-project">项目</label>
+            <input id="m-project" placeholder="如：Q3 规划" maxlength="30">
+          </div>
+          <div class="m-col">
+            <label for="m-repeat">重复</label>
+            <select id="m-repeat">
+              <option value="">不重复</option>
+              <option value="daily">每天</option>
+              <option value="weekly">每周</option>
+              <option value="monthly">每月</option>
+            </select>
+          </div>
         </div>
-        <div class="m-col">
-          <label>重复</label>
-          <select id="m-repeat">
-            <option value="">不重复</option>
-            <option value="daily">每天</option>
-            <option value="weekly">每周</option>
-            <option value="monthly">每月</option>
-          </select>
+        <div class="m-row">
+          <div class="m-col">
+            <label for="m-remind">提醒</label>
+            <select id="m-remind">
+              <option value="0">不提醒</option>
+              <option value="10">提前 10 分钟</option>
+              <option value="30" selected>提前 30 分钟</option>
+              <option value="60">提前 1 小时</option>
+            </select>
+          </div>
         </div>
-      </div>
-      <div class="m-row">
-        <div class="m-col">
-          <label>提醒</label>
-          <select id="m-remind">
-            <option value="0">不提醒</option>
-            <option value="10">提前 10 分钟</option>
-            <option value="30" selected>提前 30 分钟</option>
-            <option value="60">提前 1 小时</option>
-          </select>
+        <label for="m-children">子任务（每行一个，[x] 前缀表示已完成）</label>
+        <textarea id="m-children" rows="3" placeholder="[ ] 搭框架&#10;[ ] 写初稿&#10;[ ] 内部校对"></textarea>
+        <div class="form-error hidden" id="modal-error" role="alert"></div>
+        <div class="m-actions">
+          <button type="button" class="btn ghost danger hidden" id="m-delete">删除</button>
+          <button type="button" class="btn ghost hidden" id="m-archive">归档</button>
+          <button type="button" class="btn ghost hidden" id="m-unarchive">恢复</button>
+          <div class="m-spacer"></div>
+          <button type="button" class="btn ghost" id="m-cancel">取消</button>
+          <button type="submit" class="btn" id="m-save">创建</button>
         </div>
-      </div>
-      <label>子任务（每行一个，[x] 前缀表示已完成）</label>
-      <textarea id="m-children" rows="3" placeholder="[ ] 搭框架&#10;[ ] 写初稿&#10;[ ] 内部校对"></textarea>
-      <div class="m-actions">
-        <button class="btn ghost danger hidden" id="m-delete">删除</button>
-        <button class="btn ghost hidden" id="m-archive">归档</button>
-        <button class="btn ghost hidden" id="m-unarchive">恢复</button>
-        <div class="m-spacer"></div>
-        <button class="btn ghost" id="m-cancel">取消</button>
-        <button class="btn" id="m-save">创建</button>
-      </div>
+      </form>
     </div>
   </div>
 
   <!-- 删除确认 -->
-  <div class="modal-mask hidden" id="confirm-mask">
-    <div class="modal small">
-      <h5>确认删除</h5>
+  <div class="modal-mask hidden" id="confirm-mask" aria-hidden="true">
+    <div class="modal small" role="alertdialog" aria-modal="true" aria-labelledby="confirm-title" aria-describedby="confirm-text">
+      <h5 id="confirm-title">确认删除</h5>
       <p id="confirm-text">确定要删除这条任务吗？</p>
       <div class="m-actions">
-        <button class="btn ghost" id="confirm-cancel">取消</button>
-        <button class="btn danger" id="confirm-ok">删除</button>
+        <button type="button" class="btn ghost" id="confirm-cancel">取消</button>
+        <button type="button" class="btn danger" id="confirm-ok">删除</button>
       </div>
     </div>
   </div>
