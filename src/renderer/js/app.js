@@ -686,6 +686,9 @@ function renderStat() {
     toast('周报已下载');
   });
 }
+
+/* ---------- 视图：设置 ---------- */
+function renderSettings() {
   const s = settings;
   const sw = (key, label, desc) => `
     <div class="set-row">
