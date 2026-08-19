@@ -189,25 +189,28 @@ function checkReminders() {
   const tasks = store.getAllTasks();
   tasks.forEach((t) => {
     if (!t.due || t.status === 'done' || t.status === 'archived') return;
-    if (remindedTaskIds.has(t.id)) return;
     const dueDate = new Date(t.due.replace(' ', 'T') + ':00');
     const remindMs = (t.remind || 0) * 60000;
     const triggerAt = dueDate.getTime() - remindMs;
-    if (triggerAt <= now.getTime()) {
-      remindedTaskIds.add(t.id);
-      // 通知主窗口（桌宠气泡）
-      if (mainWindow) mainWindow.webContents.send('app:reminder', { id: t.id, title: t.title, due: t.due });
-      if (petWindow) petWindow.webContents.send('pet:remind', { id: t.id, title: t.title, due: t.due });
-      // 系统通知
-      if (Notification.isSupported()) {
-        const n = new Notification({
-          title: '任务提醒',
-          body: `${t.title}${t.due ? ' · ' + t.due : ''}`,
-          silent: false
-        });
-        n.on('click', () => showMainWindow());
-        n.show();
-      }
+    // 若提醒时间已过（任务被顺延/修改后 due 在未来），清除已提醒标记，允许再次提醒
+    if (triggerAt > now.getTime()) {
+      remindedTaskIds.delete(t.id);
+      return;
+    }
+    if (remindedTaskIds.has(t.id)) return;
+    remindedTaskIds.add(t.id);
+    // 通知主窗口（桌宠气泡）
+    if (mainWindow) mainWindow.webContents.send('app:reminder', { id: t.id, title: t.title, due: t.due });
+    if (petWindow) petWindow.webContents.send('pet:remind', { id: t.id, title: t.title, due: t.due });
+    // 系统通知
+    if (Notification.isSupported()) {
+      const n = new Notification({
+        title: '任务提醒',
+        body: `${t.title}${t.due ? ' · ' + t.due : ''}`,
+        silent: false
+      });
+      n.on('click', () => showMainWindow());
+      n.show();
     }
   });
 }

@@ -20,6 +20,7 @@ let statInited = false;
 let selectedIds = new Set(); // 批量选择
 let expandedIds = new Set(); // 展开的子任务
 let trashList = []; // 回收站列表
+let reportWeek = 0; // 周报选择的周（0=本周, -1=上周, 1=下周）
 
 /* ---------- 工具 ---------- */
 const $ = (sel) => document.querySelector(sel);
@@ -45,6 +46,14 @@ function isToday(due) {
   const pad = (n) => (n < 10 ? '0' + n : '' + n);
   const key = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
   return due.startsWith(key);
+}
+/* 本地日期键 YYYY-MM-DD（避免 toISOString 的 UTC 时区偏移导致跨天统计错误） */
+function localDateKey(ts) {
+  if (!ts) return '';
+  const d = new Date(ts);
+  if (isNaN(d.getTime())) return '';
+  const pad = (n) => (n < 10 ? '0' + n : '' + n);
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
 /* ---------- Toast ---------- */
@@ -258,7 +267,7 @@ function renderToday() {
   const now = new Date();
   const pad = (n) => (n < 10 ? '0' + n : '' + n);
   const todayKey = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
-  const doneToday = all.filter((t) => t.status === 'done' && t.completedAt && new Date(t.completedAt).toISOString().slice(0, 10) === todayKey);
+  const doneToday = all.filter((t) => t.status === 'done' && t.completedAt && localDateKey(t.completedAt) === todayKey);
   overdue.sort((a, b) => b.pri - a.pri);
   todays.sort((a, b) => b.pri - a.pri);
 
@@ -522,7 +531,7 @@ function renderStat() {
     days.push(`${d.getMonth() + 1}/${d.getDate()}`);
   }
   const trend = dayKeys.map((key) =>
-    all.filter((t) => t.status === 'done' && t.completedAt && new Date(t.completedAt).toISOString().slice(0, 10) === key).length
+    all.filter((t) => t.status === 'done' && t.completedAt && localDateKey(t.completedAt) === key).length
   );
   const maxTrend = Math.max(1, ...trend);
   html += `<div class="stat-chart-row">
@@ -626,9 +635,9 @@ function renderStat() {
       <div style="font-size:12.5px;font-weight:700;margin-bottom:8px">📄 周报生成</div>
       <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
         <div class="seg" id="report-week-seg">
-          <span class="seg-it" data-week="-1">上周</span>
-          <span class="seg-it active" data-week="0">本周</span>
-          <span class="seg-it" data-week="1">下周</span>
+          <span class="seg-it ${reportWeek === -1 ? 'active' : ''}" data-week="-1">上周</span>
+          <span class="seg-it ${reportWeek === 0 ? 'active' : ''}" data-week="0">本周</span>
+          <span class="seg-it ${reportWeek === 1 ? 'active' : ''}" data-week="1">下周</span>
         </div>
         <button class="btn mini" id="btn-report-gen">生成周报</button>
         <button class="btn mini" id="btn-report-copy" style="display:none">复制</button>
@@ -641,7 +650,6 @@ function renderStat() {
   $('#stat-body').innerHTML = html;
 
   // 周报：选择周
-  let reportWeek = 0;
   $$('#report-week-seg .seg-it').forEach((seg) => {
     seg.addEventListener('click', () => {
       $$('#report-week-seg .seg-it').forEach((x) => x.classList.remove('active'));
@@ -1347,6 +1355,8 @@ function updateAiBadge() {
 /* ---------- 刷新 ---------- */
 async function refreshTasks() {
   tasks = await window.api.tasks.getAll();
+  // 同步回收站列表，保证侧边栏回收站徽标准确
+  try { trashList = await window.api.tasks.getDeleted(); } catch (e) { /* 忽略 */ }
   renderAll();
 }
 
