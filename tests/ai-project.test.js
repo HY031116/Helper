@@ -709,3 +709,79 @@ test('周报：上周/下周偏移不报错', () => {
   assert.ok(last.includes('# 工作周报'));
   assert.ok(next.includes('# 工作周报'));
 });
+
+/* ============ 精细化管理：update / child / postpone / restore ============ */
+test('精细修改：改优先级', () => {
+  reset();
+  const t = store.createTask({ title: '写方案', pri: 2 });
+  const r = ai.handle('把 写方案 改成紧急');
+  assert.strictEqual(r.intent, 'update');
+  assert.strictEqual(r.type, 'update');
+  const updated = store.getTask(t.id);
+  assert.strictEqual(updated.pri, 4, '优先级应改为紧急');
+});
+
+test('精细修改：改截止时间', () => {
+  reset();
+  const t = store.createTask({ title: '写方案' });
+  const r = ai.handle('把 写方案 改到明天下午3点');
+  assert.strictEqual(r.intent, 'update');
+  const updated = store.getTask(t.id);
+  assert.ok(updated.due && updated.due.includes('15:00'), '截止时间应改为 15:00');
+});
+
+test('精细修改：改项目', () => {
+  reset();
+  const t = store.createTask({ title: '写方案', project: 'Q3 规划' });
+  const r = ai.handle('把 写方案 移到 日常工作');
+  assert.strictEqual(r.intent, 'update');
+  const updated = store.getTask(t.id);
+  assert.strictEqual(updated.project, '日常工作', '项目应改为日常工作');
+});
+
+test('精细修改：加标签', () => {
+  reset();
+  const t = store.createTask({ title: '写方案' });
+  const r = ai.handle('给 写方案 加标签 重要');
+  assert.strictEqual(r.intent, 'update');
+  const updated = store.getTask(t.id);
+  assert.ok(updated.tags.includes('重要'), '应添加标签「重要」');
+  // 加标签「重要」不应误改优先级
+  assert.strictEqual(updated.pri, 2, '优先级不应被误改');
+});
+
+test('精细修改：加备注', () => {
+  reset();
+  const t = store.createTask({ title: '写方案' });
+  const r = ai.handle('给 写方案 加备注 记得带资料');
+  assert.strictEqual(r.intent, 'update');
+  const updated = store.getTask(t.id);
+  assert.strictEqual(updated.desc, '记得带资料', '应更新备注');
+});
+
+test('子任务：加子任务', () => {
+  reset();
+  const t = store.createTask({ title: '写方案' });
+  const r = ai.handle('给 写方案 加子任务 搭框架');
+  assert.strictEqual(r.intent, 'child');
+  const updated = store.getTask(t.id);
+  assert.ok(updated.children.some((c) => (c.title || c) === '搭框架'), '应添加子任务「搭框架」');
+});
+
+test('顺延：推迟任务', () => {
+  reset();
+  const t = store.createTask({ title: '写方案', due: '2026-08-20 15:00' });
+  const r = ai.handle('把 写方案 推迟 3 天');
+  assert.strictEqual(r.intent, 'postpone');
+  const updated = store.getTask(t.id);
+  assert.ok(updated.due.includes('2026-08-23'), '应推迟 3 天');
+});
+
+test('恢复：从回收站恢复', () => {
+  reset();
+  const t = store.createTask({ title: '待恢复任务' });
+  store.deleteTask(t.id);
+  const r = ai.handle('恢复 待恢复任务');
+  assert.strictEqual(r.intent, 'restore');
+  assert.ok(store.getAllTasks().some((x) => x.title === '待恢复任务'), '任务应恢复');
+});

@@ -13,7 +13,7 @@ const store = require('./store');
 let lastMentionedTitle = '';
 
 /* ---------- 意图定义 ---------- */
-const INTENTS = ['create', 'query', 'complete', 'start', 'delete', 'archive', 'split', 'suggest', 'summary', 'stats', 'batch', 'chat', 'unknown'];
+const INTENTS = ['create', 'query', 'complete', 'start', 'delete', 'archive', 'split', 'suggest', 'summary', 'stats', 'batch', 'update', 'child', 'postpone', 'restore', 'chat', 'unknown'];
 
 /* ---------- 优先级词 ---------- */
 const PRI_WORDS = {
@@ -35,6 +35,15 @@ function detectIntent(text) {
   if (/(多少个|几条|几项|完成率|有几个|占比|还剩.*(个|条|项)|还有.*(个|条|项)没|完成了多少|做了多少|完成.*多少)/.test(text)) return 'stats';
   if (/拆成|拆分|分解|分成.*步|拆一下/.test(text)) return 'split';
   if (/归档|收起来|移入归档/.test(text)) return 'archive';
+  // 恢复：从回收站/归档恢复
+  if (/恢复|还原|找回|撤销删除/.test(text)) return 'restore';
+  // 精细修改：改优先级/改截止/改项目/加标签/加备注/改描述/移到项目
+  // 注意：需在 postpone 之前检测，因为「改到明天」既是改截止也是顺延，优先按 update 处理
+  if (/(改成|改为|改到|改成紧急|改成高|改成中|改成低|改优先级|改截止|改时间|改项目|移到|移动到|加标签|加个标签|加备注|加个备注|改描述|改备注|设为紧急|设为高|设为中|设为低|优先级改成|截止改成|时间改成)/.test(text)) return 'update';
+  // 顺延：推迟/顺延/延后/延期（明确的顺延词）
+  if (/顺延|推迟|延后|延期/.test(text)) return 'postpone';
+  // 子任务管理：加子任务/添加子任务/加个步骤
+  if (/加子任务|添加子任务|加个步骤|加步骤|加一步|子任务.*(加|添加)/.test(text)) return 'child';
   // 批量操作：清除/清空所有、全部完成、按条件批量删/完成
   if (/(清除|清空|清掉|删光|全删|全部.*删|所有.*删|全部.*完成|所有.*完成|批量|一键.*(删|完成|清)|把.*都(删|完成|清)|把.*全(删|完成|清))/.test(text)) return 'batch';
   if (/删除|去掉|不做了|取消这个|移除|删掉|划掉/.test(text)) return 'delete';
@@ -64,6 +73,15 @@ function matchTasks(query) {
     (t.desc || '').toLowerCase().includes(q) ||
     (t.tags || []).some((x) => x.toLowerCase().includes(q))
   );
+}
+
+/* 本地日期键 YYYY-MM-DD（避免 toISOString 的 UTC 时区偏移导致跨天统计错误） */
+function localDateKey(ts) {
+  if (!ts) return '';
+  const d = new Date(ts);
+  if (isNaN(d.getTime())) return '';
+  const pad = (n) => (n < 10 ? '0' + n : '' + n);
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
 /* ---------- 相对日期 ---------- */
@@ -139,6 +157,10 @@ function execute(intent, params) {
     case 'stats': return doStats(params);
     case 'query': return doQuery(params);
     case 'batch': return doBatch(params);
+    case 'update': return doUpdate(params);
+    case 'child': return doChild(params);
+    case 'postpone': return doPostpone(params);
+    case 'restore': return doRestore(params);
     case 'greeting': return { type: 'info', message: '你好呀！👋 有什么要记的、要查的，尽管说～\n比如：· 明天下午3点 交周报 #工作 · 我有哪些紧急任务 · 今天完成了多少' };
     case 'thanks': return { type: 'info', message: '不客气！随时找我 ☺️' };
     case 'chat': return doChat(params);
@@ -343,6 +365,144 @@ function doBatch(params) {
   return { type: 'error', message: '没太明白要批量做什么，试试「清除所有任务」「全部完成」「把紧急任务都删掉」' };
 }
 
+/* ---------- 精细修改：改优先级/截止/项目/标签/描述 ---------- */
+function doUpdate(params) {
+  const hits = matchTasks(params.target);
+  if (!hits.length) return { type: 'error', message: `没找到「${params.target}」相关任务` };
+  if (hits.length > 1) {
+    return {
+      type: 'ask',
+      message: '你说的是哪一个？',
+      candidates: hits.map((t) => ({ id: t.id, title: t.title }))
+    };
+  }
+  const t = hits[0];
+  const patch = {};
+  const changes = [];
+
+  // 改优先级
+  if (params.pri) {
+    patch.pri = params.pri;
+    changes.push(`优先级改为「${['', '低', '中', '高', '紧急'][params.pri]}」`);
+  }
+  // 改截止时间
+  if (params.due) {
+    patch.due = params.due;
+    changes.push(`截止时间改为 ${params.due}`);
+  }
+  // 改项目
+  if (params.project) {
+    patch.project = params.project;
+    changes.push(`项目改为「${params.project}」`);
+  }
+  // 加标签
+  if (params.tags && params.tags.length) {
+    const merged = Array.from(new Set([...(t.tags || []), ...params.tags])).slice(0, 5);
+    patch.tags = merged;
+    changes.push(`添加标签 ${params.tags.map((x) => '#' + x).join(' ')}`);
+  }
+  // 改描述
+  if (params.desc) {
+    patch.desc = params.desc;
+    changes.push('更新了备注');
+  }
+
+  if (!Object.keys(patch).length) {
+    return { type: 'error', message: '没听清要改什么，试试「把 交周报 改成紧急」「把 写方案 改到明天下午3点」' };
+  }
+  store.updateTask(t.id, patch);
+  return {
+    type: 'update',
+    task: t,
+    message: `已更新「${t.title}」：${changes.join('，')}`,
+    undoable: true,
+    undo: { action: 'restore', id: t.id }
+  };
+}
+
+/* ---------- 子任务管理：加子任务 ---------- */
+function doChild(params) {
+  const hits = matchTasks(params.target);
+  if (!hits.length) return { type: 'error', message: `没找到「${params.target}」相关任务` };
+  if (hits.length > 1) {
+    return {
+      type: 'ask',
+      message: '你说的是哪一个？',
+      candidates: hits.map((t) => ({ id: t.id, title: t.title }))
+    };
+  }
+  const t = hits[0];
+  if (!params.childTitle) return { type: 'error', message: '没听清要加什么子任务，试试「给 写方案 加子任务 搭框架」' };
+  const children = (t.children || []).map((c) => (typeof c === 'string' ? { title: c, done: false } : c));
+  children.push({ title: params.childTitle, done: false });
+  store.updateTask(t.id, { children });
+  return {
+    type: 'child',
+    task: t,
+    message: `已给「${t.title}」添加子任务「${params.childTitle}」`,
+    undoable: true,
+    undo: { action: 'restore', id: t.id }
+  };
+}
+
+/* ---------- 顺延：推迟任务 ---------- */
+function doPostpone(params) {
+  const hits = matchTasks(params.target);
+  if (!hits.length) return { type: 'error', message: `没找到「${params.target}」相关任务` };
+  if (hits.length > 1) {
+    return {
+      type: 'ask',
+      message: '你说的是哪一个？',
+      candidates: hits.map((t) => ({ id: t.id, title: t.title }))
+    };
+  }
+  const t = hits[0];
+  if (!t.due) return { type: 'error', message: `「${t.title}」没有截止时间，无法顺延` };
+  const days = params.days || 1;
+  const updated = store.postponeTask(t.id, days);
+  return {
+    type: 'postpone',
+    task: t,
+    message: `已把「${t.title}」顺延到 ${updated.due}`,
+    undoable: true,
+    undo: { action: 'restore', id: t.id }
+  };
+}
+
+/* ---------- 恢复：从回收站/归档恢复 ---------- */
+function doRestore(params) {
+  // 先查回收站
+  const deleted = store.getDeletedTasks();
+  const q = String(params.target || '').toLowerCase().trim();
+  const fromTrash = q ? deleted.filter((t) => t.title.toLowerCase().includes(q)) : deleted;
+  if (fromTrash.length === 1) {
+    store.restoreTask(fromTrash[0].id);
+    return { type: 'restore', task: fromTrash[0], message: `已从回收站恢复「${fromTrash[0].title}」`, undoable: false };
+  }
+  if (fromTrash.length > 1) {
+    return {
+      type: 'ask',
+      message: '回收站里有多个匹配，你说的是哪一个？',
+      candidates: fromTrash.map((t) => ({ id: t.id, title: t.title }))
+    };
+  }
+  // 再查归档
+  const archived = store.getAllTasks().filter((t) => t.status === 'archived');
+  const fromArch = q ? archived.filter((t) => t.title.toLowerCase().includes(q)) : archived;
+  if (fromArch.length === 1) {
+    store.unarchiveTask(fromArch[0].id);
+    return { type: 'restore', task: fromArch[0], message: `已从归档恢复「${fromArch[0].title}」`, undoable: false };
+  }
+  if (fromArch.length > 1) {
+    return {
+      type: 'ask',
+      message: '归档里有多个匹配，你说的是哪一个？',
+      candidates: fromArch.map((t) => ({ id: t.id, title: t.title }))
+    };
+  }
+  return { type: 'error', message: '回收站和归档里都没有找到匹配的任务' };
+}
+
 function doArchive(params) {
   const hits = matchTasks(params.target);
   if (!hits.length) return { type: 'error', message: `没找到「${params.target}」相关任务` };
@@ -379,16 +539,29 @@ function doSplit(params) {
 
 function doSuggest() {
   const all = store.getAllTasks().filter((t) => t.status !== 'done' && t.status !== 'archived');
-  const sorted = all.sort((a, b) => {
-    const pa = a.pri, pb = b.pri;
-    if (pa !== pb) return pb - pa;
+  const now = new Date();
+  const sorted = all.slice().sort((a, b) => {
+    // 1. 进行中的任务优先（已经在做，先收尾）
+    const doingA = a.status === 'doing' ? 1 : 0;
+    const doingB = b.status === 'doing' ? 1 : 0;
+    if (doingA !== doingB) return doingB - doingA;
+    // 2. 过期任务优先
+    const overA = a.due && new Date(a.due.replace(' ', 'T') + ':00') < now ? 1 : 0;
+    const overB = b.due && new Date(b.due.replace(' ', 'T') + ':00') < now ? 1 : 0;
+    if (overA !== overB) return overB - overA;
+    // 3. 优先级高优先
+    if (a.pri !== b.pri) return b.pri - a.pri;
+    // 4. 截止时间早优先
     return (a.due || '9999') < (b.due || '9999') ? -1 : 1;
   });
   if (!sorted.length) return { type: 'info', message: '当前没有待办任务，可以休息一下 ☕' };
-  const lines = sorted.slice(0, 5).map((t, i) => `${i + 1}. ${t.title}${t.due ? '（' + t.due + '）' : ''}`);
+  const lines = sorted.slice(0, 5).map((t, i) => {
+    const tag = t.status === 'doing' ? '🔄' : (t.due && new Date(t.due.replace(' ', 'T') + ':00') < now ? '⚠️' : '');
+    return `${i + 1}. ${tag} ${t.title}${t.due ? '（' + t.due + '）' : ''}`;
+  });
   return {
     type: 'suggest',
-    message: '建议按这个顺序来：\n' + lines.join('\n') + '\n\n原则：紧急且早到期优先。'
+    message: '建议按这个顺序来：\n' + lines.join('\n') + '\n\n原则：进行中的先收尾 → 过期的优先处理 → 紧急且早到期优先。'
   };
 }
 
@@ -398,12 +571,23 @@ function doSummary() {
   const pad = (n) => (n < 10 ? '0' + n : '' + n);
   const todayKey = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
   // 今日完成：completedAt 落在今天
-  const done = all.filter((t) => t.status === 'done' && t.completedAt && new Date(t.completedAt).toISOString().slice(0, 10) === todayKey);
+  const done = all.filter((t) => t.status === 'done' && t.completedAt && localDateKey(t.completedAt) === todayKey);
+  const doing = all.filter((t) => t.status === 'doing');
   const todo = all.filter((t) => t.status !== 'done' && t.status !== 'archived');
+  const overdue = todo.filter((t) => t.due && new Date(t.due.replace(' ', 'T') + ':00') < now);
   const lines = [];
-  lines.push(`今日已完成 ${done.length} 项：`);
+  lines.push(`📋 今日小结（${todayKey}）`);
+  lines.push('');
+  lines.push(`✅ 今日已完成 ${done.length} 项：`);
   lines.push(done.length ? done.slice(0, 5).map((t) => '· ' + t.title).join('\n') : '· （暂无）');
-  lines.push(`\n未完成 ${todo.length} 项：`);
+  lines.push('');
+  lines.push(`🔄 进行中 ${doing.length} 项：`);
+  lines.push(doing.length ? doing.slice(0, 5).map((t) => '· ' + t.title).join('\n') : '· （暂无）');
+  lines.push('');
+  lines.push(`⏰ 已过期 ${overdue.length} 项：`);
+  lines.push(overdue.length ? overdue.slice(0, 5).map((t) => '· ' + t.title + '（' + t.due + '）').join('\n') : '· （无）');
+  lines.push('');
+  lines.push(`📌 待办 ${todo.length} 项：`);
   lines.push(todo.length ? todo.slice(0, 5).map((t) => '· ' + t.title).join('\n') : '· （暂无）');
   return { type: 'summary', message: lines.join('\n') };
 }
@@ -481,19 +665,35 @@ function doStats(params) {
   const now = new Date();
   const pad = (n) => (n < 10 ? '0' + n : '' + n);
   const todayKey = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
-  const doneToday = all.filter((t) => t.status === 'done' && t.completedAt && new Date(t.completedAt).toISOString().slice(0, 10) === todayKey).length;
+  const doneToday = all.filter((t) => t.status === 'done' && t.completedAt && localDateKey(t.completedAt) === todayKey).length;
   // 剩几天内到期
   const soon = all.filter((t) => t.status !== 'done' && t.due && (() => {
     const d = new Date(t.due.replace(' ', 'T') + ':00');
     return d.getTime() - Date.now() < 3 * 86400000 && d.getTime() >= Date.now();
   })()).length;
+  // 已过期
+  const overdue = all.filter((t) => t.status !== 'done' && t.due && new Date(t.due.replace(' ', 'T') + ':00') < now).length;
+  // 按项目分布（Top3）
+  const projAcc = {};
+  all.forEach((t) => {
+    const p = t.project || '未分类';
+    projAcc[p] = (projAcc[p] || 0) + 1;
+  });
+  const projTop = Object.keys(projAcc)
+    .map((k) => ({ name: k, count: projAcc[k] }))
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 3);
 
   const lines = [
     `· 任务总数 ${all.length}（已完成 ${done}，进行中 ${doing}，待办 ${todo}）`,
     `· 完成率 ${rate}%`,
     `· 今天已完成 ${doneToday} 项`,
+    `· 已过期 ${overdue} 项`,
     `· 未来 3 天内到期 ${soon} 项`
   ];
+  if (projTop.length) {
+    lines.push('· 项目分布：' + projTop.map((p) => `${p.name} ${p.count}`).join(' / '));
+  }
   return { type: 'stats', message: '📊 当前统计：\n' + lines.join('\n') };
 }
 
@@ -592,6 +792,60 @@ function parse(text) {
     // 范围：明天/过期
     if (/明天|明日/.test(raw) && intent === 'query') params.range = 'tomorrow';
     if (/过期|逾期|晚了/.test(raw)) params.range = 'overdue';
+  } else if (intent === 'update') {
+    // 精细修改：提取目标任务 + 修改内容
+    // 目标：在「把X」「将X」「给X」之后、修改动词之前
+    let target = raw
+      .replace(/^(把|将|请把|请将|给|为|请给)\s*/g, '')
+      .replace(/(改成|改为|改到|移到|移动到|加标签|加个标签|加备注|加个备注|改描述|改备注|设为|优先级改成|截止改成|时间改成).*$/g, '')
+      .trim();
+    // 去掉优先级/时间/项目等修饰词
+    target = target
+      .replace(/(紧急|加急|立刻|马上|高优先级|中优先级|低优先级|重要|优先|高|中|低|不急|随便)/g, '')
+      .replace(/(今天|明天|后天|周[一二三四五六日天]|\d{1,2}月\d{1,2}日|\d{1,2}[:：点]\d{0,2}|\d{1,2}点|凌晨|早上|上午|中午|下午|晚上|傍晚|夜里|半)/g, '')
+      .replace(/#[\u4e00-\u9fa5A-Za-z0-9_-]+/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+    params.target = target;
+    // 改项目：移到/移动到 项目X（排除「改到 时间」的情况）
+    const projMatch = raw.match(/(?:移到|移动到)\s*(?:项目|◈)?\s*([\u4e00-\u9fa5A-Za-z0-9_-]{1,12})/);
+    if (projMatch) params.project = projMatch[1];
+    // 加标签：加标签 X / 加个标签 X（无 # 前缀）
+    const tagMatch = raw.match(/(?:加标签|加个标签|加上标签)\s*[:：]?\s*([\u4e00-\u9fa5A-Za-z0-9_-]{1,12})/);
+    if (tagMatch && !params.tags.includes(tagMatch[1])) params.tags.push(tagMatch[1]);
+    // 若用户是「加标签 重要/高/中/低」，标签名与优先级词冲突，清除误设的优先级
+    if (tagMatch && /^(重要|高|中|低|紧急|优先)$/.test(tagMatch[1])) {
+      delete params.pri;
+    }
+    // 改描述：加备注/改描述 X
+    const descMatch = raw.match(/(?:加备注|加个备注|改描述|改备注|备注为|备注是)\s*[:：]?\s*(.+)/);
+    if (descMatch) params.desc = descMatch[1].trim();
+  } else if (intent === 'child') {
+    // 加子任务：目标 + 子任务标题
+    let target = raw
+      .replace(/^(给|为|把|将|请给)\s*/g, '')
+      .replace(/(加子任务|添加子任务|加个步骤|加步骤|加一步|加个|添加).*$/g, '')
+      .trim();
+    params.target = target;
+    const childMatch = raw.match(/(?:加子任务|添加子任务|加个步骤|加步骤|加一步|加个|添加)\s*[:：]?\s*(.+)/);
+    if (childMatch) params.childTitle = childMatch[1].trim();
+  } else if (intent === 'postpone') {
+    // 顺延：目标 + 天数
+    let target = raw
+      .replace(/^(把|将|请把|请将)\s*/g, '')
+      .replace(/(顺延|推迟|延后|延期|改到明天).*$/g, '')
+      .trim();
+    params.target = target;
+    // 天数：推迟X天/顺延X天
+    const dayMatch = raw.match(/(?:推迟|顺延|延后|延期)\s*(\d+)\s*天/);
+    if (dayMatch) params.days = parseInt(dayMatch[1], 10);
+    else params.days = 1;
+  } else if (intent === 'restore') {
+    // 恢复：目标
+    let target = raw
+      .replace(/^(恢复|还原|找回|撤销删除)\s*/g, '')
+      .trim();
+    params.target = target;
   } else {
     // complete/start/delete/archive: 去掉意图词后的文本作为目标
     // 支持「那个任务」「刚说的那个」指代
@@ -723,30 +977,37 @@ ${taskSummary || '（当前没有任务）'}
 
 请把用户输入解析为结构化 JSON，只输出 JSON，不要输出其他内容。格式：
 {
-  "intent": "create|query|complete|start|delete|archive|split|suggest|summary|stats|batch|greeting|thanks|unknown",
+  "intent": "create|query|complete|start|delete|archive|split|suggest|summary|stats|batch|update|child|postpone|restore|greeting|thanks|unknown",
   "title": "任务标题（create 时必填，去掉时间/优先级/标签等修饰）",
-  "target": "目标任务标题关键词（complete/start/delete/archive/split 时填，参考上面的任务列表精确匹配）",
+  "target": "目标任务标题关键词（complete/start/delete/archive/split/update/child/postpone/restore 时填，参考上面的任务列表精确匹配）",
   "count": 拆分步数（split 时填，默认 3）,
-  "pri": 1|2|3|4（1低 2中 3高 4紧急，create 或筛选时可选）,
-  "due": "截止时间，格式 YYYY-MM-DD HH:mm（create 时可选，相对日期按今天 ${today} 推算）",
-  "tags": ["标签数组，create 或按标签筛选时填"],
-  "project": "项目名（按项目筛选时填）",
+  "pri": 1|2|3|4（1低 2中 3高 4紧急，create 或 update 改优先级时填）,
+  "due": "截止时间，格式 YYYY-MM-DD HH:mm（create 或 update 改截止时填，相对日期按今天 ${today} 推算）",
+  "tags": ["标签数组，create 或 update 加标签时填"],
+  "project": "项目名（update 改项目时填）",
+  "desc": "备注/描述（update 加备注时填）",
+  "childTitle": "子任务标题（child 加子任务时填）",
+  "days": 顺延天数（postpone 时填，默认 1）,
   "status": "todo|doing|done（按状态筛选时填）",
   "range": "today|tomorrow|week|overdue|all（query 时填）"
 }
 
 意图判断规则：
-- 创建任务：包含任务内容，如「明天下午3点 交周报 #工作 紧急」
-- 查询：如「今天我要做什么」「我有哪些紧急任务」「#工作 的任务」「进行中的任务」
+- 创建任务：包含任务内容，如「明天下午3点 交周报 #工作 紧急」「提醒我 明天 10 点开会」「帮我记一下 买牛奶」
+- 查询：如「今天我要做什么」「我有哪些紧急任务」「#工作 的任务」「进行中的任务」「我有什么任务」
 - 完成：如「完成 交周报」「搞定 写方案」
 - 开始：如「开始 写方案」
 - 删除：如「删除 整理报销单据」
 - 归档：如「归档 写季度方案」
 - 拆分：如「把 写方案 拆成三步」
-- 建议：如「怎么安排今天的优先级」「先做什么」
-- 小结：如「今天完成了什么」「今日小结」
-- 统计：如「今天完成了多少」「完成率多少」「还剩几条没做」
+- 建议：如「怎么安排今天的优先级」「先做什么」「帮我排一下优先级」
+- 小结：如「今天完成了什么」「今日小结」「总结一下今天的进展」
+- 统计：如「今天完成了多少」「完成率多少」「还剩几条没做」「统计一下」
 - 批量：如「清除所有任务」「全部完成」「把紧急任务都删掉」「清空回收站」「把所有工作标签的任务删掉」
+- 精细修改（update）：如「把 交周报 改成紧急」「把 写方案 改到明天下午3点」「把 写方案 移到 Q3 规划」「给 写方案 加标签 重要」「给 写方案 加备注 记得带资料」
+- 加子任务（child）：如「给 写方案 加子任务 搭框架」「给 写方案 加个步骤 写初稿」
+- 顺延（postpone）：如「把 交周报 顺延到明天」「把 写方案 推迟 3 天」
+- 恢复（restore）：如「恢复 交周报」（从回收站或归档恢复）
 - 问候：如「你好」「嗨」
 - 感谢：如「谢谢」「辛苦了」
 - 无法判断（知识问答/闲聊等非任务内容）：intent 填 unknown
@@ -756,13 +1017,29 @@ ${taskSummary || '（当前没有任务）'}
 - 「把紧急任务都删掉」→ intent=batch, pri=4
 - 「把所有工作标签的任务删掉」→ intent=batch, tags=["工作"]
 - 「全部完成」→ intent=batch（无筛选，完成所有未完成任务）
+- 「把进行中的任务都完成」→ intent=batch, status="doing"
+
+精细修改（update）时，target 必须精确匹配任务列表中的标题，并提取要修改的字段：
+- 「把 交周报 改成紧急」→ intent=update, target="交周报", pri=4
+- 「把 写方案 改到明天下午3点」→ intent=update, target="写方案", due="明天下午3点对应的日期 15:00"
+- 「把 写方案 移到 Q3 规划」→ intent=update, target="写方案", project="Q3 规划"
+- 「给 写方案 加标签 重要」→ intent=update, target="写方案", tags=["重要"]
+- 「给 写方案 加备注 记得带资料」→ intent=update, target="写方案", desc="记得带资料"
 
 时间解析规则：
 - 「下午/晚上/傍晚/夜里 X点」→ X+12 点（X<12 时）
 - 「早上/上午 X点」→ X 点
 - 「今天/明天/后天」→ 对应日期
 - 「周X」→ 本周或下周对应星期
-- 未指定时间默认 18:00`;
+- 「X月X日」→ 对应日期
+- 未指定时间默认 18:00
+
+注意：
+- 用户说「提醒我 X」或「记得 X」通常是创建带截止时间的任务
+- 用户提到任务列表里已有的任务标题时，优先匹配 target（如「完成 交周报」中的「交周报」）
+- 用户说「安排」「排优先级」→ suggest
+- 用户说「进展」「小结」「总结」→ summary
+- 用户说「多少」「几个」「完成率」「占比」→ stats`;
 }
 
 /* ---------- LLM 解析 ---------- */
