@@ -268,7 +268,7 @@ test('批量栏实际按可完成任务数更新状态', () => {
 });
 
 test('真实模型设置明确数据范围并校验自定义服务地址', () => {
-  assert.match(app, /最多 30 条未归档任务摘要会发送给所选服务商/);
+  assert.match(app, /当前输入、最近 6 轮对话和最多 30 条未归档任务摘要会发送给所选服务商/);
   assert.match(app, /settings\.aiProvider !== 'custom' \|\| !!settings\.aiBaseUrl/);
   assert.match(app, /s\.aiStage === 'llm'/);
 });
@@ -358,8 +358,23 @@ test('助手歧义选择走结构化解析，并提供上下文下一步', () =>
   assert.match(css, /\.turn-actions \{/);
 
   const run = loadRendererRuntime({});
-  const followUps = JSON.parse(run(`JSON.stringify(getFollowUps({ type: 'complete' }))`));
-  assert.deepStrictEqual(followUps, [{ label: '安排剩余任务', prompt: '怎么安排今天的优先级' }]);
+  const followUps = JSON.parse(run(`JSON.stringify(getFollowUps({
+    type: 'complete',
+    followUps: [
+      { label: '开始下一项', prompt: '开始 季度方案' },
+      { label: 123, prompt: '无效建议' },
+      { label: '重新安排', prompt: '怎么安排今天的优先级' },
+      { label: '不会展示', prompt: '查看我的任务' }
+    ]
+  }))`));
+  assert.deepStrictEqual(followUps, [
+    { label: '开始下一项', prompt: '开始 季度方案' },
+    { label: '重新安排', prompt: '怎么安排今天的优先级' }
+  ]);
+  assert.deepStrictEqual(JSON.parse(run(`JSON.stringify(getFollowUps({ type: 'complete' }))`)), []);
+  assert.match(app, /function clearTurnActions\(\)/);
+  assert.match(app, /clearTurnActions\(\);\s*addMsg\('user', label\)/);
+  assert.match(app, /if \(!raw \|\| aiSending\) return;\s*clearTurnActions\(\);/);
   assert.strictEqual(
     run(`candidateLabel({ title: '季度方案', project: 'Q3', due: '2026-08-20 18:00', status: 'doing' })`),
     '季度方案 · ◈ Q3 · 2026-08-20 18:00 · 进行中'

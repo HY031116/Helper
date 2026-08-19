@@ -831,7 +831,7 @@ function renderSettings() {
 
   let html = `<div class="set-group">
     <div class="set-row privacy-row">
-      <div><div class="sr-t">任务数据</div><div class="sr-d">任务、设置和对话记录保存在本机。使用真实模型时，当前输入和最多 30 条未归档任务摘要会发送给所选服务商。</div></div>
+      <div><div class="sr-t">任务数据</div><div class="sr-d">任务、设置和对话记录保存在本机。使用真实模型时，当前输入、最近 6 轮对话和最多 30 条未归档任务摘要会发送给所选服务商。</div></div>
       <span class="status-badge">本地存储</span>
     </div>
     ${sw('autoBackup', '自动备份', '每日 22:00 将数据快照备份到备份目录')}
@@ -1573,19 +1573,14 @@ function turnActions(items, label) {
 }
 
 function getFollowUps(result) {
-  const byType = {
-    create: [{ label: '查看今日', prompt: '今天我要做什么' }],
-    complete: [{ label: '安排剩余任务', prompt: '怎么安排今天的优先级' }],
-    start: [{ label: '查看进行中', prompt: '我有哪些进行中的任务' }],
-    update: [{ label: '查看今日', prompt: '今天我要做什么' }],
-    child: [{ label: '查看今日', prompt: '今天我要做什么' }],
-    split: [{ label: '安排优先级', prompt: '怎么安排今天的优先级' }],
-    query: [{ label: '安排优先级', prompt: '怎么安排今天的优先级' }],
-    suggest: [{ label: '查看今日', prompt: '今天我要做什么' }],
-    summary: [{ label: '查看统计', prompt: '今天完成了多少' }],
-    stats: [{ label: '查看今日', prompt: '今天我要做什么' }]
-  };
-  return byType[result.type] || [];
+  if (!result || !Array.isArray(result.followUps)) return [];
+  return result.followUps
+    .filter((item) => item && typeof item.label === 'string' && typeof item.prompt === 'string')
+    .slice(0, 2);
+}
+
+function clearTurnActions() {
+  $$('#ai-chat .turn-actions').forEach((actions) => actions.remove());
 }
 
 function candidateLabel(candidate) {
@@ -1681,6 +1676,7 @@ async function runAiTurn(request, retry) {
 
 async function resolveCandidate(result, candidate, label) {
   if (aiSending) return;
+  clearTurnActions();
   addMsg('user', label);
   await runResolvedTurn(result, candidate, label);
 }
@@ -1703,6 +1699,7 @@ async function sendPrompt(text) {
   const fromComposer = typeof text !== 'string';
   const raw = (fromComposer ? input.value : text).trim();
   if (!raw || aiSending) return;
+  clearTurnActions();
   if (fromComposer) {
     input.value = '';
     resizeAiInput();

@@ -912,6 +912,221 @@ test('引擎选择：本地助手模式不调用已配置的真实模型', async
   }
 });
 
+test('真实模型：解析时携带最近对话并保留精细操作参数', async () => {
+  reset();
+  store.clearChat();
+  store.appendChat({ role: 'user', text: '我们先处理季度方案', ts: Date.now() - 2000 });
+  store.appendChat({ role: 'ai', text: '好，先从季度方案开始。', ts: Date.now() - 1000 });
+  const previous = store.getSettings();
+  store.updateSettings({
+    aiStage: 'llm',
+    aiProvider: 'custom',
+    aiBaseUrl: 'https://example.invalid/v1',
+    aiApiKey: 'test-key',
+    aiModel: 'test-model'
+  });
+  const originalFetch = global.fetch;
+  let requestBody;
+  global.fetch = async (url, options) => {
+    requestBody = JSON.parse(options.body);
+    return {
+      ok: true,
+      json: async () => ({
+        choices: [{ message: { content: JSON.stringify({
+          intent: 'postpone',
+          target: '季度方案',
+          desc: '等客户确认',
+          childTitle: '确认预算',
+          days: 3
+        }) } }]
+      })
+    };
+  };
+  try {
+    const parsed = await ai.parseWithLLM('那就往后推三天');
+    assert.strictEqual(parsed.params.desc, '等客户确认');
+    assert.strictEqual(parsed.params.childTitle, '确认预算');
+    assert.strictEqual(parsed.params.days, 3);
+    assert.deepStrictEqual(
+      requestBody.messages.slice(1, -1),
+      [
+        { role: 'user', content: '我们先处理季度方案' },
+        { role: 'assistant', content: '好，先从季度方案开始。' }
+      ]
+    );
+    assert.deepStrictEqual(requestBody.messages.at(-1), { role: 'user', content: '那就往后推三天' });
+  } finally {
+    global.fetch = originalFetch;
+    store.clearChat();
+    store.updateSettings({
+      aiStage: previous.aiStage,
+      aiProvider: previous.aiProvider,
+      aiBaseUrl: previous.aiBaseUrl,
+      aiApiKey: previous.aiApiKey,
+      aiModel: previous.aiModel
+    });
+  }
+});
+
+test('真实模型：通用对话使用有限历史和任务上下文', async () => {
+  reset();
+  store.clearChat();
+  store.createTask({ title: '准备季度复盘' });
+  for (let i = 0; i < 8; i++) {
+    store.appendChat({ role: 'user', text: `历史问题 ${i}`, ts: Date.now() + i * 2 });
+    store.appendChat({ role: 'ai', text: `历史回答 ${i}`, ts: Date.now() + i * 2 + 1 });
+  }
+  const previous = store.getSettings();
+  store.updateSettings({
+    aiStage: 'llm',
+    aiProvider: 'custom',
+    aiBaseUrl: 'https://example.invalid/v1',
+    aiApiKey: 'test-key',
+    aiModel: 'test-model'
+  });
+  const originalFetch = global.fetch;
+  const requests = [];
+  global.fetch = async (url, options) => {
+    requests.push(JSON.parse(options.body));
+    const content = '{"intent":"unknown","reply":"可以，我们接着刚才的话题。"}';
+    return {
+      ok: true,
+      json: async () => ({ choices: [{ message: { content } }] })
+    };
+  };
+  try {
+    const result = await ai.handleAuto('那你觉得下一步呢？');
+    assert.strictEqual(result.message, '可以，我们接着刚才的话题。');
+    assert.strictEqual(requests.length, 1, '普通对话应在意图解析时直接生成回复');
+    const chatMessages = requests[0].messages;
+    assert.strictEqual(chatMessages.length, 14, '应限制为 system + 最近 12 条 + 当前输入');
+    assert.strictEqual(chatMessages[1].content, '历史问题 2');
+    assert.deepStrictEqual(chatMessages.at(-1), { role: 'user', content: '那你觉得下一步呢？' });
+    assert.match(chatMessages[0].content, /准备季度复盘/);
+    assert.doesNotMatch(chatMessages[0].content, /3-5 句/);
+  } finally {
+    global.fetch = originalFetch;
+    store.clearChat();
+    store.updateSettings({
+      aiStage: previous.aiStage,
+      aiProvider: previous.aiProvider,
+      aiBaseUrl: previous.aiBaseUrl,
+      aiApiKey: previous.aiApiKey,
+      aiModel: previous.aiModel
+    });
+  }
+});
+
+test('真实模型：缺少内联回复时回退到对话请求', async () => {
+  reset();
+  store.clearChat();
+  const previous = store.getSettings();
+  store.updateSettings({
+    aiStage: 'llm',
+    aiProvider: 'custom',
+    aiBaseUrl: 'https://example.invalid/v1',
+    aiApiKey: 'test-key',
+    aiModel: 'test-model'
+  });
+  const originalFetch = global.fetch;
+  let requestCount = 0;
+  global.fetch = async () => {
+    requestCount += 1;
+    const content = requestCount === 1 ? '{"intent":"unknown"}' : '这是回退生成的回答。';
+    return {
+      ok: true,
+      json: async () => ({ choices: [{ message: { content } }] })
+    };
+  };
+  try {
+    const result = await ai.handleAuto('聊聊工作节奏');
+    assert.strictEqual(result.message, '这是回退生成的回答。');
+    assert.strictEqual(requestCount, 2);
+  } finally {
+    global.fetch = originalFetch;
+    store.clearChat();
+    store.updateSettings({
+      aiStage: previous.aiStage,
+      aiProvider: previous.aiProvider,
+      aiBaseUrl: previous.aiBaseUrl,
+      aiApiKey: previous.aiApiKey,
+      aiModel: previous.aiModel
+    });
+  }
+});
+
+test('助手体验：完成任务后推荐真实的下一项', () => {
+  store.clearAllTasks();
+  store.createTask({ title: '已经处理的事项', pri: 2 });
+  store.createTask({ title: '下一项紧急工作', pri: 4 });
+  const result = ai.handle('完成 已经处理的事项');
+  assert.match(result.message, /接下来优先处理「下一项紧急工作」/);
+  assert.deepStrictEqual(result.followUps, [
+    { label: '开始下一项', prompt: '开始 下一项紧急工作' },
+    { label: '重新安排', prompt: '怎么安排今天的优先级' }
+  ]);
+});
+
+test('助手体验：今日新任务和清空待办给出不同下一步', () => {
+  store.clearAllTasks();
+  const created = ai.handle('今天 处理合同');
+  assert.match(created.message, /已加入今天的安排/);
+  assert.deepStrictEqual(created.followUps, [
+    { label: '开始这个任务', prompt: '开始 处理合同' },
+    { label: '查看今日安排', prompt: '今天我要做什么' }
+  ]);
+
+  const completed = ai.handle('完成 处理合同');
+  assert.match(completed.message, /目前没有未完成任务了/);
+  assert.deepStrictEqual(completed.followUps, [
+    { label: '查看完成情况', prompt: '今天完成了多少' }
+  ]);
+});
+
+test('助手体验：查看任务快捷操作沿用最近任务上下文', () => {
+  store.clearAllTasks();
+  store.createTask({ title: '季度方案' });
+  store.createTask({ title: '客户回访' });
+  const updated = ai.handle('把 季度方案 改成紧急');
+  assert.deepStrictEqual(updated.followUps[0], {
+    label: '查看任务',
+    prompt: '查看刚说的那个任务'
+  });
+  const query = ai.handle(updated.followUps[0].prompt);
+  assert.match(query.message, /季度方案/);
+  assert.doesNotMatch(query.message, /客户回访/);
+});
+
+test('助手体验：恢复已完成任务不会建议重新开始', () => {
+  store.clearAllTasks();
+  const task = store.createTask({ title: '已经完成的任务' });
+  store.completeTask(task.id);
+  const completedAt = store.getTask(task.id).completedAt;
+  store.deleteTask(task.id);
+
+  const restored = ai.handle('恢复 已经完成的任务');
+  assert.strictEqual(restored.task.status, 'done');
+  assert.deepStrictEqual(restored.followUps, [
+    { label: '查看完成情况', prompt: '今天完成了多少' },
+    { label: '查看全部任务', prompt: '查看我的任务' }
+  ]);
+  assert.strictEqual(store.getTask(task.id).completedAt, completedAt);
+});
+
+test('助手体验：查询后的优先任务限制在本次结果集', () => {
+  store.clearAllTasks();
+  const work = store.createTask({ title: '紧急工作', pri: 4, tags: ['工作'] });
+  const life = store.createTask({ title: '生活采购', pri: 1, tags: ['生活'] });
+  const otherLife = store.createTask({ title: '整理衣柜', pri: 2, tags: ['生活'] });
+
+  const result = ai.handle('#生活 的任务');
+  assert.deepStrictEqual(result.taskIds, [life.id, otherLife.id]);
+  assert.deepStrictEqual(result.followUps, [
+    { label: '开始优先任务', prompt: '开始 整理衣柜' }
+  ]);
+  assert.notStrictEqual(result.followUps[0].prompt, `开始 ${work.title}`);
+});
+
 test('精细修改：旧撤销不覆盖后续修改', () => {
   reset();
   const t = store.createTask({ title: '写方案', pri: 2 });
