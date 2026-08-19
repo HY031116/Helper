@@ -9,12 +9,16 @@ const petEl = document.getElementById('pet');
 const petWrap = document.getElementById('pet-wrap');
 const petBubble = document.getElementById('pet-bubble');
 const petMenu = document.getElementById('pet-menu');
+const petMenuClose = document.getElementById('pet-menu-close');
+const petMenuCount = document.getElementById('pet-menu-count');
+const petMenuNext = document.getElementById('pet-menu-next');
 const petSprite = document.getElementById('pet-sprite');
 
 let bubbleTimer = null;
 let idleTimer = null;
 let currentMood = 'normal'; // normal | happy | surprised | sad
 let wasDragging = false; // 标记最近一次是否发生了拖拽（用于区分点击）
+let statusSnapshot = { todo: 0, overdue: 0, next: null };
 
 /* ---------- 精灵图动作表（Petdex deepseek酱，192x208/帧，8x9 网格） ---------- */
 const SPRITE_STATES = {
@@ -47,7 +51,28 @@ function setMood(mood) {
 }
 
 /* ---------- 气泡 ---------- */
+function setMenuOpen(open, returnFocus) {
+  const wasOpen = !petMenu.classList.contains('hidden');
+  petMenu.classList.toggle('hidden', !open);
+  petMenu.setAttribute('aria-hidden', String(!open));
+  petEl.setAttribute('aria-expanded', String(open));
+  if (open) {
+    clearTimeout(bubbleTimer);
+    petBubble.classList.add('hidden');
+    setMood('happy');
+    refreshStatus(false);
+    setTimeout(() => {
+      const firstAction = petMenu.querySelector('[data-pet]');
+      if (firstAction) firstAction.focus();
+    }, 0);
+  } else {
+    if (wasOpen) setMood('normal');
+    if (returnFocus) petEl.focus();
+  }
+}
+
 function showBubble(text, hot, ms) {
+  setMenuOpen(false, false);
   petBubble.textContent = text;
   petBubble.classList.toggle('hot', !!hot);
   petBubble.classList.remove('hidden');
@@ -107,6 +132,7 @@ function remind(data) {
       return;
     }
     moved = true;
+    setMenuOpen(false, false);
     // 跟随鼠标移动方向播放奔跑动画
     playSprite(e.clientX >= startX ? 'running-right' : 'running-left');
     // 新窗口位置 = 鼠标屏幕坐标 - 鼠标在窗口内的偏移
@@ -144,36 +170,49 @@ petEl.addEventListener('click', (e) => {
   e.stopPropagation();
   // 刚拖拽过松手触发的 click，忽略（避免拖完弹菜单）
   if (wasDragging) return;
-  const show = petMenu.classList.toggle('hidden');
-  if (!show) {
-    setMood('happy');
-    showBubble('今日待办 · 点击菜单快速操作', false);
-    setTimeout(() => setMood('normal'), 1500);
-  }
+  setMenuOpen(petMenu.classList.contains('hidden'), false);
+});
+
+petEl.addEventListener('keydown', (e) => {
+  if (e.key !== 'Enter' && e.key !== ' ') return;
+  e.preventDefault();
+  setMenuOpen(petMenu.classList.contains('hidden'), false);
 });
 
 // 双击直接打开主窗口
 petEl.addEventListener('dblclick', (e) => {
   e.stopPropagation();
-  petMenu.classList.add('hidden');
+  setMenuOpen(false, false);
   setMood('happy');
   window.api.pet.openView('today');
   setTimeout(() => setMood('normal'), 1500);
 });
 
 document.addEventListener('click', (e) => {
-  if (!petMenu.classList.contains('hidden') && !e.target.closest('#pet-menu')) {
-    petMenu.classList.add('hidden');
+  if (!petMenu.classList.contains('hidden') && !e.target.closest('#pet-menu') && !e.target.closest('#pet')) {
+    setMenuOpen(false, false);
   }
 });
 
-petMenu.addEventListener('click', (e) => {
-  const it = e.target.closest('.pm-it');
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && !petMenu.classList.contains('hidden')) {
+    e.preventDefault();
+    setMenuOpen(false, true);
+  }
+});
+
+petMenuClose.addEventListener('click', (e) => {
+  e.stopPropagation();
+  setMenuOpen(false, true);
+});
+
+petMenu.addEventListener('click', async (e) => {
+  const it = e.target.closest('[data-pet]');
   if (!it) return;
-  petMenu.classList.add('hidden');
+  setMenuOpen(false, false);
   const map = {
     new: '新建任务',
-    ai: 'AI 对话',
+    ai: '工作台助手',
     today: '今日视图',
     board: '看板',
     cal: '日历',
@@ -181,40 +220,60 @@ petMenu.addEventListener('click', (e) => {
     trash: '回收站',
     settings: '设置'
   };
-  showBubble(`已唤起「${map[it.dataset.pet]}」`, false);
+  showBubble(`正在打开「${map[it.dataset.pet]}」`, false, 1800);
   // 联动主窗口：唤起对应视图
-  const viewMap = { new: 'tasks', ai: 'ai', today: 'today', board: 'board', cal: 'cal', stat: 'stat', trash: 'trash', settings: 'settings' };
-  window.api.pet.openView(viewMap[it.dataset.pet] || 'today');
+  const viewMap = { new: 'new', ai: 'ai', today: 'today', board: 'board', cal: 'cal', stat: 'stat', trash: 'trash', settings: 'settings' };
+  try {
+    await window.api.pet.openView(viewMap[it.dataset.pet] || 'today');
+  } catch (error) {
+    showBubble('主窗口暂时没有打开，请再试一次', true, 3000);
+  }
 });
 
 /* ---------- 右键菜单 ---------- */
 petEl.addEventListener('contextmenu', (e) => {
   e.preventDefault();
   e.stopPropagation();
-  petMenu.classList.add('hidden');
+  setMenuOpen(false, false);
   // 通过主进程显示原生菜单
   window.api.pet.contextMenu();
 });
 
 /* ---------- 状态刷新 ---------- */
-async function refreshStatus() {
+function renderStatus() {
+  petMenuCount.textContent = `${statusSnapshot.todo} 项待办`;
+  if (statusSnapshot.overdue) {
+    petMenuNext.textContent = `逾期 ${statusSnapshot.overdue} 项 · 优先处理 ${statusSnapshot.next ? statusSnapshot.next.title : ''}`;
+  } else if (statusSnapshot.next) {
+    petMenuNext.textContent = `下一项 · ${statusSnapshot.next.title}${statusSnapshot.next.due ? ' · ' + statusSnapshot.next.due : ''}`;
+  } else if (statusSnapshot.todo) {
+    petMenuNext.textContent = '当前待办还没有设置截止时间';
+  } else {
+    petMenuNext.textContent = '当前没有待办任务';
+  }
+}
+
+async function refreshStatus(announce) {
   try {
     const tasks = await window.api.tasks.getAll();
     const active = tasks.filter((t) => t.status !== 'done' && t.status !== 'archived');
-    const todo = active.length;
-    // 下一项：最近到期且未过期的任务
     const now = new Date();
+    const overdue = active
+      .filter((t) => t.due && new Date(t.due.replace(' ', 'T') + ':00') < now)
+      .sort((a, b) => a.due.localeCompare(b.due));
     const upcoming = active
       .filter((t) => t.due && new Date(t.due.replace(' ', 'T') + ':00') >= now)
       .sort((a, b) => a.due.localeCompare(b.due));
-    const next = upcoming[0];
-    if (next) {
-      showBubble(`今日待办 ${todo} 项 · 下一项 ${next.title}`, false, 5000);
-    } else {
-      showBubble(`今日待办 ${todo} 项`, false, 4000);
+    statusSnapshot = { todo: active.length, overdue: overdue.length, next: overdue[0] || upcoming[0] || null };
+    renderStatus();
+    if (announce) {
+      const detail = statusSnapshot.next ? ` · ${statusSnapshot.overdue ? '先处理' : '下一项'} ${statusSnapshot.next.title}` : '';
+      showBubble(`${statusSnapshot.todo} 项待办${detail}`, statusSnapshot.overdue > 0, 4000);
     }
   } catch (e) {
-    showBubble('工作台助手', false);
+    petMenuCount.textContent = '暂时无法同步';
+    petMenuNext.textContent = '打开工作台后可查看最新任务';
+    if (announce) showBubble('暂时无法同步任务', true, 3000);
   }
 }
 
@@ -227,7 +286,7 @@ if (window.api && typeof window.api.on === 'function') {
 (async function init() {
   playSprite('idle');
   startIdle();
-  await refreshStatus();
-  // 每分钟刷新待办数
-  setInterval(refreshStatus, 60000);
+  await refreshStatus(true);
+  // 每分钟静默刷新菜单状态，不主动打断用户。
+  setInterval(() => refreshStatus(false), 60000);
 })();

@@ -10,20 +10,32 @@
   <div class="pet-stage" id="pet-stage">
     <!-- 气泡 -->
     <div class="pet-bubble hidden" id="pet-bubble"></div>
-    <!-- 快捷菜单 -->
-    <div class="pet-menu hidden" id="pet-menu">
-      <div class="pm-it" data-pet="new">＋ 新建任务</div>
-      <div class="pm-it" data-pet="ai">✎ AI 对话</div>
-      <div class="pm-it" data-pet="today">◧ 今日视图</div>
-      <div class="pm-it" data-pet="board">▤ 看板</div>
-      <div class="pm-it" data-pet="cal">▦ 日历</div>
-      <div class="pm-it" data-pet="stat">▦ 统计</div>
-      <div class="pm-it" data-pet="trash">🗑 回收站</div>
-      <div class="pm-it" data-pet="settings">⚙ 设置</div>
-    </div>
+    <!-- 点击后弹出的任务遥控器 -->
+    <section class="pet-menu hidden" id="pet-menu" role="dialog" aria-labelledby="pet-menu-title" aria-hidden="true">
+      <div class="pm-head">
+        <div>
+          <span class="pm-kicker" id="pet-menu-title">工作台</span>
+          <strong class="pm-count" id="pet-menu-count">正在读取</strong>
+        </div>
+        <button type="button" class="pm-close" id="pet-menu-close" aria-label="关闭快捷操作" title="关闭">×</button>
+      </div>
+      <p class="pm-next" id="pet-menu-next">正在同步下一项任务…</p>
+      <div class="pm-primary" role="group" aria-label="主要操作">
+        <button type="button" class="pm-main" data-pet="new"><span aria-hidden="true">＋</span><span>新建任务</span></button>
+        <button type="button" class="pm-main secondary" data-pet="ai"><span aria-hidden="true">✎</span><span>问助手</span></button>
+      </div>
+      <div class="pm-grid" role="group" aria-label="打开视图">
+        <button type="button" class="pm-it" data-pet="today"><span aria-hidden="true">◧</span><span>今天</span></button>
+        <button type="button" class="pm-it" data-pet="board"><span aria-hidden="true">▤</span><span>看板</span></button>
+        <button type="button" class="pm-it" data-pet="cal"><span aria-hidden="true">▦</span><span>日历</span></button>
+        <button type="button" class="pm-it" data-pet="stat"><span aria-hidden="true">◫</span><span>统计</span></button>
+        <button type="button" class="pm-it" data-pet="trash"><span aria-hidden="true">⌫</span><span>回收站</span></button>
+        <button type="button" class="pm-it" data-pet="settings"><span aria-hidden="true">⚙</span><span>设置</span></button>
+      </div>
+    </section>
     <!-- 桌宠本体（deepseek酱 鲸鱼娘 sprite 帧动画） -->
     <div class="pet-wrap" id="pet-wrap">
-      <div class="pet" id="pet">
+      <div class="pet" id="pet" role="button" tabindex="0" aria-label="打开桌宠快捷操作" aria-expanded="false" aria-controls="pet-menu">
         <div class="pet-sprite-frame">
           <div class="pet-sprite" id="pet-sprite"></div>
         </div>

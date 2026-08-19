@@ -1443,6 +1443,23 @@ async function unarchiveEditingTask() {
 }
 
 /* ---------- AI 对话 ---------- */
+async function copyMessageText(button, body) {
+  try {
+    await navigator.clipboard.writeText(body.textContent || '');
+    const previous = button.textContent;
+    button.textContent = '✓';
+    button.classList.add('copied');
+    button.title = '已复制';
+    setTimeout(() => {
+      button.textContent = previous;
+      button.classList.remove('copied');
+      button.title = '复制消息';
+    }, 1200);
+  } catch (e) {
+    toast(`复制失败：${esc(e.message)}`, 4000, null, 'err');
+  }
+}
+
 function createMessage(role, text, ts) {
   const el = document.createElement('div');
   el.className = `msg ${role}`;
@@ -1452,7 +1469,17 @@ function createMessage(role, text, ts) {
   const meta = document.createElement('span');
   meta.className = 'mt';
   meta.textContent = new Date(ts || Date.now()).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
-  el.append(body, meta);
+  const copy = document.createElement('button');
+  copy.type = 'button';
+  copy.className = 'msg-copy';
+  copy.textContent = '⧉';
+  copy.title = '复制消息';
+  copy.setAttribute('aria-label', '复制消息');
+  copy.addEventListener('click', () => copyMessageText(copy, body));
+  const footer = document.createElement('span');
+  footer.className = 'msg-footer';
+  footer.append(meta, copy);
+  el.append(body, footer);
   return el;
 }
 

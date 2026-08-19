@@ -42,6 +42,23 @@ function createMainWindow() {
 
   mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));
 
+  mainWindow.webContents.on('context-menu', (event, params) => {
+    const template = params.isEditable
+      ? [
+          { label: '撤销', role: 'undo' },
+          { type: 'separator' },
+          { label: '剪切', role: 'cut' },
+          { label: '复制', role: 'copy' },
+          { label: '粘贴', role: 'paste' },
+          { type: 'separator' },
+          { label: '全选', role: 'selectAll' }
+        ]
+      : params.selectionText
+        ? [{ label: '复制', role: 'copy' }, { label: '全选', role: 'selectAll' }]
+        : [];
+    if (template.length) Menu.buildFromTemplate(template).popup({ window: mainWindow });
+  });
+
   mainWindow.once('ready-to-show', () => {
     mainWindow.show();
   });
@@ -342,7 +359,9 @@ function registerIpc() {
   // 桌宠菜单唤起主窗口视图
   ipcMain.handle('pet:openView', (e, view) => {
     showMainWindow();
-    if (view === 'ai') {
+    if (view === 'new') {
+      if (mainWindow) mainWindow.webContents.send('app:new-task');
+    } else if (view === 'ai') {
       // AI 对话：展开 AI 面板并聚焦输入框
       if (mainWindow) mainWindow.webContents.send('app:focus-ai');
     } else if (mainWindow) {

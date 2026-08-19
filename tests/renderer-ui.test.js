@@ -12,6 +12,9 @@ const app = fs.readFileSync(path.join(ROOT, 'src/renderer/js/app.js'), 'utf8');
 const css = fs.readFileSync(path.join(ROOT, 'src/renderer/css/app.css'), 'utf8');
 const main = fs.readFileSync(path.join(ROOT, 'src/main.js'), 'utf8');
 const preload = fs.readFileSync(path.join(ROOT, 'src/preload.js'), 'utf8');
+const petHtml = fs.readFileSync(path.join(ROOT, 'src/renderer/pet/pet.html'), 'utf8');
+const petApp = fs.readFileSync(path.join(ROOT, 'src/renderer/pet/pet.js'), 'utf8');
+const petCss = fs.readFileSync(path.join(ROOT, 'src/renderer/pet/pet.css'), 'utf8');
 
 function cssVar(block, name) {
   const match = block.match(new RegExp(`--${name}:\\s*(#[0-9A-Fa-f]{6})`));
@@ -41,7 +44,7 @@ function loadRendererRuntime(elements) {
     Map,
     Math,
     JSON,
-    setTimeout,
+    setTimeout: elements.__setTimeout || setTimeout,
     clearTimeout,
     document: {
       querySelector: (selector) => elements[selector] || null,
@@ -50,7 +53,8 @@ function loadRendererRuntime(elements) {
       addEventListener: () => {}
     },
     window: {},
-    navigator: {}
+    navigator: elements.__navigator || {},
+    testValues: elements.__testValues || {}
   });
   vm.runInContext(app, context);
   return (source) => vm.runInContext(source, context);
@@ -70,6 +74,56 @@ function fakeClassList(initial) {
     },
     contains: (name) => values.has(name)
   };
+}
+
+function fakePetElement(initial) {
+  const attrs = {};
+  const listeners = {};
+  return {
+    attrs,
+    listeners,
+    classList: fakeClassList(initial),
+    style: { setProperty() {} },
+    textContent: '',
+    focused: false,
+    offsetWidth: 160,
+    addEventListener(name, listener) { listeners[name] = listener; },
+    setAttribute(name, value) { attrs[name] = value; },
+    focus() { this.focused = true; },
+    closest() { return null; },
+    querySelector() { return null; }
+  };
+}
+
+function loadPetRuntime(elements, tasks) {
+  const documentListeners = {};
+  const context = vm.createContext({
+    console,
+    Date,
+    Math,
+    setTimeout: (callback) => { callback(); return 1; },
+    clearTimeout: () => {},
+    setInterval: () => 1,
+    clearInterval: () => {},
+    document: {
+      getElementById: (id) => elements[id],
+      addEventListener: (name, listener) => { documentListeners[name] = listener; }
+    },
+    window: {
+      api: {
+        tasks: { getAll: async () => tasks || [] },
+        pet: {
+          setPosition: async () => ({ ok: true }),
+          snapToEdge: async () => ({ ok: true }),
+          openView: async () => ({ ok: true }),
+          contextMenu: async () => ({ ok: true })
+        },
+        on: () => () => {}
+      }
+    }
+  });
+  vm.runInContext(petApp, context);
+  return { run: (source) => vm.runInContext(source, context), documentListeners };
 }
 
 test('主导航和任务工具栏使用可聚焦控件', () => {
@@ -310,6 +364,74 @@ test('助手歧义选择走结构化解析，并提供上下文下一步', () =>
     run(`candidateLabel({ title: '季度方案', project: 'Q3', due: '2026-08-20 18:00', status: 'doing' })`),
     '季度方案 · ◈ Q3 · 2026-08-20 18:00 · 进行中'
   );
+});
+
+test('对话消息支持选择、按钮复制和原生右键复制', async () => {
+  assert.match(css, /\.msg-text \{[^}]*user-select: text;[^}]*-webkit-user-select: text;/);
+  assert.match(app, /copy\.className = 'msg-copy'/);
+  assert.match(app, /copy\.setAttribute\('aria-label', '复制消息'\)/);
+  assert.match(main, /mainWindow\.webContents\.on\('context-menu'/);
+  assert.match(main, /params\.selectionText[\s\S]*?\{ label: '复制', role: 'copy' \}/);
+
+  let copied = '';
+  const button = {
+    textContent: '⧉',
+    title: '复制消息',
+    classList: fakeClassList()
+  };
+  const run = loadRendererRuntime({
+    __navigator: { clipboard: { writeText: async (text) => { copied = text; } } },
+    __setTimeout: () => 1,
+    __testValues: { button, body: { textContent: '可复制的助手回复' } }
+  });
+  await run('copyMessageText(testValues.button, testValues.body)');
+  assert.strictEqual(copied, '可复制的助手回复');
+  assert.strictEqual(button.textContent, '✓');
+  assert.strictEqual(button.title, '已复制');
+  assert.strictEqual(button.classList.contains('copied'), true);
+});
+
+test('桌宠点击弹窗展示任务摘要、快捷操作并与提醒气泡互斥', async () => {
+  assert.match(petHtml, /id="pet-menu" role="dialog"[^>]+aria-hidden="true"/);
+  assert.match(petHtml, /class="pm-primary"[\s\S]*?data-pet="new"[\s\S]*?data-pet="ai"/);
+  assert.strictEqual((petHtml.match(/class="pm-it" data-pet=/g) || []).length, 6);
+  assert.match(petHtml, /id="pet" role="button" tabindex="0"[^>]+aria-expanded="false"/);
+  assert.match(petCss, /\.pm-grid \{[\s\S]*?grid-template-columns: repeat\(3, minmax\(0, 1fr\)\)/);
+  assert.match(petCss, /@media \(prefers-reduced-motion: reduce\)/);
+  assert.match(main, /if \(view === 'new'\) \{\s*if \(mainWindow\) mainWindow\.webContents\.send\('app:new-task'\)/);
+
+  const elements = {
+    pet: fakePetElement(),
+    'pet-wrap': fakePetElement(),
+    'pet-bubble': fakePetElement(['hidden']),
+    'pet-menu': fakePetElement(['hidden']),
+    'pet-menu-close': fakePetElement(),
+    'pet-menu-count': fakePetElement(),
+    'pet-menu-next': fakePetElement(),
+    'pet-sprite': fakePetElement()
+  };
+  const firstAction = fakePetElement();
+  elements['pet-menu'].querySelector = () => firstAction;
+  const { run } = loadPetRuntime(elements, []);
+  await Promise.resolve();
+
+  run(`statusSnapshot = {
+    todo: 3,
+    overdue: 1,
+    next: { title: '提交周报', due: '2026-08-19 18:00' }
+  }; renderStatus(); setMenuOpen(true, false);`);
+  assert.strictEqual(elements['pet-menu-count'].textContent, '3 项待办');
+  assert.match(elements['pet-menu-next'].textContent, /逾期 1 项.*提交周报/);
+  assert.strictEqual(elements['pet-menu'].classList.contains('hidden'), false);
+  assert.strictEqual(elements.pet.attrs['aria-expanded'], 'true');
+  assert.strictEqual(firstAction.focused, true);
+
+  run(`showBubble('截止时间到了', true, 3000)`);
+  assert.strictEqual(elements['pet-menu'].classList.contains('hidden'), true);
+  assert.strictEqual(elements['pet-bubble'].classList.contains('hidden'), true);
+
+  elements.pet.listeners.keydown({ key: 'Enter', preventDefault() {} });
+  assert.strictEqual(elements['pet-menu'].classList.contains('hidden'), false);
 });
 
 test('主题和 AI 引擎分段控件暴露并同步选中状态', () => {
