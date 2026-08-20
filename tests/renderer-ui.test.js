@@ -53,7 +53,7 @@ function loadRendererRuntime(elements) {
       createElement: (tag) => elements.__createElement ? elements.__createElement(tag) : null,
       addEventListener: () => {}
     },
-    window: {},
+    window: elements.__window || {},
     navigator: elements.__navigator || {},
     testValues: elements.__testValues || {}
   });
@@ -150,7 +150,7 @@ test('高频任务操作和设置开关暴露键盘与状态语义', () => {
   assert.match(html, /<button type="button" class="chip" data-prompt=/);
   assert.match(app, /<button type="button" class="fchip [^`]+aria-pressed=/);
   assert.match(app, /<button type="button" class="bc-card"[^>]+aria-label=/);
-  assert.match(app, /<button type="button" class="\$\{cls\}" data-day=[^>]+aria-pressed=/);
+  assert.match(app, /<button type="button" role="gridcell" class="\$\{cls\}" data-day=[^>]+aria-selected=/);
   assert.match(css, /\.ra \{\s*width: 28px; height: 28px; flex: 0 0 28px;/);
 });
 
@@ -272,6 +272,7 @@ test('通知中的撤销操作可聚焦并防止重复执行', () => {
   assert.match(app, /await a\.run\(\);\s*el\.remove\(\)/);
   assert.match(app, /text\.textContent = String\(message == null \? '' : message\)/);
   assert.match(app, /icon\.setAttribute\('aria-hidden', 'true'\)/);
+  assert.match(app, /layer\.appendChild\(el\);\s*while \(layer\.children\.length > 3\) layer\.firstElementChild\.remove\(\)/);
   assert.doesNotMatch(app.slice(app.indexOf('function toast('), app.indexOf("if (typeof window.addEventListener")), /innerHTML/);
   assert.match(css, /\.toast \.t-undo:focus-visible/);
   assert.match(css, /max-width: calc\(100vw - 32px\)/);
@@ -286,7 +287,7 @@ test('无独立错误面板的异步操作不会静默失败', () => {
 });
 
 test('所有界面完成入口复用重复任务完成语义', () => {
-  assert.match(app, /if \(col\.dataset\.col === 'done'\) \{\s*await toggleDone\(t\)/);
+  assert.match(app, /if \(targetStatus === 'done'\) \{\s*await toggleDone\(task\)/);
   assert.match(app, /if \(next === 'done'\) await toggleDone\(t\)/);
   assert.match(app, /if \(t\.status === 'done'\) \{\s*await window\.api\.tasks\.update\(t\.id, \{ status: 'todo' \}\)/);
 });
@@ -695,6 +696,41 @@ test('分段控件支持方向键移动并维持单一 Tab 停靠点', () => {
   assert.deepStrictEqual(radios.map((radio) => radio.tabIndex), [-1, 0, -1]);
 });
 
+test('任务筛选使用单一 Tab 停靠点并支持方向键切换', () => {
+  let buttons;
+  const makeButton = (pressed, hidden = false) => {
+    const attrs = { 'aria-pressed': String(pressed) };
+    const listeners = {};
+    return {
+      attrs,
+      listeners,
+      disabled: false,
+      tabIndex: null,
+      focused: false,
+      getAttribute(name) { return attrs[name]; },
+      addEventListener(name, listener) { listeners[name] = listener; },
+      closest(selector) { return selector === '.hidden' && hidden ? {} : null; },
+      focus() { this.focused = true; },
+      click() {
+        buttons.forEach((button) => { button.attrs['aria-pressed'] = 'false'; });
+        attrs['aria-pressed'] = 'true';
+        listeners.click();
+      }
+    };
+  };
+  buttons = [makeButton(true), makeButton(false), makeButton(false), makeButton(true, true)];
+  const group = { querySelectorAll: () => buttons };
+  const run = loadRendererRuntime({ __testValues: { group } });
+  run(`bindPressedGroupKeyboard(testValues.group, '.fchip[data-filter]')`);
+  assert.deepStrictEqual(buttons.slice(0, 3).map((button) => button.tabIndex), [0, -1, -1]);
+
+  let prevented = false;
+  buttons[0].listeners.keydown({ key: 'ArrowRight', preventDefault() { prevented = true; } });
+  assert.strictEqual(prevented, true);
+  assert.strictEqual(buttons[1].focused, true);
+  assert.deepStrictEqual(buttons.slice(0, 3).map((button) => button.tabIndex), [-1, 0, -1]);
+});
+
 test('无历史对话时助手直接汇报工作状态', () => {
   assert.match(app, /const overdue = active\.filter/);
   assert.match(app, /当前有 \$\{overdue\.length\} 项逾期任务/);
@@ -772,10 +808,79 @@ test('统计与周报提供准确图表语义、空状态和完整操作反馈',
 test('看板和日历的交互卡片保持有效的按钮闭合结构', () => {
   const boardSource = app.slice(app.indexOf('function renderBoard()'), app.indexOf('/* ---------- 视图：日历 ---------- */'));
   const calendarSource = app.slice(app.indexOf('function renderCal()'), app.indexOf('/* ---------- 视图：统计 ---------- */'));
-  assert.match(boardSource, /<div class="bc-card-item" role="listitem">[\s\S]*?<button type="button" class="bc-card"[\s\S]*?<\/button>\s*<\/div>`\)\.join/);
+  assert.match(boardSource, /<div class="bc-card-item" role="listitem">[\s\S]*?<button type="button" class="bc-card"[\s\S]*?<\/button>[\s\S]*?class="bc-status"[\s\S]*?<\/div>`\)\.join/);
   assert.doesNotMatch(boardSource, /<button type="button" class="bc-card"[\s\S]*?<\/button>\s*<\/button>/);
   assert.match(calendarSource, /\$\{dots \? `<span class="cal-dots">\$\{dots\}<\/span>` : ''\}\s*<\/button>`;/);
   assert.doesNotMatch(calendarSource, /\$\{dots \? `<span class="cal-dots">\$\{dots\}<\/span>` : ''\}\s*<\/div>`;/);
+  assert.match(calendarSource, /class="cal-grid" role="grid" aria-label="\$\{y\}年\$\{m \+ 1\}月日历/);
+  assert.match(calendarSource, /role="columnheader"/);
+  assert.match(calendarSource, /aria-current="date"/);
+});
+
+test('看板状态菜单提供非拖拽路径并在重绘后恢复焦点', async () => {
+  const boardAttrs = {};
+  const triggerAttrs = {};
+  const updates = [];
+  const board = { setAttribute(name, value) { boardAttrs[name] = value; } };
+  const nextTrigger = { focused: false, focus() { this.focused = true; } };
+  const trigger = {
+    value: 'doing',
+    disabled: false,
+    setAttribute(name, value) { triggerAttrs[name] = value; }
+  };
+  const run = loadRendererRuntime({
+    '#board-cols': board,
+    '#board-cols [data-board-status][data-id="1"]': nextTrigger,
+    __window: { api: { tasks: { update: async (id, data) => { updates.push({ id, data }); } } } },
+    __testValues: { trigger }
+  });
+  run(`tasks = [{ id: 1, title: '整理周报', status: 'todo' }]; refreshTasksAfterMutation = async () => {}; toast = () => {}`);
+  assert.strictEqual(await run(`moveBoardTask(1, 'doing', testValues.trigger)`), true);
+  assert.strictEqual(JSON.stringify(updates), JSON.stringify([{ id: 1, data: { status: 'doing' } }]));
+  assert.strictEqual(boardAttrs['aria-busy'], 'false');
+  assert.strictEqual(triggerAttrs['aria-busy'], 'false');
+  assert.strictEqual(trigger.disabled, false);
+  assert.strictEqual(nextTrigger.focused, true);
+
+  const boardSource = app.slice(app.indexOf('function renderBoard()'), app.indexOf('/* ---------- 视图：日历 ---------- */'));
+  assert.match(boardSource, /data-board-status data-id="\$\{t\.id\}" aria-label="移动任务/);
+  assert.strictEqual((boardSource.match(/<option value="\$\{target\.k\}"/g) || []).length, 1);
+  assert.match(app, /#board-cols'\)\.addEventListener\('change'/);
+  assert.match(css, /\.bc-card-item:focus-within/);
+  assert.match(css, /\.bc-status \{/);
+});
+
+test('日历使用单一 Tab 停靠点并支持二维方向键浏览', () => {
+  let cells;
+  const grid = {
+    querySelectorAll() { return cells; }
+  };
+  const makeCell = (key, tabIndex) => ({
+    dataset: { day: key },
+    tabIndex,
+    focused: false,
+    focus() { this.focused = true; },
+    closest(selector) {
+      if (selector === '.cal-cell[data-day]') return this;
+      if (selector === '.cal-grid') return grid;
+      return null;
+    }
+  });
+  cells = Array.from({ length: 14 }, (_, index) => makeCell(`2026-08-${String(index + 2).padStart(2, '0')}`, index === 0 ? 0 : -1));
+  let prevented = false;
+  const event = { target: cells[0], key: 'ArrowRight', preventDefault() { prevented = true; } };
+  const run = loadRendererRuntime({ '#cal-body .cal-grid': grid, __testValues: { event, cells } });
+  run('onCalKeyDown(testValues.event)');
+  assert.strictEqual(prevented, true);
+  assert.strictEqual(cells[1].focused, true);
+  assert.deepStrictEqual(cells.map((cell) => cell.tabIndex), [-1, 0, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1]);
+
+  run(`testValues.event.target = testValues.cells[9]; testValues.event.key = 'Home'; onCalKeyDown(testValues.event)`);
+  assert.strictEqual(cells[7].focused, true);
+  assert.strictEqual(cells.filter((cell) => cell.tabIndex === 0).length, 1);
+  assert.strictEqual(run(`shiftCalendarKey('2026-03-31', 0, -1)`), '2026-02-28');
+  assert.strictEqual(run(`shiftCalendarKey('2026-08-20', 7, 0)`), '2026-08-27');
+  assert.match(app, /#cal-body'\)\.addEventListener\('keydown', onCalKeyDown\)/);
 });
 
 test('任务搜索、今日空态、看板与日历形成完整且一致的工作流', () => {
@@ -819,6 +924,7 @@ test('任务搜索、今日空态、看板与日历形成完整且一致的工�
   assert.match(app, /id="today-empty-all">查看所有任务/);
   assert.match(app, /id="today-empty-new">新建任务/);
   assert.strictEqual((app.match(/#cal-body'\)\.addEventListener\('click', onCalClick\)/g) || []).length, 1);
+  assert.strictEqual((app.match(/#cal-body'\)\.addEventListener\('keydown', onCalKeyDown\)/g) || []).length, 1);
   assert.match(app, /class="cal-title" aria-live="polite"/);
   assert.match(app, /class="cal-dot \$\{dotCls\}" aria-hidden="true"/);
 });
@@ -843,6 +949,28 @@ test('任务筛选保留核心状态并将项目标签收进可记忆的更多�
   assert.match(app, /advancedFiltersOpen = !advancedFiltersOpen;\s*renderSmartFilters\(\);\s*\$\('#smart-more'\)\.focus\(\)/);
   assert.match(app, /#smart-filters \.fchip\[data-filter\]/);
   assert.match(css, /\.smart-advanced \{[^}]*border-left: 2px solid/);
+});
+
+test('设置页提供章节导航并将焦点送到真实内容分组', () => {
+  assert.match(app, /class="settings-nav" aria-label="设置章节"/);
+  assert.match(app, /data-settings-target="settings-general">数据<\/button>/);
+  assert.match(app, /id="settings-assistant" tabindex="-1" aria-labelledby="settings-assistant-title"/);
+  assert.match(app, /id="settings-shortcuts" tabindex="-1" aria-labelledby="settings-shortcuts-title"/);
+  assert.match(app, /id="settings-danger" tabindex="-1" aria-labelledby="settings-danger-title"/);
+  assert.match(css, /\.settings-nav \{[^}]*position: sticky;[^}]*overflow-x: auto;/);
+  assert.match(css, /\.set-group \{[^}]*scroll-margin-top: 52px;/);
+
+  const target = {
+    scrollOptions: null,
+    focusOptions: null,
+    scrollIntoView(options) { this.scrollOptions = options; },
+    focus(options) { this.focusOptions = options; },
+    closest() { return null; }
+  };
+  const run = loadRendererRuntime({ '#settings-shortcuts': target });
+  assert.strictEqual(run(`focusSettingsSection('settings-shortcuts')`), true);
+  assert.strictEqual(target.scrollOptions.block, 'start');
+  assert.strictEqual(target.focusOptions.preventScroll, true);
 });
 
 test('响应式宽度不会覆盖助手折叠态', () => {
@@ -962,12 +1090,40 @@ test('备忘录工作区具备可访问导航、编辑与完整 IPC', () => {
   assert.match(html, /class="nav-item" data-view="memos"/);
   assert.match(html, /id="view-memos"/);
   assert.match(html, /id="memo-list" role="listbox"/);
+  assert.match(app, /role="option" tabindex="\$\{memo\.id === focusId \? 0 : -1\}" aria-selected=/);
   assert.match(html, /id="memo-content"[^>]+aria-label="备忘录正文"/);
   assert.match(html, /id="memo-pin"[^>]+aria-pressed="false"/);
   assert.match(main, /ipcMain\.handle\('memos:create'/);
   assert.match(main, /ipcMain\.handle\('memos:emptyTrash'/);
   assert.match(preload, /memos:\s*\{/);
   assert.match(preload, /update: \(id, patch\) => ipcRenderer\.invoke\('memos:update', id, patch\)/);
+});
+
+test('备忘录列表使用单一 Tab 停靠点并支持方向键选择', async () => {
+  let items;
+  const list = { querySelectorAll: () => items };
+  const makeItem = (id) => ({
+    dataset: { memoId: String(id) },
+    closest(selector) {
+      if (selector === '[data-memo-id]') return this;
+      if (selector === '#memo-list') return list;
+      return null;
+    }
+  });
+  items = [makeItem(1), makeItem(2), makeItem(3)];
+  const selected = [];
+  let prevented = false;
+  const event = { target: items[0], key: 'ArrowDown', preventDefault() { prevented = true; } };
+  const run = loadRendererRuntime({ __testValues: { event, selected, items } });
+  run(`selectMemo = async (id, restoreFocus) => { testValues.selected.push([id, restoreFocus]); return true; }`);
+  await run('onMemoListKeyDown(testValues.event)');
+  assert.strictEqual(prevented, true);
+  assert.strictEqual(JSON.stringify(selected), JSON.stringify([[2, true]]));
+
+  await run(`testValues.event.target = testValues.items[2]; testValues.event.key = 'Home'; onMemoListKeyDown(testValues.event)`);
+  assert.strictEqual(JSON.stringify(selected), JSON.stringify([[2, true], [1, true]]));
+  assert.match(app, /#memo-list'\)\.addEventListener\('keydown', onMemoListKeyDown\)/);
+  assert.match(app, /#memo-search'\)\.addEventListener\('keydown'[\s\S]*?event\.key !== 'ArrowDown'/);
 });
 
 test('备忘录操作栏使用统一工具按钮并提供即时状态反馈', () => {
@@ -1016,4 +1172,6 @@ test('备忘录列表在运行时支持置顶排序展示和标签解析', () =>
   assert.match(sub.textContent, /2 条 · 含置顶/);
   assert.ok(list.innerHTML.indexOf('重点记录') < list.innerHTML.indexOf('普通记录'));
   assert.match(list.innerHTML, /memo-list-item active pinned/);
+  assert.strictEqual((list.innerHTML.match(/tabindex="0"/g) || []).length, 1);
+  assert.strictEqual((list.innerHTML.match(/tabindex="-1"/g) || []).length, 1);
 });

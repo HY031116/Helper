@@ -196,10 +196,11 @@ html, body {
 
 /* 主内容 */
 .content {
+  --content-pad-y: 22px;
   flex: 1;
   min-width: 0;
   overflow-y: auto;
-  padding: 22px 26px;
+  padding: var(--content-pad-y) 26px;
   background: var(--bg);
   container-type: inline-size;
 }
@@ -810,7 +811,14 @@ mark { background: rgba(var(--warn-rgb), 0.25); color: inherit; border-radius: 2
 }
 .bc-cards { padding: 6px 8px; overflow-y: auto; flex: 1; display: flex; flex-direction: column; gap: 7px; }
 .bc-cards.is-empty { align-items: center; justify-content: center; min-height: 160px; }
-.bc-card-item { width: 100%; }
+.bc-card-item {
+  width: 100%; overflow: hidden;
+  border: 1px solid var(--rule); border-radius: 8px; background: var(--bg2);
+  box-shadow: var(--shadow-sm); transition: border-color var(--dur) var(--ease), box-shadow var(--dur) var(--ease), opacity var(--dur) var(--ease);
+}
+.bc-card-item:hover,
+.bc-card-item:focus-within { border-color: rgba(var(--accent-rgb), 0.3); box-shadow: var(--shadow); }
+.bc-card-item.dragging { opacity: 0.5; }
 .board-empty {
   display: grid;
   justify-items: center;
@@ -822,19 +830,27 @@ mark { background: rgba(var(--warn-rgb), 0.25); color: inherit; border-radius: 2
 }
 .bc-card {
   width: 100%;
-  background: var(--bg2); border: 1px solid var(--rule); border-radius: 8px;
+  background: transparent; border: 0; border-radius: 0;
   padding: 9px 11px; font-size: 12.5px; cursor: grab;
-  box-shadow: var(--shadow-sm); transition: all var(--dur) var(--ease);
+  box-shadow: none; transition: background var(--dur) var(--ease);
   color: var(--ink); font-family: var(--font-ui); text-align: left;
 }
-.bc-card:hover { box-shadow: var(--shadow); border-color: rgba(var(--accent-rgb), 0.3); }
-.bc-card.dragging { opacity: 0.5; }
+.bc-card:hover { background: rgba(var(--accent-rgb), 0.035); }
 .bc-card .cb { display: flex; align-items: flex-start; justify-content: space-between; gap: 6px; margin-bottom: 4px; }
 .bc-card .cb .nm { font-weight: 600; font-size: 12.5px; }
 .bc-card .pri-dot { flex: 0 0 auto; cursor: inherit; }
 .bc-card .pri-dot:hover { transform: none; }
 .bc-card .cd { display: block; font-size: 11px; color: var(--muted); }
 .bc-card .cd.over { color: var(--danger); }
+.bc-card-foot { display: flex; justify-content: flex-end; padding: 0 7px 6px; }
+.bc-status {
+  min-width: 76px; min-height: 25px; padding: 2px 24px 2px 8px;
+  border: 1px solid transparent; border-radius: 6px;
+  background: var(--bg3); color: var(--muted);
+  font: 600 11px/1 var(--font-ui); cursor: pointer;
+}
+.bc-status:hover { border-color: rgba(var(--accent-rgb), 0.28); color: var(--ink2); }
+.bc-status:disabled { cursor: wait; opacity: 0.62; }
 .col-drop { outline: 2px dashed rgba(var(--accent-rgb), 0.45); outline-offset: -4px; border-radius: 8px; }
 
 /* ============ 日历 ============ */
@@ -867,7 +883,7 @@ mark { background: rgba(var(--warn-rgb), 0.25); color: inherit; border-radius: 2
 .cal-cell .cal-dot.done { background: var(--ok); }
 .cal-cell .cal-num { position: absolute; top: 3px; right: 6px; font-size: 10px; color: var(--muted); }
 .cal-detail { margin-top: 12px; border-top: 1px solid var(--rule); padding-top: 10px; }
-.cal-detail .cd-title { font-size: 13px; font-weight: 700; color: var(--accent); margin-bottom: 8px; }
+.cal-detail .cd-title { margin: 0 0 8px; font-size: 13px; font-weight: 700; color: var(--accent); }
 
 /* ============ 统计 ============ */
 .stat-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin: 0 0 14px; }
@@ -974,10 +990,44 @@ mark { background: rgba(var(--warn-rgb), 0.25); color: inherit; border-radius: 2
 .tag-rank .tr-count { flex: 0 0 30px; font-size: 11.5px; color: var(--muted); }
 
 /* ============ 设置 ============ */
+.settings-nav {
+  position: sticky;
+  top: calc(0px - var(--content-pad-y));
+  z-index: 4;
+  display: flex;
+  gap: 4px;
+  margin-bottom: 12px;
+  padding: 4px 0 8px;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--rule);
+  background: var(--bg);
+  box-shadow: 0 calc(0px - var(--content-pad-y)) 0 var(--bg);
+}
+.settings-nav-item {
+  min-height: 30px;
+  flex: 0 0 auto;
+  padding: 0 10px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: 5px 5px 0 0;
+  background: transparent;
+  color: var(--muted);
+  font: 650 12px/1 var(--font-ui);
+  cursor: pointer;
+  transition: background var(--dur) var(--ease), border-color var(--dur) var(--ease), color var(--dur) var(--ease);
+}
+.settings-nav-item:hover { border-bottom-color: rgba(var(--accent-rgb), 0.35); background: var(--accent-weak); color: var(--ink); }
+.settings-nav-item:focus-visible { border-bottom-color: var(--accent); color: var(--accent); outline: 2px solid var(--accent); outline-offset: -2px; }
+.settings-nav-item.danger:hover,
+.settings-nav-item.danger:focus-visible { border-bottom-color: var(--danger); color: var(--danger); }
 .set-group {
   border: 1px solid var(--rule); border-radius: 8px;
   padding: 0 16px 4px; margin-bottom: 14px; background: var(--bg2);
+  scroll-margin-top: 52px;
 }
+.set-group:focus { outline: none; }
+.set-group:focus-visible { box-shadow: 0 0 0 2px var(--accent-weak), 0 0 0 3px var(--accent); }
+.danger-zone:focus-visible { box-shadow: 0 0 0 2px rgba(var(--danger-rgb), 0.08), 0 0 0 3px var(--danger); }
 .set-group-title {
   margin: 0 -4px;
   padding: 13px 8px 9px;
@@ -1518,7 +1568,7 @@ body.dark .titlebar {
 }
 body.dark .task-row { background: var(--bg2); }
 body.dark .statectl { background: var(--bg2); }
-body.dark .bc-card { background: var(--bg2); }
+body.dark .bc-card-item { background: var(--bg2); }
 body.dark .board-col { background: #171E25; }
 body.dark .cal-cell { background: var(--bg2); }
 body.dark .cal-btn { background: var(--bg2); }
@@ -1572,7 +1622,7 @@ body.dark .memo-tool:focus-visible { background: var(--bg2); }
   .nav-item.active::before { left: -8px; }
   .nav-ico { width: 22px; font-size: 15px; }
   .nav-badge { position: absolute; top: 2px; right: 0; min-width: 15px; padding: 0 4px; font-size: 8.5px; line-height: 15px; }
-  .content { padding: 20px 18px; }
+  .content { --content-pad-y: 20px; padding: var(--content-pad-y) 18px; }
   .ai-panel:not(.collapsed) { width: 288px; flex-basis: 288px; }
 }
 

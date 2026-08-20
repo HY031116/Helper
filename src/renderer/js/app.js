@@ -18,6 +18,7 @@ let editingTask = null; // 正在编辑的任务（null = 新建）
 let calCursor = new Date();
 calCursor.setDate(1);
 let calSelected = null;
+let calFocusDate = null;
 let statInited = false;
 let selectedIds = new Set(); // 批量选择
 let batchMode = false;
@@ -26,6 +27,7 @@ let expandedIds = new Set(); // 展开的子任务
 let trashList = []; // 回收站列表
 let deletedMemos = [];
 let selectedMemoId = null;
+let memoFocusId = null;
 let memoSearch = '';
 let memoSaveTimer = null;
 let memoSaveChain = Promise.resolve();
@@ -151,6 +153,11 @@ function renderStartupError(error) {
 const PRI_NAME = { 4: '紧急', 3: '高', 2: '中', 1: '低' };
 const STATE_NAME = { todo: '待办', doing: '进行中', done: '已完成', archived: '已归档' };
 const STATE_NEXT = { todo: 'doing', doing: 'done', done: 'todo' };
+const BOARD_COLUMNS = [
+  { k: 'todo', name: '待办' },
+  { k: 'doing', name: '进行中' },
+  { k: 'done', name: '已完成' }
+];
 
 function isOverdue(due, status) {
   if (!due || status === 'done' || status === 'archived') return false;
@@ -214,6 +221,7 @@ function toast(message, ms, actions, type) {
     });
   }
   layer.appendChild(el);
+  while (layer.children.length > 3) layer.firstElementChild.remove();
   setTimeout(() => el.remove(), ms || 3000);
 }
 
@@ -317,6 +325,33 @@ function bindRadioGroupKeyboard(group) {
       else nextIndex = (index + 1) % radios.length;
       radios[nextIndex].focus();
       radios[nextIndex].click();
+    });
+  });
+}
+
+function bindPressedGroupKeyboard(group, selector) {
+  if (!group || typeof group.querySelectorAll !== 'function') return;
+  const buttons = Array.from(group.querySelectorAll(selector))
+    .filter((button) => !button.disabled && !button.closest('.hidden'));
+  if (!buttons.length) return;
+  const syncTabStops = () => {
+    const pressed = buttons.find((button) => button.getAttribute('aria-pressed') === 'true') || buttons[0];
+    buttons.forEach((button) => { button.tabIndex = button === pressed ? 0 : -1; });
+  };
+  syncTabStops();
+  buttons.forEach((button, index) => {
+    button.addEventListener('click', syncTabStops);
+    button.addEventListener('keydown', (event) => {
+      const keys = ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'];
+      if (!keys.includes(event.key)) return;
+      event.preventDefault();
+      let nextIndex = index;
+      if (event.key === 'Home') nextIndex = 0;
+      else if (event.key === 'End') nextIndex = buttons.length - 1;
+      else if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') nextIndex = (index - 1 + buttons.length) % buttons.length;
+      else nextIndex = (index + 1) % buttons.length;
+      buttons[nextIndex].focus();
+      buttons[nextIndex].click();
     });
   });
 }
@@ -723,6 +758,7 @@ function renderSmartFilters() {
       if (active) active.focus();
     });
   });
+  bindPressedGroupKeyboard(wrap, '.fchip[data-filter]');
 }
 
 /* ---------- 批量操作栏 ---------- */
@@ -764,11 +800,7 @@ function setBatchMode(enabled, shouldRender = true) {
 
 /* ---------- 视图：看板 ---------- */
 function renderBoard() {
-  const cols = [
-    { k: 'todo', name: '待办' },
-    { k: 'doing', name: '进行中' },
-    { k: 'done', name: '已完成' }
-  ];
+  const cols = BOARD_COLUMNS;
   const boardTasks = tasks.filter((t) => !t._deleted && t.status !== 'archived');
   const grouped = Object.fromEntries(cols.map((col) => [
     col.k,
@@ -790,6 +822,11 @@ function renderBoard() {
               ${t.tags && t.tags.length ? `<span class="cd">${t.tags.map((x) => '#' + esc(x)).join(' ')}</span>` : ''}
               ${t.children && t.children.length ? `<span class="cd">子任务 ${childProgress(t).done}/${t.children.length}</span>` : ''}
             </button>
+            <div class="bc-card-foot">
+              <select class="bc-status" data-board-status data-id="${t.id}" aria-label="移动任务「${esc(t.title)}」到其他状态">
+                ${cols.map((target) => `<option value="${target.k}" ${target.k === t.status ? 'selected' : ''}>${target.name}</option>`).join('')}
+              </select>
+            </div>
           </div>`).join('')}
         ${cards.length ? '' : `<div class="board-empty"><span role="status">暂无${col.name}任务</span>${!boardTasks.length && col.k === 'todo' ? '<button type="button" class="btn mini" id="board-new-task">新建任务</button>' : ''}</div>`}
       </div>
@@ -800,13 +837,88 @@ function renderBoard() {
   $('#board-new-task')?.addEventListener('click', () => openModal(null));
 }
 
+async function moveBoardTask(id, targetStatus, trigger) {
+  const task = tasks.find((item) => item.id === parseInt(id, 10));
+  if (!task || !BOARD_COLUMNS.some((column) => column.k === targetStatus)) return false;
+  if (task.status === targetStatus) return true;
+  const board = $('#board-cols');
+  if (board) board.setAttribute('aria-busy', 'true');
+  if (trigger) {
+    trigger.disabled = true;
+    trigger.setAttribute('aria-busy', 'true');
+  }
+  try {
+    if (targetStatus === 'done') {
+      await toggleDone(task);
+    } else {
+      await window.api.tasks.update(task.id, { status: targetStatus });
+      toast(`「${task.title}」已移至「${STATE_NAME[targetStatus]}」`);
+      await refreshTasksAfterMutation('任务状态已更新，但看板刷新失败');
+    }
+    if (trigger) {
+      const nextTrigger = document.querySelector(`#board-cols [data-board-status][data-id="${task.id}"]`);
+      if (nextTrigger) nextTrigger.focus();
+    }
+    return true;
+  } catch (error) {
+    console.error('[board] task move failed:', error);
+    if (trigger) trigger.value = task.status;
+    toast('移动任务失败，请稍后重试', 3000, null, 'err');
+    return false;
+  } finally {
+    if (board) board.setAttribute('aria-busy', 'false');
+    if (trigger) {
+      trigger.disabled = false;
+      trigger.setAttribute('aria-busy', 'false');
+    }
+  }
+}
+
 /* ---------- 视图：日历 ---------- */
 function calKey(d) {
   const pad = (n) => (n < 10 ? '0' + n : '' + n);
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
+function calendarDateFromKey(key) {
+  const parts = String(key || '').split('-').map(Number);
+  if (parts.length !== 3 || parts.some((part) => !Number.isInteger(part))) return null;
+  const date = new Date(parts[0], parts[1] - 1, parts[2]);
+  return calKey(date) === key ? date : null;
+}
+function shiftCalendarKey(key, dayDelta, monthDelta) {
+  const date = calendarDateFromKey(key);
+  if (!date) return null;
+  if (monthDelta) {
+    const day = date.getDate();
+    const targetMonth = date.getMonth() + monthDelta;
+    const lastDay = new Date(date.getFullYear(), targetMonth + 1, 0).getDate();
+    date.setDate(1);
+    date.setMonth(targetMonth);
+    date.setDate(Math.min(day, lastDay));
+  }
+  if (dayDelta) date.setDate(date.getDate() + dayDelta);
+  return calKey(date);
+}
+function calendarDayLabel(key, taskCount, isCurrentDay, isOtherMonth) {
+  const date = calendarDateFromKey(key);
+  if (!date) return key;
+  const weekday = ['星期日', '星期一', '星期二', '星期三', '星期四', '星期五', '星期六'][date.getDay()];
+  const taskText = taskCount ? `${taskCount} 项任务` : '无任务';
+  return `${date.getFullYear()}年${date.getMonth() + 1}月${date.getDate()}日，${weekday}，${taskText}${isCurrentDay ? '，今天' : ''}${isOtherMonth ? '，非本月' : ''}`;
+}
 function tasksOnDay(key) {
   return tasks.filter((t) => !t._deleted && t.status !== 'archived' && t.due && t.due.slice(0, 10) === key);
+}
+function focusCalendarCell(key) {
+  const grid = $('#cal-body .cal-grid');
+  if (!grid) return false;
+  const cells = Array.from(grid.querySelectorAll('.cal-cell[data-day]'));
+  const target = cells.find((cell) => cell.dataset.day === key);
+  if (!target) return false;
+  cells.forEach((cell) => { cell.tabIndex = cell === target ? 0 : -1; });
+  calFocusDate = key;
+  target.focus();
+  return true;
 }
 function renderCal() {
   const y = calCursor.getFullYear(), m = calCursor.getMonth();
@@ -832,6 +944,12 @@ function renderCal() {
     const dt = new Date(y, m + 1, j);
     cells.push({ key: calKey(dt), day: j, other: true });
   }
+  const cellKeys = new Set(cells.map((cell) => cell.key));
+  const firstMonthKey = calKey(new Date(y, m, 1));
+  const focusKey = cellKeys.has(calFocusDate)
+    ? calFocusDate
+    : cellKeys.has(todayKey) ? todayKey : firstMonthKey;
+  calFocusDate = focusKey;
 
   let html = `<div class="cal-head">
     <div class="cal-nav">
@@ -841,8 +959,8 @@ function renderCal() {
     </div>
     <span class="cal-title" aria-live="polite">${y} 年 ${m + 1} 月</span>
   </div>
-  <div class="cal-grid">
-    ${['日', '一', '二', '三', '四', '五', '六'].map((w) => `<div class="cal-dow">${w}</div>`).join('')}`;
+  <div class="cal-grid" role="grid" aria-label="${y}年${m + 1}月日历，使用方向键浏览日期">
+    ${['日', '一', '二', '三', '四', '五', '六'].map((w) => `<div class="cal-dow" role="columnheader">${w}</div>`).join('')}`;
 
   cells.forEach((c) => {
     const dayTasks = tasksOnDay(c.key);
@@ -851,7 +969,7 @@ function renderCal() {
       const dotCls = t.status === 'done' ? 'done' : (isOverdue(t.due, t.status) ? 'over' : '');
       return `<span class="cal-dot ${dotCls}" aria-hidden="true"></span>`;
     }).join('');
-    html += `<button type="button" class="${cls}" data-day="${c.key}" aria-pressed="${calSelected === c.key}" aria-label="${c.key}，${dayTasks.length} 项任务">
+    html += `<button type="button" role="gridcell" class="${cls}" data-day="${c.key}" tabindex="${c.key === focusKey ? 0 : -1}" aria-selected="${calSelected === c.key}" ${c.key === todayKey ? 'aria-current="date"' : ''} aria-label="${calendarDayLabel(c.key, dayTasks.length, c.key === todayKey, c.other)}">
       <span class="cal-day">${c.day}</span>
       ${dayTasks.length ? `<span class="cal-num">${dayTasks.length}</span>` : ''}
       ${dots ? `<span class="cal-dots">${dots}</span>` : ''}
@@ -861,10 +979,10 @@ function renderCal() {
 
   if (calSelected) {
     const selTasks = tasksOnDay(calSelected);
-    html += `<div class="cal-detail"><div class="cd-title">${calSelected} 的任务（${selTasks.length}）</div>`;
+    html += `<section class="cal-detail" aria-labelledby="cal-detail-title"><h3 class="cd-title" id="cal-detail-title">${calSelected} 的任务（${selTasks.length}）</h3>`;
     html += `<div class="cal-add-row"><button type="button" class="btn mini" id="cal-add-task">＋ 在该天新建任务</button></div>`;
     html += selTasks.length ? selTasks.map(rowHTML).join('') : '<div class="empty compact"><div class="big">◐</div><div class="empty-title">当天没有到期任务</div></div>';
-    html += '</div>';
+    html += '</section>';
   }
 
   $('#cal-body').innerHTML = html;
@@ -1114,8 +1232,14 @@ function renderSettings() {
     { v: 'custom', n: '自定义（OpenAI 兼容）' }
   ];
 
-  let html = `<section class="set-group">
-    <h3 class="set-group-title">常规与数据</h3>
+  let html = `<nav class="settings-nav" aria-label="设置章节">
+    <button type="button" class="settings-nav-item" data-settings-target="settings-general">数据</button>
+    <button type="button" class="settings-nav-item" data-settings-target="settings-assistant">助手</button>
+    <button type="button" class="settings-nav-item" data-settings-target="settings-shortcuts">快捷键</button>
+    <button type="button" class="settings-nav-item danger" data-settings-target="settings-danger">危险操作</button>
+  </nav>
+  <section class="set-group" id="settings-general" tabindex="-1" aria-labelledby="settings-general-title">
+    <h3 class="set-group-title" id="settings-general-title">常规与数据</h3>
     <div class="set-row privacy-row">
       <div><div class="sr-t">本地数据</div><div class="sr-d">任务、备忘录、设置和对话记录保存在本机。使用真实模型时，当前输入、最近 6 轮对话、最多 30 条未归档任务和 20 条备忘录摘要会发送给所选服务商。</div></div>
       <span class="status-badge">本地存储</span>
@@ -1158,8 +1282,8 @@ function renderSettings() {
   </section>
 
   <!-- AI 接入配置 -->
-  <section class="set-group">
-    <h3 class="set-group-title">助手接入</h3>
+  <section class="set-group" id="settings-assistant" tabindex="-1" aria-labelledby="settings-assistant-title">
+    <h3 class="set-group-title" id="settings-assistant-title">助手接入</h3>
     <div class="set-row">
       <div><div class="sr-t">AI 助手引擎</div><div class="sr-d">本地助手无需配置；真实模型负责理解意图，任务操作仍由本地执行</div></div>
       <div class="seg" id="ai-stage-seg" role="radiogroup" aria-label="AI 助手引擎">
@@ -1199,16 +1323,16 @@ function renderSettings() {
     </div>
   </section>
 
-  <section class="set-group">
-    <h3 class="set-group-title">快捷键</h3>
+  <section class="set-group" id="settings-shortcuts" tabindex="-1" aria-labelledby="settings-shortcuts-title">
+    <h3 class="set-group-title" id="settings-shortcuts-title">快捷键</h3>
     <p class="set-group-intro">全局有效。聚焦输入框后，直接按下新的组合键。</p>
     ${shortcutRow('sc-ai', '唤起助手输入框', s.shortcuts && s.shortcuts.ai || 'CommandOrControl+J')}
     ${shortcutRow('sc-newTask', '新建任务', s.shortcuts && s.shortcuts.newTask || 'CommandOrControl+N')}
     ${shortcutRow('sc-today', '打开今日视图', s.shortcuts && s.shortcuts.today || 'CommandOrControl+1')}
     ${shortcutRow('sc-stat', '打开统计视图', s.shortcuts && s.shortcuts.stat || 'CommandOrControl+5')}
   </section>
-  <section class="set-group danger-zone">
-    <h3 class="set-group-title">危险操作</h3>
+  <section class="set-group danger-zone" id="settings-danger" tabindex="-1" aria-labelledby="settings-danger-title">
+    <h3 class="set-group-title" id="settings-danger-title">危险操作</h3>
     <div class="set-row">
       <div><div class="sr-t">重置演示任务</div><div class="sr-d">用初始演示任务替换当前全部任务，备忘录不受影响</div></div>
       <button type="button" class="btn mini danger" id="btn-reset">重置任务</button>
@@ -1221,6 +1345,21 @@ function renderSettings() {
 
   $('#settings-body').innerHTML = html;
   bindSettingsEvents();
+}
+
+function focusSettingsSection(targetId) {
+  const target = document.getElementById(targetId);
+  if (!target) return false;
+  target.scrollIntoView({ block: 'start' });
+  const content = target.closest('.content');
+  const nav = $('#settings-body .settings-nav');
+  if (content && nav) {
+    const gap = 8;
+    const offset = target.getBoundingClientRect().top - nav.getBoundingClientRect().bottom - gap;
+    content.scrollTop += offset;
+  }
+  target.focus({ preventScroll: true });
+  return true;
 }
 
 function bindSettingsEvents() {
@@ -1251,6 +1390,10 @@ function bindSettingsEvents() {
     link.click();
     setTimeout(() => URL.revokeObjectURL(url), 0);
   }
+
+  $$('#settings-body [data-settings-target]').forEach((button) => {
+    button.addEventListener('click', () => focusSettingsSection(button.dataset.settingsTarget));
+  });
 
   $$('#settings-body .switch[data-switch]').forEach((sw) => {
     sw.addEventListener('click', async () => {
@@ -1697,24 +1840,46 @@ function memoDraft() {
   };
 }
 
-function renderMemoList() {
-  const list = $('#memo-list');
-  if (!list) return;
+function visibleMemos() {
   const query = memoSearch.trim().toLowerCase();
-  const visible = memos
+  return memos
     .filter((memo) => {
       if (!query) return true;
       return [memo.title, memo.content, ...(memo.tags || [])].join(' ').toLowerCase().includes(query);
     })
     .sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.updatedAt - a.updatedAt);
+}
+
+function focusMemoListItem(id) {
+  const list = $('#memo-list');
+  if (!list) return false;
+  const items = Array.from(list.querySelectorAll('[data-memo-id]'));
+  const target = items.find((item) => parseInt(item.dataset.memoId, 10) === id);
+  if (!target) return false;
+  items.forEach((item) => { item.tabIndex = item === target ? 0 : -1; });
+  memoFocusId = id;
+  target.focus();
+  return true;
+}
+
+function renderMemoList() {
+  const list = $('#memo-list');
+  if (!list) return;
+  const query = memoSearch.trim().toLowerCase();
+  const visible = visibleMemos();
   $('#memos-sub').textContent = `${memos.length} 条${memos.some((memo) => memo.pinned) ? ' · 含置顶' : ''}`;
   if (!visible.length) {
     list.innerHTML = `<div class="memo-list-empty">${query ? '没有匹配的备忘录' : '暂无备忘录'}</div>`;
     return;
   }
+  const visibleIds = new Set(visible.map((memo) => memo.id));
+  const focusId = visibleIds.has(memoFocusId)
+    ? memoFocusId
+    : visibleIds.has(selectedMemoId) ? selectedMemoId : visible[0].id;
+  memoFocusId = focusId;
   list.innerHTML = visible.map((memo) => {
     const preview = memo.content.trim().replace(/\s+/g, ' ') || (memo.tags || []).map((tag) => `#${tag}`).join(' ') || '空白备忘录';
-    return `<button type="button" class="memo-list-item${memo.id === selectedMemoId ? ' active' : ''}${memo.pinned ? ' pinned' : ''}" data-memo-id="${memo.id}" role="option" aria-selected="${memo.id === selectedMemoId}">
+    return `<button type="button" class="memo-list-item${memo.id === selectedMemoId ? ' active' : ''}${memo.pinned ? ' pinned' : ''}" data-memo-id="${memo.id}" role="option" tabindex="${memo.id === focusId ? 0 : -1}" aria-selected="${memo.id === selectedMemoId}">
       <span class="memo-list-title">${esc(memo.title)}</span>
       <span class="memo-list-preview">${esc(preview)}</span>
       <span class="memo-list-time">${memo.pinned ? '置顶 · ' : ''}${esc(memoTime(memo.updatedAt))}</span>
@@ -1745,8 +1910,14 @@ function renderMemoEditor() {
 }
 
 function renderMemos() {
-  if (selectedMemoId && !currentMemo()) selectedMemoId = null;
-  if (!selectedMemoId && memos.length) selectedMemoId = memos[0].id;
+  if (selectedMemoId && !currentMemo()) {
+    selectedMemoId = null;
+    memoFocusId = null;
+  }
+  if (!selectedMemoId && memos.length) {
+    selectedMemoId = memos[0].id;
+    memoFocusId = selectedMemoId;
+  }
   renderMemoList();
   if (!memoDirty) renderMemoEditor();
 }
@@ -1788,11 +1959,31 @@ function scheduleMemoSave() {
   memoSaveTimer = setTimeout(saveMemoNow, 450);
 }
 
-async function selectMemo(id) {
-  if ((await saveMemoNow()) === false) return;
+async function selectMemo(id, restoreFocus) {
+  if ((await saveMemoNow()) === false) return false;
   selectedMemoId = id;
+  memoFocusId = id;
   renderMemoList();
   renderMemoEditor();
+  if (restoreFocus) focusMemoListItem(id);
+  return true;
+}
+
+async function onMemoListKeyDown(event) {
+  const item = event.target.closest('[data-memo-id]');
+  if (!item) return;
+  const keys = ['ArrowUp', 'ArrowDown', 'Home', 'End'];
+  if (!keys.includes(event.key)) return;
+  event.preventDefault();
+  const items = Array.from(item.closest('#memo-list').querySelectorAll('[data-memo-id]'));
+  const index = items.indexOf(item);
+  let nextIndex = index;
+  if (event.key === 'Home') nextIndex = 0;
+  else if (event.key === 'End') nextIndex = items.length - 1;
+  else if (event.key === 'ArrowUp') nextIndex = Math.max(0, index - 1);
+  else nextIndex = Math.min(items.length - 1, index + 1);
+  const targetId = parseInt(items[nextIndex].dataset.memoId, 10);
+  await selectMemo(targetId, true);
 }
 
 async function createMemo() {
@@ -1804,6 +1995,7 @@ async function createMemo() {
     const memo = await window.api.memos.create({ title: '无标题备忘录', content: '', tags: [] });
     memos.unshift(memo);
     selectedMemoId = memo.id;
+    memoFocusId = memo.id;
     renderMemos();
     $('#memo-title').select();
   } catch (error) {
@@ -1864,7 +2056,10 @@ async function reloadRestoredWorkspace(result, label) {
   deletedMemos = memoTrashResult.status === 'fulfilled' ? memoTrashResult.value : [];
   dataLoadErrors.tasks = taskResult.status === 'rejected' ? taskResult.reason : null;
   dataLoadErrors.memos = memoResult.status === 'rejected' ? memoResult.reason : null;
-  if (!memos.some((memo) => memo.id === selectedMemoId)) selectedMemoId = memos.length ? memos[0].id : null;
+  if (!memos.some((memo) => memo.id === selectedMemoId)) {
+    selectedMemoId = memos.length ? memos[0].id : null;
+    memoFocusId = selectedMemoId;
+  }
   renderAll();
 
   toast(`${label}（${result.count} 条任务、${result.memoCount || 0} 条备忘录）`, 3500, null, 'ok');
@@ -2649,6 +2844,7 @@ function bindEvents() {
   $('#today-list').addEventListener('click', onTaskClick);
   $('#tasks-list').addEventListener('click', onTaskClick);
   $('#cal-body').addEventListener('click', onCalClick);
+  $('#cal-body').addEventListener('keydown', onCalKeyDown);
 
   // 备忘录
   $('#memo-new').addEventListener('click', createMemo);
@@ -2657,10 +2853,18 @@ function bindEvents() {
     memoSearch = event.target.value;
     renderMemoList();
   });
+  $('#memo-search').addEventListener('keydown', (event) => {
+    if (event.key !== 'ArrowDown') return;
+    const target = $('#memo-list [data-memo-id][tabindex="0"]');
+    if (!target) return;
+    event.preventDefault();
+    target.focus();
+  });
   $('#memo-list').addEventListener('click', (event) => {
     const item = event.target.closest('[data-memo-id]');
-    if (item) selectMemo(parseInt(item.dataset.memoId, 10));
+    if (item) selectMemo(parseInt(item.dataset.memoId, 10), true);
   });
+  $('#memo-list').addEventListener('keydown', onMemoListKeyDown);
   ['memo-title', 'memo-tags', 'memo-content'].forEach((id) => {
     $(`#${id}`).addEventListener('input', scheduleMemoSave);
   });
@@ -2734,6 +2938,7 @@ function bindEvents() {
       await window.api.memos.remove(memo.id);
       memos = memos.filter((item) => item.id !== memo.id);
       selectedMemoId = memos.length ? memos[0].id : null;
+      memoFocusId = selectedMemoId;
       deletedMemos = await window.api.memos.getDeleted();
       renderMemos();
       renderNavBadges();
@@ -2805,11 +3010,11 @@ function bindEvents() {
     if (!card) return;
     e.dataTransfer.setData('text/plain', card.dataset.id);
     e.dataTransfer.effectAllowed = 'move';
-    card.classList.add('dragging');
+    card.closest('.bc-card-item').classList.add('dragging');
   });
   $('#board-cols').addEventListener('dragend', (e) => {
     const card = e.target.closest('.bc-card');
-    if (card) card.classList.remove('dragging');
+    if (card) card.closest('.bc-card-item').classList.remove('dragging');
     $$('#board-cols .board-col').forEach((c) => c.classList.remove('col-drop'));
   });
   $('#board-cols').addEventListener('dragover', (e) => {
@@ -2830,39 +3035,31 @@ function bindEvents() {
     if (!col || !id) return;
     const t = tasks.find((x) => x.id === parseInt(id, 10));
     if (!t) return;
+    if (t.status !== col.dataset.col) {
+      await moveBoardTask(t.id, col.dataset.col);
+      return;
+    }
     const board = $('#board-cols');
     board.setAttribute('aria-busy', 'true');
     try {
-      // 若拖到同列，仅调整顺序；否则变更状态
-      if (t.status === col.dataset.col) {
-        // 同列排序：按卡片位置重排
-        const cardIds = $$(`#board-cols .board-col[data-col="${col.dataset.col}"] .bc-card`)
-          .map((c) => parseInt(c.dataset.id, 10));
-        const fromIdx = cardIds.indexOf(parseInt(id, 10));
-        const targetCard = e.target.closest('.bc-card');
-        let toIdx = cardIds.length;
-        if (targetCard) {
-          const rect = targetCard.getBoundingClientRect();
-          const before = e.clientY < rect.top + rect.height / 2;
-          toIdx = cardIds.indexOf(parseInt(targetCard.dataset.id, 10));
-          if (!before) toIdx++;
-        }
-        if (fromIdx !== -1 && fromIdx !== toIdx && fromIdx !== toIdx - 1) {
-          cardIds.splice(fromIdx, 1);
-          if (fromIdx < toIdx) toIdx--;
-          cardIds.splice(toIdx, 0, parseInt(id, 10));
-          await window.api.tasks.reorder(cardIds);
-          toast('已调整卡片顺序');
-          await refreshTasksAfterMutation('顺序已保存，但看板刷新失败');
-        }
-        return;
+      const cardIds = $$(`#board-cols .board-col[data-col="${col.dataset.col}"] .bc-card`)
+        .map((c) => parseInt(c.dataset.id, 10));
+      const fromIdx = cardIds.indexOf(parseInt(id, 10));
+      const targetCard = e.target.closest('.bc-card');
+      let toIdx = cardIds.length;
+      if (targetCard) {
+        const rect = targetCard.getBoundingClientRect();
+        const before = e.clientY < rect.top + rect.height / 2;
+        toIdx = cardIds.indexOf(parseInt(targetCard.dataset.id, 10));
+        if (!before) toIdx++;
       }
-      if (col.dataset.col === 'done') {
-        await toggleDone(t);
-      } else {
-        await window.api.tasks.update(t.id, { status: col.dataset.col });
-        toast(`「${t.title}」已移至「${STATE_NAME[col.dataset.col]}」`);
-        await refreshTasksAfterMutation('任务状态已更新，但看板刷新失败');
+      if (fromIdx !== -1 && fromIdx !== toIdx && fromIdx !== toIdx - 1) {
+        cardIds.splice(fromIdx, 1);
+        if (fromIdx < toIdx) toIdx--;
+        cardIds.splice(toIdx, 0, parseInt(id, 10));
+        await window.api.tasks.reorder(cardIds);
+        toast('已调整卡片顺序');
+        await refreshTasksAfterMutation('顺序已保存，但看板刷新失败');
       }
     } catch (error) {
       console.error('[board] task move failed:', error);
@@ -2870,6 +3067,11 @@ function bindEvents() {
     } finally {
       board.setAttribute('aria-busy', 'false');
     }
+  });
+  $('#board-cols').addEventListener('change', (e) => {
+    const status = e.target.closest('[data-board-status]');
+    if (!status) return;
+    moveBoardTask(status.dataset.id, status.value, status);
   });
   // 看板卡片点击编辑
   $('#board-cols').addEventListener('click', (e) => {
@@ -3523,19 +3725,63 @@ function onCalClick(e) {
   const cell = e.target.closest('.cal-cell');
   if (cell) {
     calSelected = cell.dataset.day;
+    calFocusDate = calSelected;
+    const selectedDate = calendarDateFromKey(calSelected);
+    if (selectedDate && (selectedDate.getFullYear() !== calCursor.getFullYear() || selectedDate.getMonth() !== calCursor.getMonth())) {
+      calCursor = new Date(selectedDate.getFullYear(), selectedDate.getMonth(), 1);
+    }
     renderCal();
+    focusCalendarCell(calSelected);
     return;
   }
   const btn = e.target.closest('[data-cal]');
   if (btn) {
     if (btn.dataset.cal === 'prev') calCursor.setMonth(calCursor.getMonth() - 1);
     if (btn.dataset.cal === 'next') calCursor.setMonth(calCursor.getMonth() + 1);
-    if (btn.dataset.cal === 'today') { calCursor = new Date(); calCursor.setDate(1); }
+    if (btn.dataset.cal === 'today') {
+      const today = new Date();
+      calCursor = new Date(today.getFullYear(), today.getMonth(), 1);
+      calFocusDate = calKey(today);
+    } else {
+      calFocusDate = calKey(new Date(calCursor.getFullYear(), calCursor.getMonth(), 1));
+    }
     calSelected = null;
+    const control = btn.dataset.cal;
     renderCal();
+    $(`#cal-body [data-cal="${control}"]`)?.focus();
     return;
   }
   onTaskClick(e);
+}
+
+function onCalKeyDown(e) {
+  const cell = e.target.closest('.cal-cell[data-day]');
+  if (!cell) return;
+  const keys = ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End', 'PageUp', 'PageDown'];
+  if (!keys.includes(e.key)) return;
+  e.preventDefault();
+
+  const grid = cell.closest('.cal-grid');
+  const cells = Array.from(grid.querySelectorAll('.cal-cell[data-day]'));
+  const index = cells.indexOf(cell);
+  let targetKey = null;
+  if (e.key === 'Home') targetKey = cells[index - (index % 7)]?.dataset.day;
+  else if (e.key === 'End') targetKey = cells[index + (6 - (index % 7))]?.dataset.day;
+  else if (e.key === 'PageUp') targetKey = shiftCalendarKey(cell.dataset.day, 0, -1);
+  else if (e.key === 'PageDown') targetKey = shiftCalendarKey(cell.dataset.day, 0, 1);
+  else {
+    const deltas = { ArrowLeft: -1, ArrowRight: 1, ArrowUp: -7, ArrowDown: 7 };
+    targetKey = shiftCalendarKey(cell.dataset.day, deltas[e.key], 0);
+  }
+  if (!targetKey) return;
+
+  calFocusDate = targetKey;
+  if (focusCalendarCell(targetKey)) return;
+  const targetDate = calendarDateFromKey(targetKey);
+  if (!targetDate) return;
+  calCursor = new Date(targetDate.getFullYear(), targetDate.getMonth(), 1);
+  renderCal();
+  focusCalendarCell(targetKey);
 }
 
 /* ---------- 初始化 ---------- */
