@@ -159,7 +159,7 @@
       <section class="view" id="view-stat" style="display:none">
         <div class="view-head">
           <h2>统计</h2>
-          <span class="view-sub">未归档任务全集 · 最近 7 个自然日</span>
+          <span class="view-sub" id="stat-sub" aria-live="polite">未归档任务全集 · 最近 7 个自然日</span>
         </div>
         <div class="view-body" id="stat-body"></div>
       </section>
@@ -168,7 +168,7 @@
       <section class="view" id="view-trash" style="display:none">
         <div class="view-head">
           <h2>回收站</h2>
-          <span class="view-sub">已删除的任务和备忘录可在此恢复</span>
+          <span class="view-sub" id="trash-sub" aria-live="polite">已删除的任务和备忘录可在此恢复</span>
         </div>
         <div class="toolbar view-actions">
           <button type="button" class="btn mini danger hidden" id="trash-empty">清空回收站</button>

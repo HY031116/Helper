@@ -138,6 +138,7 @@ test('主导航和任务工具栏使用可聚焦控件', () => {
   assert.match(html, /<div class="quick-add">\s*<input id="quick-input" aria-label="快速添加任务"/);
   assert.match(html, /id="btn-quick-add">快速添加<\/button>/);
   assert.match(html, /id="btn-new">详细创建<\/button>/);
+  assert.match(app, /const content = \$\('\.content'\);\s*if \(content\) content\.scrollTop = 0/);
 });
 
 test('高频任务操作和设置开关暴露键盘与状态语义', () => {
@@ -594,6 +595,39 @@ test('主题和 AI 引擎分段控件暴露并同步选中状态', () => {
   assert.match(app, /systemTheme\.addEventListener\('change'/);
 });
 
+test('分段控件支持方向键移动并维持单一 Tab 停靠点', () => {
+  let radios;
+  const makeRadio = (checked) => {
+    const attrs = { 'aria-checked': String(checked) };
+    const listeners = {};
+    return {
+      attrs,
+      listeners,
+      tabIndex: null,
+      focused: false,
+      getAttribute(name) { return attrs[name]; },
+      addEventListener(name, listener) { listeners[name] = listener; },
+      focus() { this.focused = true; },
+      click() {
+        radios.forEach((radio) => { radio.attrs['aria-checked'] = 'false'; });
+        attrs['aria-checked'] = 'true';
+        listeners.click();
+      }
+    };
+  };
+  radios = [makeRadio(true), makeRadio(false), makeRadio(false)];
+  const group = { querySelectorAll: () => radios };
+  const run = loadRendererRuntime({ __testValues: { group } });
+  run('bindRadioGroupKeyboard(testValues.group)');
+  assert.deepStrictEqual(radios.map((radio) => radio.tabIndex), [0, -1, -1]);
+
+  let prevented = false;
+  radios[0].listeners.keydown({ key: 'ArrowRight', preventDefault() { prevented = true; } });
+  assert.strictEqual(prevented, true);
+  assert.strictEqual(radios[1].focused, true);
+  assert.deepStrictEqual(radios.map((radio) => radio.tabIndex), [-1, 0, -1]);
+});
+
 test('无历史对话时助手直接汇报工作状态', () => {
   assert.match(app, /const overdue = active\.filter/);
   assert.match(app, /当前有 \$\{overdue\.length\} 项逾期任务/);
@@ -660,6 +694,7 @@ test('统计与周报提供准确图表语义、空状态和完整操作反馈',
   assert.match(renderStatSource, /\$\('#report-preview'\)\.textContent = ''/);
   assert.match(renderStatSource, /id="report-preview"[\s\S]*?role="region" aria-label="周报预览" tabindex="0"/);
   assert.match(renderStatSource, /generateBtn\.setAttribute\('aria-busy', 'true'\)/);
+  assert.match(renderStatSource, /preview\.focus\(\{ preventScroll: true \}\);\s*preview\.scrollIntoView\(\{ block: 'nearest' \}\)/);
   assert.match(renderStatSource, /console\.error\('\[report\] generation failed:', e\)/);
   assert.match(renderStatSource, /toast\('周报生成失败，请稍后重试'/);
   assert.match(renderStatSource, /copyBtn\.textContent = '已复制'/);
@@ -760,6 +795,27 @@ test('设置操作失败时恢复原状态并结束忙碌反馈', () => {
   assert.doesNotMatch(app, /id="btn-pick-dir"/);
   assert.doesNotMatch(main, /ipcMain\.handle\('data:pickDir'/);
   assert.doesNotMatch(preload, /pickDir: \(\) => ipcRenderer\.invoke\('data:pickDir'\)/);
+});
+
+test('设置、统计与回收站补齐标签、键盘退出和可恢复状态', () => {
+  assert.match(html, /id="stat-sub" aria-live="polite"/);
+  assert.match(html, /id="trash-sub" aria-live="polite"/);
+  ['ai-provider', 'ai-base-url', 'ai-api-key', 'ai-model', 'ai-temperature'].forEach((id) => {
+    assert.match(app, new RegExp(`<label class="sr-t" for="${id}">`));
+    assert.match(app, new RegExp(`id="${id}"[^>]+aria-describedby="${id}-desc"`));
+  });
+  assert.match(app, /Number\.isFinite\(temperature\) \? temperature : 0\.2/);
+  assert.match(app, /if \(e\.key === 'Tab'\) return/);
+  assert.match(app, /if \(e\.key === 'Escape'\)[\s\S]*?el\.blur\(\)/);
+  assert.match(app, /快捷键保存失败，已恢复原设置/);
+  assert.match(app, /function runSettingsAction\(button, busyText, action, failureMessage\)/);
+  assert.match(app, /function downloadSettingsFile\(content, type, fileName\)[\s\S]*?URL\.revokeObjectURL\(url\)/);
+  assert.match(app, /id="backup-retry">重试/);
+  assert.match(app, /class="trend-chart is-empty" role="status">近 7 天还没有完成记录/);
+  assert.match(css, /\.trend-chart\.is-empty \{[^}]*height: 96px;/);
+  assert.match(app, /function focusTrashAfterMutation\(rowIndex\)/);
+  assert.match(app, /focusTrashAfterMutation\(rowIndex\)/);
+  assert.match(app, /#trash-sub'\)\.textContent = `\$\{total\} 项内容/);
 });
 
 test('回收站明确删除时间、单项永久删除和部分失败状态', () => {

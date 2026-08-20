@@ -293,6 +293,32 @@ function trapFocus(container, event) {
   }
 }
 
+function bindRadioGroupKeyboard(group) {
+  if (!group) return;
+  const radios = Array.from(group.querySelectorAll('[role="radio"]'));
+  if (!radios.length) return;
+  const syncTabStops = () => {
+    const checked = radios.find((radio) => radio.getAttribute('aria-checked') === 'true') || radios[0];
+    radios.forEach((radio) => { radio.tabIndex = radio === checked ? 0 : -1; });
+  };
+  syncTabStops();
+  radios.forEach((radio, index) => {
+    radio.addEventListener('click', syncTabStops);
+    radio.addEventListener('keydown', (event) => {
+      const keys = ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'];
+      if (!keys.includes(event.key)) return;
+      event.preventDefault();
+      let nextIndex = index;
+      if (event.key === 'Home') nextIndex = 0;
+      else if (event.key === 'End') nextIndex = radios.length - 1;
+      else if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') nextIndex = (index - 1 + radios.length) % radios.length;
+      else nextIndex = (index + 1) % radios.length;
+      radios[nextIndex].focus();
+      radios[nextIndex].click();
+    });
+  });
+}
+
 /* ---------- 任务行渲染 ---------- */
 function childProgress(t) {
   if (!t.children || !t.children.length) return null;
@@ -840,6 +866,22 @@ function renderStat() {
   const done = all.filter((t) => t.status === 'done').length;
   const doing = all.filter((t) => t.status === 'doing').length;
   const rate = all.length ? Math.round(done / all.length * 100) + '%' : '0%';
+  const days = [];
+  const dayKeys = [];
+  for (let i = 6; i >= 0; i--) {
+    const d = new Date();
+    d.setDate(d.getDate() - i);
+    const pad = (n) => (n < 10 ? '0' + n : '' + n);
+    dayKeys.push(`${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`);
+    days.push(`${d.getMonth() + 1}/${d.getDate()}`);
+  }
+  const trend = dayKeys.map((key) =>
+    all.filter((t) => t.status === 'done' && t.completedAt && localDateKey(t.completedAt) === key).length
+  );
+  const recentDone = trend.reduce((sum, count) => sum + count, 0);
+  $('#stat-sub').textContent = all.length
+    ? `${all.length} 项未归档任务 · 近 7 天完成 ${recentDone} 项`
+    : '暂无任务数据 · 可先创建一项任务';
 
   let html = '';
   if (!all.length) {
@@ -855,32 +897,19 @@ function renderStat() {
       <div class="stat-card"><dt class="sc-t">进行中</dt><dd class="sc-v">${doing}</dd></div>
       <div class="stat-card"><dt class="sc-t">完成率</dt><dd class="sc-v">${rate}</dd></div>
     </dl>`;
-
   // 近 7 天完成趋势（按真实 completedAt 统计）
-  const days = [];
-  const dayKeys = [];
-  for (let i = 6; i >= 0; i--) {
-    const d = new Date();
-    d.setDate(d.getDate() - i);
-    const pad = (n) => (n < 10 ? '0' + n : '' + n);
-    dayKeys.push(`${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`);
-    days.push(`${d.getMonth() + 1}/${d.getDate()}`);
-  }
-  const trend = dayKeys.map((key) =>
-    all.filter((t) => t.status === 'done' && t.completedAt && localDateKey(t.completedAt) === key).length
-  );
   const maxTrend = Math.max(1, ...trend);
     html += `<div class="stat-chart-row">
     <section class="stat-panel">
       <h3 class="stat-panel-title">近 7 天完成趋势</h3>
-      <div class="trend-chart" role="list" aria-label="近 7 天完成数量">
+      ${recentDone ? `<div class="trend-chart" role="list" aria-label="近 7 天完成数量">
         ${trend.map((v, i) => `
           <div class="trend-column" role="listitem" aria-label="${days[i]} 完成 ${v} 项">
             <span class="trend-value" aria-hidden="true">${v}</span>
             <span class="trend-bar" aria-hidden="true" style="--bar-h:${v ? Math.max(4, v / maxTrend * 120) : 0}px;--bar-opacity:${0.46 + i * 0.07}"></span>
             <span class="trend-label" aria-hidden="true">${days[i]}</span>
           </div>`).join('')}
-      </div>
+      </div>` : '<div class="trend-chart is-empty" role="status">近 7 天还没有完成记录</div>'}
     </section>
     <section class="stat-panel">
       <h3 class="stat-panel-title">优先级分布</h3>
@@ -994,6 +1023,7 @@ function renderStat() {
       $('#btn-report-download').classList.add('hidden');
     });
   });
+  bindRadioGroupKeyboard($('#report-week-seg'));
   // 周报：生成
   $('#btn-report-gen').addEventListener('click', async () => {
     const preview = $('#report-preview');
@@ -1009,6 +1039,8 @@ function renderStat() {
       preview.classList.remove('hidden');
       copyBtn.classList.remove('hidden');
       dlBtn.classList.remove('hidden');
+      preview.focus({ preventScroll: true });
+      preview.scrollIntoView({ block: 'nearest' });
       toast('周报已生成');
     } catch (e) {
       console.error('[report] generation failed:', e);
@@ -1094,7 +1126,7 @@ function renderSettings() {
         <button type="button" class="btn mini ghost" id="btn-restore-file">从文件恢复</button>
       </div>
     </div>
-    <div class="backup-list" id="backup-list"></div>
+    <div class="backup-list" id="backup-list" role="region" aria-label="备份记录" aria-live="polite"></div>
     <div class="set-row">
       <div><div class="sr-t">外观主题</div><div class="sr-d">浅色 / 深色 / 跟随系统</div></div>
       <div class="seg" id="theme-seg" role="radiogroup" aria-label="外观主题">
@@ -1116,29 +1148,29 @@ function renderSettings() {
       </div>
     </div>
     <div class="set-row ai-config-row">
-      <div><div class="sr-t">供应商</div><div class="sr-d">选择模型供应商，或自定义 OpenAI 兼容接口</div></div>
-      <select id="ai-provider" class="setting-control">
+      <div><label class="sr-t" for="ai-provider">供应商</label><div class="sr-d" id="ai-provider-desc">选择模型供应商，或自定义 OpenAI 兼容接口</div></div>
+      <select id="ai-provider" class="setting-control" aria-describedby="ai-provider-desc">
         ${providers.map((p) => `<option value="${p.v}" ${s.aiProvider === p.v ? 'selected' : ''}>${p.n}</option>`).join('')}
       </select>
     </div>
     <div class="set-row ai-config-row">
-      <div><div class="sr-t">API Base URL</div><div class="sr-d">OpenAI 兼容接口地址</div></div>
-      <input id="ai-base-url" class="setting-control wide" type="text" placeholder="https://api.openai.com/v1" value="${esc(s.aiBaseUrl || '')}">
+      <div><label class="sr-t" for="ai-base-url">API Base URL</label><div class="sr-d" id="ai-base-url-desc">OpenAI 兼容接口地址</div></div>
+      <input id="ai-base-url" class="setting-control wide" type="url" inputmode="url" autocomplete="off" spellcheck="false" aria-describedby="ai-base-url-desc" placeholder="https://api.openai.com/v1" value="${esc(s.aiBaseUrl || '')}">
     </div>
     <div class="set-row ai-config-row">
-      <div><div class="sr-t">API Key</div><div class="sr-d">保存在本机，请求时仅用于所选服务商鉴权</div></div>
-      <input id="ai-api-key" class="setting-control wide" type="password" placeholder="sk-..." value="${esc(s.aiApiKey || '')}">
+      <div><label class="sr-t" for="ai-api-key">API Key</label><div class="sr-d" id="ai-api-key-desc">保存在本机，请求时仅用于所选服务商鉴权</div></div>
+      <input id="ai-api-key" class="setting-control wide" type="password" autocomplete="off" spellcheck="false" aria-describedby="ai-api-key-desc" placeholder="sk-..." value="${esc(s.aiApiKey || '')}">
     </div>
     <div class="set-row ai-config-row">
-      <div><div class="sr-t">模型名称</div><div class="sr-d">如 gpt-4o-mini / deepseek-chat</div></div>
-      <input id="ai-model" class="setting-control wide" type="text" placeholder="gpt-4o-mini" value="${esc(s.aiModel || '')}">
+      <div><label class="sr-t" for="ai-model">模型名称</label><div class="sr-d" id="ai-model-desc">如 gpt-4o-mini / deepseek-chat</div></div>
+      <input id="ai-model" class="setting-control wide" type="text" autocomplete="off" spellcheck="false" aria-describedby="ai-model-desc" placeholder="gpt-4o-mini" value="${esc(s.aiModel || '')}">
     </div>
     <div class="set-row ai-config-row">
-      <div><div class="sr-t">温度</div><div class="sr-d">越低越稳定，建议 0.2</div></div>
-      <input id="ai-temperature" class="setting-control number" type="number" min="0" max="2" step="0.1" value="${s.aiTemperature != null ? s.aiTemperature : 0.2}">
+      <div><label class="sr-t" for="ai-temperature">温度</label><div class="sr-d" id="ai-temperature-desc">越低越稳定，建议 0.2</div></div>
+      <input id="ai-temperature" class="setting-control number" type="number" min="0" max="2" step="0.1" aria-describedby="ai-temperature-desc" value="${s.aiTemperature != null ? s.aiTemperature : 0.2}">
     </div>
     <div class="set-row ai-config-row">
-      <div><div class="sr-t">连接测试</div><div class="sr-d" id="ai-test-result">未测试</div></div>
+      <div><div class="sr-t">连接测试</div><div class="sr-d" id="ai-test-result" role="status" aria-live="polite">未测试</div></div>
       <button type="button" class="btn mini ghost" id="btn-ai-test">测试连接</button>
     </div>
     <div class="set-row ai-config-row">
@@ -1172,6 +1204,34 @@ function renderSettings() {
 }
 
 function bindSettingsEvents() {
+  async function runSettingsAction(button, busyText, action, failureMessage) {
+    if (!button || button.disabled) return;
+    const idleText = button.textContent;
+    button.disabled = true;
+    button.setAttribute('aria-busy', 'true');
+    button.textContent = busyText;
+    try {
+      await action();
+    } catch (error) {
+      console.error('[settings] action failed:', error);
+      toast(failureMessage, 4000, null, 'err');
+    } finally {
+      button.disabled = false;
+      button.setAttribute('aria-busy', 'false');
+      button.textContent = idleText;
+    }
+  }
+
+  function downloadSettingsFile(content, type, fileName) {
+    const blob = new Blob([content], { type });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = fileName;
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 0);
+  }
+
   $$('#settings-body .switch[data-switch]').forEach((sw) => {
     sw.addEventListener('click', async () => {
       const previous = sw.classList.contains('on');
@@ -1200,7 +1260,7 @@ function bindSettingsEvents() {
   // AI 引擎切换
   $$('#ai-stage-seg .seg-it').forEach((seg) => {
     seg.addEventListener('click', async () => {
-      const previous = settings.aiStage || 'local';
+      const previous = settings.aiStage || 'mock';
       $$('#ai-stage-seg .seg-it').forEach((x) => {
         x.classList.remove('active');
         x.setAttribute('aria-checked', 'false');
@@ -1226,6 +1286,7 @@ function bindSettingsEvents() {
       }
     });
   });
+  bindRadioGroupKeyboard($('#ai-stage-seg'));
 
   function syncAiConfigVisibility() {
     const show = settings.aiStage === 'llm';
@@ -1288,13 +1349,14 @@ function bindSettingsEvents() {
   });
 
   async function saveAiConfig(showToast) {
+    const temperature = parseFloat($('#ai-temperature').value);
     const patch = {
       aiProvider: $('#ai-provider').value,
       aiBaseUrl: $('#ai-base-url').value.trim(),
       // 清理 API Key 中的所有空白字符（粘贴时常带换行/空格）
       aiApiKey: $('#ai-api-key').value.replace(/\s+/g, '').trim(),
       aiModel: $('#ai-model').value.trim(),
-      aiTemperature: parseFloat($('#ai-temperature').value) || 0.2
+      aiTemperature: Number.isFinite(temperature) ? temperature : 0.2
     };
     const previous = settings;
     settings = Object.assign({}, settings, patch);
@@ -1309,23 +1371,21 @@ function bindSettingsEvents() {
     updateAiBadge();
   }
 
-  $('#btn-export-json').addEventListener('click', async () => {
-    const json = await window.api.data.exportJSON();
-    const blob = new Blob([json], { type: 'application/json' });
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = `work-helper-${new Date().toISOString().slice(0, 10)}.json`;
-    a.click();
-    toast('已导出 JSON 备份');
+  $('#btn-export-json').addEventListener('click', () => {
+    const button = $('#btn-export-json');
+    runSettingsAction(button, '导出中…', async () => {
+      const json = await window.api.data.exportJSON();
+      downloadSettingsFile(json, 'application/json', `work-helper-${new Date().toISOString().slice(0, 10)}.json`);
+      toast('已导出 JSON 备份', 2500, null, 'ok');
+    }, 'JSON 导出失败，请稍后重试');
   });
-  $('#btn-export-csv').addEventListener('click', async () => {
-    const csv = await window.api.data.exportCSV();
-    const blob = new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8' });
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = `work-helper-${new Date().toISOString().slice(0, 10)}.csv`;
-    a.click();
-    toast('已导出 CSV 表格');
+  $('#btn-export-csv').addEventListener('click', () => {
+    const button = $('#btn-export-csv');
+    runSettingsAction(button, '导出中…', async () => {
+      const csv = await window.api.data.exportCSV();
+      downloadSettingsFile('\ufeff' + csv, 'text/csv;charset=utf-8', `work-helper-${new Date().toISOString().slice(0, 10)}.csv`);
+      toast('已导出 CSV 表格', 2500, null, 'ok');
+    }, 'CSV 导出失败，请稍后重试');
   });
   $('#btn-open-dir').addEventListener('click', async () => {
     const button = $('#btn-open-dir');
@@ -1433,34 +1493,41 @@ function bindSettingsEvents() {
         });
       });
     } catch (e) {
-      box.innerHTML = '<div class="backup-empty error">备份列表加载失败</div>';
+      console.error('[settings] backup list failed:', e);
+      box.innerHTML = '<div class="backup-empty error"><span>备份列表加载失败</span><button type="button" class="btn mini ghost" id="backup-retry">重试</button></div>';
+      $('#backup-retry').addEventListener('click', loadBackupList);
     } finally {
       box.setAttribute('aria-busy', 'false');
     }
   }
 
-  $('#btn-backup-now').addEventListener('click', async () => {
-    try {
+  $('#btn-backup-now').addEventListener('click', () => {
+    const button = $('#btn-backup-now');
+    runSettingsAction(button, '备份中…', async () => {
       await window.api.data.backup();
-      toast('已创建备份');
-      loadBackupList();
-    } catch (e) {
-      toast('备份失败：' + e.message);
-    }
+      toast('已创建备份', 2500, null, 'ok');
+      await loadBackupList();
+    }, '备份失败，请稍后重试');
   });
-  $('#btn-backup-to-dir').addEventListener('click', async () => {
-    const res = await window.api.data.backupToDir();
-    if (res.ok) toast(`已备份到：${res.file}`, 4000, null, 'ok');
-    else if (res.error) toast('备份失败：' + res.error);
+  $('#btn-backup-to-dir').addEventListener('click', () => {
+    const button = $('#btn-backup-to-dir');
+    runSettingsAction(button, '选择中…', async () => {
+      const res = await window.api.data.backupToDir();
+      if (res.ok) toast(`已备份到：${res.file}`, 4000, null, 'ok');
+      else if (res.error) throw new Error(res.error);
+    }, '备份到文件夹失败，请稍后重试');
   });
-  $('#btn-restore-file').addEventListener('click', async () => {
-    const res = await window.api.data.pickBackupFile();
-    if (!res.ok) return;
-    confirmDialog('确定要从该文件恢复吗？当前数据会先自动备份，然后被该文件覆盖。', async () => {
-      if ((await saveMemoNow()) === false) return;
-      const result = await window.api.data.restoreBackup(res.file);
-      await reloadRestoredWorkspace(result, '已从文件恢复');
-    }, '恢复');
+  $('#btn-restore-file').addEventListener('click', () => {
+    const button = $('#btn-restore-file');
+    runSettingsAction(button, '选择中…', async () => {
+      const res = await window.api.data.pickBackupFile();
+      if (!res.ok) return;
+      confirmDialog('确定要从该文件恢复吗？当前数据会先自动备份，然后被该文件覆盖。', async () => {
+        if ((await saveMemoNow()) === false) return;
+        const result = await window.api.data.restoreBackup(res.file);
+        await reloadRestoredWorkspace(result, '已从文件恢复');
+      }, '恢复');
+    }, '无法选择备份文件，请稍后重试');
   });
   loadBackupList();
   $$('#theme-seg .seg-it').forEach((seg) => {
@@ -1489,6 +1556,7 @@ function bindSettingsEvents() {
       }
     });
   });
+  bindRadioGroupKeyboard($('#theme-seg'));
   $('#btn-reset').addEventListener('click', () => {
     confirmDialog('确定用初始演示任务替换当前全部任务吗？现有任务将被覆盖，备忘录不受影响。', async () => {
       tasks = await window.api.tasks.reset();
@@ -1512,7 +1580,17 @@ function bindSettingsEvents() {
       el.placeholder = '按下新组合键…';
       el.select();
     });
+    el.addEventListener('blur', () => {
+      el.value = shortcutLabel(el.dataset.accelerator);
+      el.placeholder = 'Ctrl+J';
+    });
     el.addEventListener('keydown', async (e) => {
+      if (e.key === 'Tab') return;
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        el.blur();
+        return;
+      }
       e.preventDefault();
       if (['Control', 'Alt', 'Shift', 'Meta'].includes(e.key)) return;
       const mods = [];
@@ -1527,15 +1605,24 @@ function bindSettingsEvents() {
         return;
       }
       const combo = [...mods, key].join('+');
+      const previousAccelerator = el.dataset.accelerator;
+      const previousShortcuts = Object.assign({}, settings.shortcuts || {});
       el.dataset.accelerator = combo;
       el.value = shortcutLabel(combo);
       el.placeholder = 'Ctrl+J';
       const keyMap = { 'sc-ai': 'ai', 'sc-newTask': 'newTask', 'sc-today': 'today', 'sc-stat': 'stat' };
-      const shortcuts = Object.assign({}, settings.shortcuts || {}, { [keyMap[id]]: combo });
+      const shortcuts = Object.assign({}, previousShortcuts, { [keyMap[id]]: combo });
       settings.shortcuts = shortcuts;
-      await window.api.settings.update({ shortcuts });
-      toast(`快捷键已更新：${shortcutLabel(combo)}`);
-      el.blur();
+      try {
+        await window.api.settings.update({ shortcuts });
+        toast(`快捷键已更新：${shortcutLabel(combo)}`, 2500, null, 'ok');
+        el.blur();
+      } catch (error) {
+        settings.shortcuts = previousShortcuts;
+        el.dataset.accelerator = previousAccelerator;
+        el.value = shortcutLabel(previousAccelerator);
+        toast('快捷键保存失败，已恢复原设置', 3500, null, 'err');
+      }
     });
   });
 }
@@ -1773,6 +1860,8 @@ function switchView(view) {
     else n.removeAttribute('aria-current');
   });
   $$('.view').forEach((v) => { v.style.display = v.id === `view-${view}` ? '' : 'none'; });
+  const content = $('.content');
+  if (content) content.scrollTop = 0;
   // 切换视图时退出批量模式，避免隐藏选择残留。
   setBatchMode(false, false);
   // 视图切换动画
@@ -2789,6 +2878,7 @@ function bindEvents() {
         window.api.memos.emptyTrash()
       ]);
       await loadTrash();
+      focusTrashAfterMutation(0);
       const failed = results.filter((result) => result.status === 'rejected').length;
       if (failed === 2) throw new Error('回收站未能清空，请重试');
       if (failed === 1) {
@@ -2971,17 +3061,31 @@ function trashDeletedTime(item) {
   return item && item.deletedAt ? `删除于 ${memoTime(item.deletedAt)}` : '删除时间未知';
 }
 
+function focusTrashAfterMutation(rowIndex) {
+  const rows = $$('#trash-list .trash-row');
+  if (rows.length) {
+    const target = rows[Math.min(Math.max(rowIndex, 0), rows.length - 1)].querySelector('button');
+    if (target) target.focus();
+    return;
+  }
+  const list = $('#trash-list');
+  if (list) list.focus();
+}
+
 async function loadTrash() {
   const list = $('#trash-list');
   if (!list) return;
+  list.setAttribute('tabindex', '-1');
   list.setAttribute('aria-busy', 'true');
   list.removeAttribute('role');
+  $('#trash-sub').textContent = '正在读取已删除内容…';
   list.innerHTML = '<div class="load-state" role="status"><span class="load-indicator" aria-hidden="true"></span><div><strong>正在读取回收站</strong></div></div>';
   try {
     [trashList, deletedMemos] = await Promise.all([window.api.tasks.getDeleted(), window.api.memos.getDeleted()]);
   } catch (error) {
     list.innerHTML = loadErrorHtml('trash');
     $('#trash-empty').classList.add('hidden');
+    $('#trash-sub').textContent = '读取失败 · 请重试';
     list.setAttribute('aria-busy', 'false');
     return;
   }
@@ -2989,9 +3093,15 @@ async function loadTrash() {
   if (!trashList.length && !deletedMemos.length) {
     list.innerHTML = '<div class="empty compact"><div class="big">⌫</div><div class="empty-title">回收站是空的</div><p class="empty-hint">删除的任务和备忘录会显示在这里，并可随时恢复。</p></div>';
     $('#trash-empty').classList.add('hidden');
+    $('#trash-sub').textContent = '回收站为空 · 删除的内容可从这里恢复';
     list.setAttribute('aria-busy', 'false');
     return;
   }
+  const total = trashList.length + deletedMemos.length;
+  const parts = [];
+  if (trashList.length) parts.push(`${trashList.length} 条任务`);
+  if (deletedMemos.length) parts.push(`${deletedMemos.length} 条备忘录`);
+  $('#trash-sub').textContent = `${total} 项内容 · ${parts.join('、')}`;
   $('#trash-empty').classList.remove('hidden');
   list.setAttribute('role', 'list');
   const taskRows = trashList.map((t) => `
@@ -3021,6 +3131,7 @@ async function loadTrash() {
   $$('#trash-list [data-restore-task]').forEach((b) => {
     b.addEventListener('click', async () => {
       const id = parseInt(b.dataset.restoreTask, 10);
+      const rowIndex = Array.from(list.children).indexOf(b.closest('.trash-row'));
       const rowButtons = Array.from(b.closest('.trash-row').querySelectorAll('button'));
       rowButtons.forEach((button) => { button.disabled = true; });
       b.setAttribute('aria-busy', 'true');
@@ -3030,6 +3141,7 @@ async function loadTrash() {
         toast('已恢复任务', 2500, null, 'ok');
         await refreshTasksAfterMutation('任务已恢复，但列表刷新失败');
         await loadTrash();
+        focusTrashAfterMutation(rowIndex);
       } catch (error) {
         toast('任务恢复失败，请重试', 3500, null, 'err');
         rowButtons.forEach((button) => { button.disabled = false; });
@@ -3041,6 +3153,7 @@ async function loadTrash() {
   $$('#trash-list [data-restore-memo]').forEach((b) => {
     b.addEventListener('click', async () => {
       const id = parseInt(b.dataset.restoreMemo, 10);
+      const rowIndex = Array.from(list.children).indexOf(b.closest('.trash-row'));
       const rowButtons = Array.from(b.closest('.trash-row').querySelectorAll('button'));
       rowButtons.forEach((button) => { button.disabled = true; });
       b.setAttribute('aria-busy', 'true');
@@ -3050,6 +3163,7 @@ async function loadTrash() {
         toast('已恢复备忘录', 2500, null, 'ok');
         await refreshMemosAfterMutation('备忘录已恢复，但列表刷新失败');
         await loadTrash();
+        focusTrashAfterMutation(rowIndex);
       } catch (error) {
         toast('备忘录恢复失败，请重试', 3500, null, 'err');
         rowButtons.forEach((button) => { button.disabled = false; });
@@ -3062,10 +3176,12 @@ async function loadTrash() {
     button.addEventListener('click', () => {
       const id = parseInt(button.dataset.purgeTask, 10);
       const task = trashList.find((item) => item.id === id);
+      const rowIndex = Array.from(list.children).indexOf(button.closest('.trash-row'));
       confirmDialog(`确定永久删除任务「${task ? task.title : '未命名任务'}」吗？此操作不可恢复。`, async () => {
         await window.api.tasks.purge(id);
         toast('任务已永久删除', 2500, null, 'ok');
         await loadTrash();
+        focusTrashAfterMutation(rowIndex);
       }, '永久删除');
     });
   });
@@ -3073,10 +3189,12 @@ async function loadTrash() {
     button.addEventListener('click', () => {
       const id = parseInt(button.dataset.purgeMemo, 10);
       const memo = deletedMemos.find((item) => item.id === id);
+      const rowIndex = Array.from(list.children).indexOf(button.closest('.trash-row'));
       confirmDialog(`确定永久删除备忘录「${memo ? memo.title : '无标题备忘录'}」吗？此操作不可恢复。`, async () => {
         await window.api.memos.purge(id);
         toast('备忘录已永久删除', 2500, null, 'ok');
         await loadTrash();
+        focusTrashAfterMutation(rowIndex);
       }, '永久删除');
     });
   });
