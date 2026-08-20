@@ -565,6 +565,13 @@ test('界面颜色与间距由统一设计令牌驱动', () => {
   assert.match(app, /const stateClass = stage === 'llm'/);
 });
 
+test('统计图表模板保持有效的容器闭合结构', () => {
+  const renderStatSource = app.slice(app.indexOf('function renderStat()'), app.indexOf('/* ---------- 视图：设置 ---------- */'));
+  assert.match(renderStatSource, /<div class="trend-column">[\s\S]*?<span class="trend-label">\$\{days\[i\]\}<\/span>\s*<\/div>`\)\.join/);
+  assert.doesNotMatch(renderStatSource, /<\/button>`\)\.join/);
+  assert.match(renderStatSource, /<section class="stat-panel">[\s\S]*?标签完成率[\s\S]*?<\/section>\s*<\/div>`;/);
+});
+
 test('启动和异步数据读取提供加载、降级与重试状态', () => {
   assert.match(html, /<body aria-busy="true">/);
   assert.match(html, /id="today-list">[\s\S]*?class="load-state" role="status"/);

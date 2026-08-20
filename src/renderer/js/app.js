@@ -813,7 +813,7 @@ function renderStat() {
             <span class="trend-value">${v}</span>
             <span class="trend-bar" style="--bar-h:${Math.max(4, v / maxTrend * 120)}px;--bar-opacity:${0.46 + i * 0.07}"></span>
             <span class="trend-label">${days[i]}</span>
-          </button>`).join('')}
+          </div>`).join('')}
       </div>
     </section>
     <section class="stat-panel">
@@ -889,7 +889,7 @@ function renderStat() {
           }).join('')}
         </div>
       </section>
-    </button>`;
+    </div>`;
   }
 
   // 周报生成
