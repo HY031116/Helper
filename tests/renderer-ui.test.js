@@ -157,12 +157,12 @@ test('快速添加同时支持按钮和回车，并防止重复提交', () => {
   assert.match(app, /if \(!raw \|\| button\.disabled\) return/);
   assert.match(app, /#btn-quick-add'\)\.addEventListener\('click', createQuickTask\)/);
   assert.match(app, /if \(e\.key !== 'Enter'\) return;\s*e\.preventDefault\(\);\s*createQuickTask\(\)/);
-  assert.match(app, /toast\(`已创建「\$\{esc\(createdTitle\)\}」/);
+  assert.match(app, /toast\(`已创建「\$\{createdTitle\}」/);
   assert.match(app, /await refreshTasksAfterMutation\('任务已创建，但列表刷新失败'\)/);
 });
 
 test('任务写入成功与列表刷新失败使用独立反馈', () => {
-  assert.match(app, /async function refreshTasksAfterMutation\(message\)[\s\S]*toast\(`\$\{message\}：\$\{esc\(error\.message\)\}`, 5000, null, 'warn'\)/);
+  assert.match(app, /async function refreshTasksAfterMutation\(message\)[\s\S]*toast\(`\$\{message\}：\$\{error\.message\}`, 5000, null, 'warn'\)/);
 
   const quickFlow = app.match(/async function createQuickTask\(\) \{([\s\S]*?)\n  \}\n  \$\('#quick-input'\)/)[1];
   assert.ok(quickFlow.indexOf('toast(`已创建') < quickFlow.indexOf("await refreshTasksAfterMutation('任务已创建，但列表刷新失败')"));
@@ -223,6 +223,23 @@ test('任务编辑使用语义表单、内联校验和提交中状态', () => {
   assert.strictEqual(error.classList.contains('hidden'), true);
 });
 
+test('任务弹窗保护未保存内容并保证截止日期完整显示', () => {
+  assert.match(html, /<div class="m-row due-tags-row">[\s\S]*?<div class="due-row">/);
+  assert.match(css, /\.due-tags-row \{ flex-direction: column; gap: 0; \}/);
+  assert.match(app, /let modalInitialSnapshot = ''/);
+  assert.match(app, /function taskFormSnapshot\(\)/);
+  assert.match(app, /function captureModalInitialState\(\)/);
+  assert.match(app, /function isTaskModalDirty\(\)/);
+  assert.match(app, /confirmDialog\('放弃尚未保存的更改吗？', async \(\) => closeModal\(\), '放弃'\)/);
+  assert.match(app, /#m-cancel'\)\.addEventListener\('click', requestCloseModal\)/);
+  assert.match(app, /#m-close'\)\.addEventListener\('click', requestCloseModal\)/);
+  assert.match(app, /if \(e\.target === \$\('#modal-mask'\)\) requestCloseModal\(\)/);
+  assert.match(app, /if \(e\.key === 'Escape'\) \{\s*e\.preventDefault\(\);\s*e\.stopPropagation\(\);\s*requestCloseModal\(\)/);
+  assert.match(app, /\$\('#m-due-time'\)\.value = '18:00';\s*captureModalInitialState\(\)/);
+  assert.match(app, /console\.error\('\[task-modal\] save failed:', err\)/);
+  assert.match(app, /setModalError\('保存失败，请稍后重试。任务内容仍保留在窗口中。'\)/);
+});
+
 test('确认框遵循安全的原生键盘行为', () => {
   assert.match(html, /role="alertdialog" aria-modal="true" aria-labelledby="confirm-title" aria-describedby="confirm-text"/);
   assert.match(app, /if \(e\.key === 'Tab'\) trapFocus\(mask, e\)/);
@@ -231,7 +248,8 @@ test('确认框遵循安全的原生键盘行为', () => {
   assert.match(app, /title\.textContent = `确认\$\{actionText\}`/);
   assert.match(app, /okBtn\.setAttribute\('aria-busy', 'true'\)/);
   assert.match(app, /await onOk\(\);\s*cleanup\(\)/);
-  assert.match(app, /toast\(`操作失败：\$\{esc\(error\.message\)\}`/);
+  assert.match(app, /console\.error\('\[confirm\] action failed:', error\)/);
+  assert.match(app, /toast\('操作失败，请稍后重试', 4000, null, 'err'\)/);
 });
 
 test('设置中的破坏性任务操作均需确认且文案准确', () => {
@@ -250,6 +268,9 @@ test('通知中的撤销操作可聚焦并防止重复执行', () => {
   assert.match(app, /const b = document\.createElement\('button'\);\s*b\.type = 'button';\s*b\.className = 't-undo'/);
   assert.match(app, /if \(b\.disabled\) return;\s*b\.disabled = true;/);
   assert.match(app, /await a\.run\(\);\s*el\.remove\(\)/);
+  assert.match(app, /text\.textContent = String\(message == null \? '' : message\)/);
+  assert.match(app, /icon\.setAttribute\('aria-hidden', 'true'\)/);
+  assert.doesNotMatch(app.slice(app.indexOf('function toast('), app.indexOf("if (typeof window.addEventListener")), /innerHTML/);
   assert.match(css, /\.toast \.t-undo:focus-visible/);
   assert.match(css, /max-width: calc\(100vw - 32px\)/);
   assert.match(css, /\.toast > span:not\(\.t-ico\).*overflow-wrap: anywhere/);
@@ -258,7 +279,8 @@ test('通知中的撤销操作可聚焦并防止重复执行', () => {
 test('无独立错误面板的异步操作不会静默失败', () => {
   assert.match(app, /window\.addEventListener\('unhandledrejection'/);
   assert.match(app, /event\.preventDefault\(\)/);
-  assert.match(app, /toast\(`操作未完成：\$\{esc\(message\)\}`, 4500, null, 'err'\)/);
+  assert.match(app, /console\.error\('Unhandled renderer operation:', reason\)/);
+  assert.match(app, /toast\('操作未完成，请稍后重试', 4500, null, 'err'\)/);
 });
 
 test('所有界面完成入口复用重复任务完成语义', () => {
@@ -282,6 +304,8 @@ test('批量模式显式进入，只保留当前可见任务并禁用空操作',
   assert.match(app, /if \(active\) active\.focus\(\)/);
   assert.match(css, /\.task-row\.selecting \.task-check \{[\s\S]*?background: transparent; animation: none;/);
   assert.match(app, /trigger\.classList\.toggle\('hidden', enabled\)/);
+  assert.match(app, /\$\('#view-tasks'\)\?\.classList\.toggle\('batch-mode', enabled\)/);
+  assert.match(css, /#view-tasks\.batch-mode \.toolbar \{ display: none; \}/);
   assert.match(css, /\.task-row\.selecting \.row-actions \{ display: none; \}/);
   assert.match(css, /\.batch-bar \{\s*position: sticky; top: 0; margin-bottom: 12px;/);
 });
@@ -589,7 +613,8 @@ test('窗口控件和任务弹窗提供明确语义与小窗布局', () => {
   assert.match(html, /id="tb-min"[^>]+aria-label="最小化窗口"/);
   assert.match(html, /id="tb-max"[^>]+aria-label="最大化窗口"/);
   assert.match(html, /id="m-close"[^>]+aria-label="关闭任务编辑"/);
-  assert.match(app, /#m-close'\)\.addEventListener\('click', closeModal\)/);
+  assert.match(app, /#m-close'\)\.addEventListener\('click', requestCloseModal\)/);
+  assert.match(app, /returnFocus\.isConnected && !returnFocus\.closest\('\.hidden'\)/);
   assert.match(app, /setAttribute\('aria-label', maximized \? '还原窗口' : '最大化窗口'\)/);
   assert.match(css, /@media \(max-width: 560px\)[\s\S]*?\.m-row \{ flex-direction: column; gap: 0; \}/);
   assert.match(css, /\.modal > h5 \{ margin-bottom: 14px; \}/);
@@ -645,10 +670,55 @@ test('统计与周报提供准确图表语义、空状态和完整操作反馈',
 test('看板和日历的交互卡片保持有效的按钮闭合结构', () => {
   const boardSource = app.slice(app.indexOf('function renderBoard()'), app.indexOf('/* ---------- 视图：日历 ---------- */'));
   const calendarSource = app.slice(app.indexOf('function renderCal()'), app.indexOf('/* ---------- 视图：统计 ---------- */'));
-  assert.match(boardSource, /<button type="button" class="bc-card"[\s\S]*?<\/button>`\)\.join/);
-  assert.doesNotMatch(boardSource, /<button type="button" class="bc-card"[\s\S]*?<\/div>`\)\.join/);
+  assert.match(boardSource, /<div class="bc-card-item" role="listitem">[\s\S]*?<button type="button" class="bc-card"[\s\S]*?<\/button>\s*<\/div>`\)\.join/);
+  assert.doesNotMatch(boardSource, /<button type="button" class="bc-card"[\s\S]*?<\/button>\s*<\/button>/);
   assert.match(calendarSource, /\$\{dots \? `<span class="cal-dots">\$\{dots\}<\/span>` : ''\}\s*<\/button>`;/);
   assert.doesNotMatch(calendarSource, /\$\{dots \? `<span class="cal-dots">\$\{dots\}<\/span>` : ''\}\s*<\/div>`;/);
+});
+
+test('任务搜索、今日空态、看板与日历形成完整且一致的工作流', () => {
+  const container = {
+    innerHTML: '',
+    querySelector(selector) {
+      if (selector !== '#empty-clear-search') return null;
+      return { addEventListener() {} };
+    }
+  };
+  const runSearch = loadRendererRuntime({ __testValues: { container } });
+  runSearch(`currentSearch = '不存在'; renderList(testValues.container, [])`);
+  assert.match(container.innerHTML, /没有匹配的任务/);
+  assert.match(container.innerHTML, /id="empty-clear-search">清除搜索/);
+  assert.doesNotMatch(container.innerHTML, /还没有任务/);
+
+  const results = {};
+  const runCalendar = loadRendererRuntime({ __testValues: { results } });
+  runCalendar(`tasks = [
+    { id: 1, title: '可见任务', status: 'todo', due: '2026-08-20 12:00' },
+    { id: 2, title: '归档任务', status: 'archived', due: '2026-08-20 12:00' },
+    { id: 3, title: '已删除任务', status: 'todo', due: '2026-08-20 12:00', _deleted: true }
+  ]; testValues.results.titles = tasksOnDay('2026-08-20').map((task) => task.title)`);
+  assert.strictEqual(JSON.stringify(results.titles), JSON.stringify(['可见任务']));
+
+  const boardSource = app.slice(app.indexOf('function renderBoard()'), app.indexOf('/* ---------- 视图：日历 ---------- */'));
+  const boardEvents = app.slice(app.indexOf('// 看板拖拽'), app.indexOf('// 任务列表拖拽排序'));
+  assert.match(html, /id="board-sub"/);
+  assert.doesNotMatch(html, /拖拽卡片到目标列变更状态/);
+  assert.match(boardSource, /<section class="board-col"[^>]+aria-labelledby="\$\{colId\}"/);
+  assert.match(boardSource, /role="list" aria-label="\$\{col\.name\}任务"/);
+  assert.match(boardSource, /class="board-empty"><span role="status">暂无\$\{col\.name\}任务/);
+  assert.match(boardSource, /id="board-new-task">新建任务/);
+  assert.match(boardSource, /\$\('#board-sub'\)\.textContent = cols\.map/);
+  assert.match(boardEvents, /board\.setAttribute\('aria-busy', 'true'\)/);
+  assert.match(boardEvents, /console\.error\('\[board\] task move failed:', error\)/);
+  assert.match(boardEvents, /toast\('移动任务失败，请稍后重试'/);
+  assert.match(css, /\.board-cols \{[^}]*display: grid;[^}]*grid-template-columns: repeat\(3, minmax\(150px, 1fr\)\)/);
+  assert.match(css, /\.bc-card \.cb \{[^}]*align-items: flex-start;/);
+  assert.match(css, /\.bc-card \.pri-dot \{[^}]*flex: 0 0 auto;/);
+  assert.match(app, /id="today-empty-all">查看所有任务/);
+  assert.match(app, /id="today-empty-new">新建任务/);
+  assert.strictEqual((app.match(/#cal-body'\)\.addEventListener\('click', onCalClick\)/g) || []).length, 1);
+  assert.match(app, /class="cal-title" aria-live="polite"/);
+  assert.match(app, /class="cal-dot \$\{dotCls\}" aria-hidden="true"/);
 });
 
 test('响应式宽度不会覆盖助手折叠态', () => {

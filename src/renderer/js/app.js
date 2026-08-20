@@ -36,6 +36,7 @@ let quickParseToken = 0;
 let quickParseCache = { raw: '', parsed: null };
 let modalSaving = false;
 let modalReturnFocus = null;
+let modalInitialSnapshot = '';
 let aiSending = false;
 let eventsBound = false;
 const dataLoadErrors = { tasks: null, memos: null };
@@ -170,14 +171,23 @@ function localDateKey(ts) {
 }
 
 /* ---------- Toast ---------- */
-function toast(html, ms, actions, type) {
+function toast(message, ms, actions, type) {
   const layer = $('#toast-layer');
   const el = document.createElement('div');
   el.className = 'toast' + (type ? ' t-' + type : '');
   el.setAttribute('role', type === 'err' ? 'alert' : 'status');
   el.setAttribute('aria-atomic', 'true');
   const icons = { ok: '✓', err: '✕', warn: '⚠' };
-  el.innerHTML = (icons[type] ? `<span class="t-ico">${icons[type]}</span>` : '') + `<span>${html}</span>`;
+  if (icons[type]) {
+    const icon = document.createElement('span');
+    icon.className = 't-ico';
+    icon.setAttribute('aria-hidden', 'true');
+    icon.textContent = icons[type];
+    el.appendChild(icon);
+  }
+  const text = document.createElement('span');
+  text.textContent = String(message == null ? '' : message);
+  el.appendChild(text);
   if (actions) {
     actions.forEach((a) => {
       const b = document.createElement('button');
@@ -194,7 +204,8 @@ function toast(html, ms, actions, type) {
         } catch (error) {
           b.disabled = false;
           b.setAttribute('aria-busy', 'false');
-          toast(`操作失败：${esc(error.message)}`, 4000, null, 'err');
+          console.error('[toast] action failed:', error);
+          toast('操作失败，请稍后重试', 4000, null, 'err');
         }
       });
       el.appendChild(b);
@@ -208,9 +219,8 @@ if (typeof window.addEventListener === 'function') {
   window.addEventListener('unhandledrejection', (event) => {
     event.preventDefault();
     const reason = event.reason;
-    const message = reason && reason.message ? reason.message : String(reason || '未知错误');
     console.error('Unhandled renderer operation:', reason);
-    toast(`操作未完成：${esc(message)}`, 4500, null, 'err');
+    toast('操作未完成，请稍后重试', 4500, null, 'err');
   });
 }
 
@@ -238,11 +248,12 @@ function confirmDialog(message, onOk, okText) {
       await onOk();
       cleanup();
     } catch (error) {
+      console.error('[confirm] action failed:', error);
       okBtn.disabled = false;
       cancelBtn.disabled = false;
       okBtn.setAttribute('aria-busy', 'false');
       okBtn.textContent = actionText;
-      toast(`操作失败：${esc(error.message)}`, 4000, null, 'err');
+      toast('操作失败，请稍后重试', 4000, null, 'err');
     }
   };
   const onKey = (e) => {
@@ -258,7 +269,7 @@ function confirmDialog(message, onOk, okText) {
     okBtn.disabled = false;
     cancelBtn.disabled = false;
     okBtn.setAttribute('aria-busy', 'false');
-    if (returnFocus && returnFocus.isConnected) returnFocus.focus();
+    if (returnFocus && returnFocus.isConnected && !returnFocus.closest('.hidden')) returnFocus.focus();
   }
   cancelBtn.addEventListener('click', cleanup);
   okBtn.addEventListener('click', onOkClick);
@@ -475,6 +486,22 @@ function highlightText(text, query) {
 function renderList(container, list) {
   container.innerHTML = '';
   if (!list.length) {
+    if (currentSearch) {
+      container.innerHTML = `<div class="empty">
+        <div class="big" aria-hidden="true">⌕</div>
+        <div class="empty-title">没有匹配的任务</div>
+        <p class="empty-hint">换个关键词，或清除搜索查看全部任务。</p>
+        <button type="button" class="btn mini ghost empty-cta" id="empty-clear-search">清除搜索</button>
+      </div>`;
+      container.querySelector('#empty-clear-search').addEventListener('click', () => {
+        currentSearch = '';
+        const input = $('#search-input');
+        input.value = '';
+        renderTasks();
+        input.focus();
+      });
+      return;
+    }
     // 空状态 = 指引时刻：说明现状 + 给出下一步动作
     const emptyStates = {
       today: { ico: '◐', title: '今天没有到期任务', hint: '可以继续当前工作，或安排下一件要紧事。' },
@@ -490,7 +517,7 @@ function renderList(container, list) {
     const st = emptyStates[key] || emptyStates.all;
     const showBtn = currentFilter === 'all' || currentFilter.startsWith('proj:') || currentFilter.startsWith('tag:');
     container.innerHTML = `<div class="empty">
-      <div class="big">${st.ico}</div>
+      <div class="big" aria-hidden="true">${st.ico}</div>
       <div class="empty-title">${st.title}</div>
       <p class="empty-hint">${st.hint}</p>
       ${showBtn ? '<button type="button" class="btn mini empty-cta" id="empty-new-task">新建任务</button>' : ''}
@@ -530,9 +557,19 @@ function renderToday() {
     html += todays.map(rowHTML).join('');
   }
   if (!html) {
-    html = '<div class="empty"><div class="big">◐</div><div class="empty-title">今天没有到期任务</div><p class="empty-hint">可以继续当前工作，或安排下一件要紧事。</p></div>';
+    html = `<div class="empty">
+      <div class="big" aria-hidden="true">◐</div>
+      <div class="empty-title">今天没有到期任务</div>
+      <p class="empty-hint">可以继续处理已有事项，或安排下一件要紧事。</p>
+      <div class="empty-actions">
+        <button type="button" class="btn mini ghost" id="today-empty-all">查看所有任务</button>
+        <button type="button" class="btn mini" id="today-empty-new">新建任务</button>
+      </div>
+    </div>`;
   }
   $('#today-list').innerHTML = html;
+  $('#today-empty-all')?.addEventListener('click', () => switchView('tasks'));
+  $('#today-empty-new')?.addEventListener('click', () => openModal(null));
   $('#today-sub').textContent = `${overdue.length} 过期 · ${todays.length} 今天 · 今日完成 ${doneToday.length}`;
 }
 
@@ -669,6 +706,7 @@ function renderBatchBar() {
 function setBatchMode(enabled, shouldRender = true) {
   batchMode = enabled;
   selectedIds.clear();
+  $('#view-tasks')?.classList.toggle('batch-mode', enabled);
   const trigger = $('#btn-select-mode');
   if (trigger) {
     trigger.setAttribute('aria-pressed', String(enabled));
@@ -685,25 +723,35 @@ function renderBoard() {
     { k: 'doing', name: '进行中' },
     { k: 'done', name: '已完成' }
   ];
+  const boardTasks = tasks.filter((t) => !t._deleted && t.status !== 'archived');
+  const grouped = Object.fromEntries(cols.map((col) => [
+    col.k,
+    boardTasks.filter((task) => task.status === col.k).sort((a, b) => b.pri - a.pri)
+  ]));
+  $('#board-sub').textContent = cols.map((col) => `${col.name} ${grouped[col.k].length}`).join(' · ');
   let html = '<div class="board-cols">';
   cols.forEach((col) => {
-    const cards = tasks.filter((t) => !t._deleted && t.status === col.k)
-      .sort((a, b) => b.pri - a.pri);
-    html += `<div class="board-col" data-col="${col.k}">
-      <div class="bc-head">${col.name} <span class="n">${cards.length}</span></div>
-      <div class="bc-cards">
+    const cards = grouped[col.k];
+    const colId = `board-col-${col.k}`;
+    html += `<section class="board-col" data-col="${col.k}" aria-labelledby="${colId}">
+      <h3 class="bc-head" id="${colId}">${col.name} <span class="n">${cards.length}</span></h3>
+      <div class="bc-cards${cards.length ? '' : ' is-empty'}" ${cards.length ? `role="list" aria-label="${col.name}任务"` : ''}>
         ${cards.map((t) => `
-          <button type="button" class="bc-card" draggable="true" data-id="${t.id}" title="编辑任务" aria-label="编辑任务：${esc(t.title)}">
-            <span class="cb"><span class="nm">${esc(t.title)}</span><span class="pri-dot p${t.pri}">${PRI_NAME[t.pri]}</span></span>
-            ${t.due ? `<span class="cd${isOverdue(t.due, t.status) ? ' over' : ''}">${esc(t.due)}</span>` : ''}
-            ${t.tags && t.tags.length ? `<span class="cd">${t.tags.map((x) => '#' + esc(x)).join(' ')}</span>` : ''}
-            ${t.children && t.children.length ? `<span class="cd">子任务 ${childProgress(t).done}/${t.children.length}</span>` : ''}
-          </button>`).join('')}
+          <div class="bc-card-item" role="listitem">
+            <button type="button" class="bc-card" draggable="true" data-id="${t.id}" title="编辑任务" aria-label="编辑任务：${esc(t.title)}">
+              <span class="cb"><span class="nm">${esc(t.title)}</span><span class="pri-dot p${t.pri}" aria-label="优先级：${PRI_NAME[t.pri]}">${PRI_NAME[t.pri]}</span></span>
+              ${t.due ? `<span class="cd${isOverdue(t.due, t.status) ? ' over' : ''}">${esc(t.due)}</span>` : ''}
+              ${t.tags && t.tags.length ? `<span class="cd">${t.tags.map((x) => '#' + esc(x)).join(' ')}</span>` : ''}
+              ${t.children && t.children.length ? `<span class="cd">子任务 ${childProgress(t).done}/${t.children.length}</span>` : ''}
+            </button>
+          </div>`).join('')}
+        ${cards.length ? '' : `<div class="board-empty"><span role="status">暂无${col.name}任务</span>${!boardTasks.length && col.k === 'todo' ? '<button type="button" class="btn mini" id="board-new-task">新建任务</button>' : ''}</div>`}
       </div>
-    </div>`;
+    </section>`;
   });
   html += '</div>';
   $('#board-cols').innerHTML = html;
+  $('#board-new-task')?.addEventListener('click', () => openModal(null));
 }
 
 /* ---------- 视图：日历 ---------- */
@@ -712,7 +760,7 @@ function calKey(d) {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 function tasksOnDay(key) {
-  return tasks.filter((t) => !t._deleted && t.due && t.due.slice(0, 10) === key);
+  return tasks.filter((t) => !t._deleted && t.status !== 'archived' && t.due && t.due.slice(0, 10) === key);
 }
 function renderCal() {
   const y = calCursor.getFullYear(), m = calCursor.getMonth();
@@ -745,7 +793,7 @@ function renderCal() {
       <button type="button" class="cal-btn" data-cal="today" title="回到本月" aria-label="回到本月">今</button>
       <button type="button" class="cal-btn" data-cal="next" title="下个月" aria-label="下个月">›</button>
     </div>
-    <span class="cal-title">${y} 年 ${m + 1} 月</span>
+    <span class="cal-title" aria-live="polite">${y} 年 ${m + 1} 月</span>
   </div>
   <div class="cal-grid">
     ${['日', '一', '二', '三', '四', '五', '六'].map((w) => `<div class="cal-dow">${w}</div>`).join('')}`;
@@ -755,7 +803,7 @@ function renderCal() {
     const cls = ['cal-cell', c.other ? 'other' : '', c.key === todayKey ? 'today' : '', calSelected === c.key ? 'selected' : ''].filter(Boolean).join(' ');
     const dots = dayTasks.map((t) => {
       const dotCls = t.status === 'done' ? 'done' : (isOverdue(t.due, t.status) ? 'over' : '');
-      return `<span class="cal-dot ${dotCls}" title="${esc(t.title)}"></span>`;
+      return `<span class="cal-dot ${dotCls}" aria-hidden="true"></span>`;
     }).join('');
     html += `<button type="button" class="${cls}" data-day="${c.key}" aria-pressed="${calSelected === c.key}" aria-label="${c.key}，${dayTasks.length} 项任务">
       <span class="cal-day">${c.day}</span>
@@ -1312,7 +1360,7 @@ function bindSettingsEvents() {
         try {
           data = JSON.parse(await file.text());
         } catch (error) {
-          toast(`无法读取导入文件：${esc(error.message)}`, 4000, null, 'err');
+          toast(`无法读取导入文件：${error.message}`, 4000, null, 'err');
           return;
         }
         const taskList = Array.isArray(data) ? data : (Array.isArray(data.tasks) ? data.tasks : []);
@@ -1327,14 +1375,14 @@ function bindSettingsEvents() {
         try {
           if (taskList.length) imported = (await window.api.tasks.import(taskList)) || [];
         } catch (error) {
-          toast(`任务导入失败：${esc(error.message)}`, 4000, null, 'err');
+          toast(`任务导入失败：${error.message}`, 4000, null, 'err');
           return;
         }
         try {
           if (memoList.length) importedMemos = (await window.api.memos.import(memoList)) || [];
         } catch (error) {
           const partial = imported.length ? `已导入 ${imported.length} 条任务，但` : '';
-          toast(`${partial}备忘录导入失败：${esc(error.message)}`, 5000, null, imported.length ? 'warn' : 'err');
+          toast(`${partial}备忘录导入失败：${error.message}`, 5000, null, imported.length ? 'warn' : 'err');
           if (imported.length) await refreshTasksAfterMutation('任务已导入，但列表刷新失败');
           return;
         }
@@ -1616,7 +1664,7 @@ function saveMemoNow() {
   }).catch((error) => {
     memoDirty = true;
     if (selectedMemoId === id) $('#memo-save-state').textContent = '保存失败';
-    toast(`备忘录保存失败：${esc(error.message)}`, 4000, null, 'err');
+    toast(`备忘录保存失败：${error.message}`, 4000, null, 'err');
     return false;
   });
   return memoSaveChain;
@@ -1648,7 +1696,7 @@ async function createMemo() {
     renderMemos();
     $('#memo-title').select();
   } catch (error) {
-    toast(`新建备忘录失败：${esc(error.message)}`, 4000, null, 'err');
+    toast(`新建备忘录失败：${error.message}`, 4000, null, 'err');
   } finally {
     memoCreating = false;
     $('#memo-new').disabled = false;
@@ -1682,7 +1730,7 @@ async function refreshMemosAfterMutation(message) {
     }
     return true;
   } catch (error) {
-    toast(`${message}：${esc(error.message)}`, 5000, null, 'warn');
+    toast(`${message}：${error.message}`, 5000, null, 'warn');
     return false;
   }
 }
@@ -1814,6 +1862,7 @@ function openModal(task) {
   setTitleError('');
   setModalError('');
   setModalBusy(false);
+  captureModalInitialState();
   const mask = $('#modal-mask');
   mask.classList.remove('hidden');
   mask.setAttribute('aria-hidden', 'false');
@@ -1835,7 +1884,31 @@ function closeModal(shouldRestoreFocus = true) {
   mask.classList.add('hidden');
   mask.setAttribute('aria-hidden', 'true');
   editingTask = null;
+  modalInitialSnapshot = '';
   if (shouldRestoreFocus) restoreModalFocus();
+}
+
+function taskFormSnapshot() {
+  return $$('#task-form input, #task-form select, #task-form textarea')
+    .map((field) => `${field.id}:${field.value}`)
+    .join('\u001f');
+}
+
+function captureModalInitialState() {
+  modalInitialSnapshot = taskFormSnapshot();
+}
+
+function isTaskModalDirty() {
+  return !$('#modal-mask').classList.contains('hidden') && taskFormSnapshot() !== modalInitialSnapshot;
+}
+
+function requestCloseModal() {
+  if (modalSaving) return;
+  if (!isTaskModalDirty()) {
+    closeModal();
+    return;
+  }
+  confirmDialog('放弃尚未保存的更改吗？', async () => closeModal(), '放弃');
 }
 
 function setTitleError(message) {
@@ -1907,7 +1980,8 @@ async function saveModal(event) {
       await window.api.tasks.create(data);
     }
   } catch (err) {
-    setModalError(`保存失败：${err.message}`);
+    console.error('[task-modal] save failed:', err);
+    setModalError('保存失败，请稍后重试。任务内容仍保留在窗口中。');
     return;
   } finally {
     setModalBusy(false);
@@ -1915,7 +1989,7 @@ async function saveModal(event) {
   closeModal(false);
   restoreModalFocus();
   const nextText = completion && completion.next ? ` · 已安排下一次（${completion.next.due}）` : '';
-  toast(`${wasEditing ? '已保存' : '已创建'}「${esc(title)}」${nextText}`, nextText ? 5000 : 3000, null, 'ok');
+  toast(`${wasEditing ? '已保存' : '已创建'}「${title}」${nextText}`, nextText ? 5000 : 3000, null, 'ok');
   await refreshTasksAfterMutation(`任务已${wasEditing ? '保存' : '创建'}，但列表刷新失败`);
 }
 
@@ -2068,7 +2142,7 @@ function opCard(result) {
       try {
         const undoResult = await window.api.ai.undo(result.undo);
         if (undoResult && undoResult.ok === false) {
-          toast(esc(undoResult.message || '无法撤销'), 4000, null, 'warn');
+          toast(undoResult.message || '无法撤销', 4000, null, 'warn');
           undo.remove();
           return;
         }
@@ -2076,7 +2150,7 @@ function opCard(result) {
         toast('已撤销');
         card.remove();
       } catch (e) {
-        toast(`撤销失败：${esc(e.message)}`, 4000, null, 'err');
+        toast(`撤销失败：${e.message}`, 4000, null, 'err');
       }
     });
     card.appendChild(undo);
@@ -2322,7 +2396,7 @@ async function refreshTasksAfterMutation(message) {
     await refreshTasks();
     return true;
   } catch (error) {
-    toast(`${message}：${esc(error.message)}`, 5000, null, 'warn');
+    toast(`${message}：${error.message}`, 5000, null, 'warn');
     return false;
   }
 }
@@ -2402,7 +2476,7 @@ function bindEvents() {
         .sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.updatedAt - a.updatedAt);
       renderMemos();
     } catch (error) {
-      toast(`置顶操作失败：${esc(error.message)}`, 3000, null, 'err');
+      toast(`置顶操作失败：${error.message}`, 3000, null, 'err');
     } finally {
       button.disabled = false;
     }
@@ -2443,13 +2517,13 @@ function bindEvents() {
     try {
       task = await window.api.tasks.create({ title: memo.title, desc: memo.content, tags: memo.tags || [], pri: 2, status: 'todo' });
     } catch (error) {
-      toast(`创建任务失败：${esc(error.message)}`, 3000, null, 'err');
+      toast(`创建任务失败：${error.message}`, 3000, null, 'err');
       return;
     } finally {
       label.textContent = '转为任务';
       button.disabled = false;
     }
-    toast(`已创建任务「${esc(task.title)}」`, 3000, null, 'ok');
+    toast(`已创建任务「${task.title}」`, 3000, null, 'ok');
     await refreshTasksAfterMutation('任务已创建，但列表刷新失败');
   });
   $('#memo-delete').addEventListener('click', async () => {
@@ -2502,7 +2576,7 @@ function bindEvents() {
         await window.api.tasks.create({ title: raw, pri: 2 });
       }
     } catch (err) {
-      toast('创建失败：' + esc(err.message), 4000, null, 'err');
+      toast('创建失败：' + err.message, 4000, null, 'err');
       return;
     } finally {
       button.disabled = false;
@@ -2511,7 +2585,7 @@ function bindEvents() {
     }
     input.value = '';
     resetQuickPreview();
-    toast(`已创建「${esc(createdTitle)}」${createdDue ? ' · ' + esc(createdDue) : ''}`, 3000, null, 'ok');
+    toast(`已创建「${createdTitle}」${createdDue ? ' · ' + createdDue : ''}`, 3000, null, 'ok');
     await refreshTasksAfterMutation('任务已创建，但列表刷新失败');
     input.focus();
   }
@@ -2556,36 +2630,45 @@ function bindEvents() {
     if (!col || !id) return;
     const t = tasks.find((x) => x.id === parseInt(id, 10));
     if (!t) return;
-    // 若拖到同列，仅调整顺序；否则变更状态
-    if (t.status === col.dataset.col) {
-      // 同列排序：按卡片位置重排
-      const cardIds = $$(`#board-cols .board-col[data-col="${col.dataset.col}"] .bc-card`)
-        .map((c) => parseInt(c.dataset.id, 10));
-      const fromIdx = cardIds.indexOf(parseInt(id, 10));
-      const targetCard = e.target.closest('.bc-card');
-      let toIdx = cardIds.length;
-      if (targetCard) {
-        const rect = targetCard.getBoundingClientRect();
-        const before = e.clientY < rect.top + rect.height / 2;
-        toIdx = cardIds.indexOf(parseInt(targetCard.dataset.id, 10));
-        if (!before) toIdx++;
+    const board = $('#board-cols');
+    board.setAttribute('aria-busy', 'true');
+    try {
+      // 若拖到同列，仅调整顺序；否则变更状态
+      if (t.status === col.dataset.col) {
+        // 同列排序：按卡片位置重排
+        const cardIds = $$(`#board-cols .board-col[data-col="${col.dataset.col}"] .bc-card`)
+          .map((c) => parseInt(c.dataset.id, 10));
+        const fromIdx = cardIds.indexOf(parseInt(id, 10));
+        const targetCard = e.target.closest('.bc-card');
+        let toIdx = cardIds.length;
+        if (targetCard) {
+          const rect = targetCard.getBoundingClientRect();
+          const before = e.clientY < rect.top + rect.height / 2;
+          toIdx = cardIds.indexOf(parseInt(targetCard.dataset.id, 10));
+          if (!before) toIdx++;
+        }
+        if (fromIdx !== -1 && fromIdx !== toIdx && fromIdx !== toIdx - 1) {
+          cardIds.splice(fromIdx, 1);
+          if (fromIdx < toIdx) toIdx--;
+          cardIds.splice(toIdx, 0, parseInt(id, 10));
+          await window.api.tasks.reorder(cardIds);
+          toast('已调整卡片顺序');
+          await refreshTasksAfterMutation('顺序已保存，但看板刷新失败');
+        }
+        return;
       }
-      if (fromIdx !== -1 && fromIdx !== toIdx && fromIdx !== toIdx - 1) {
-        cardIds.splice(fromIdx, 1);
-        if (fromIdx < toIdx) toIdx--;
-        cardIds.splice(toIdx, 0, parseInt(id, 10));
-        await window.api.tasks.reorder(cardIds);
-        toast('已调整卡片顺序');
-        await refreshTasksAfterMutation('顺序已保存，但看板刷新失败');
+      if (col.dataset.col === 'done') {
+        await toggleDone(t);
+      } else {
+        await window.api.tasks.update(t.id, { status: col.dataset.col });
+        toast(`「${t.title}」已移至「${STATE_NAME[col.dataset.col]}」`);
+        await refreshTasksAfterMutation('任务状态已更新，但看板刷新失败');
       }
-      return;
-    }
-    if (col.dataset.col === 'done') {
-      await toggleDone(t);
-    } else {
-      await window.api.tasks.update(t.id, { status: col.dataset.col });
-      toast(`「${t.title}」已移至「${STATE_NAME[col.dataset.col]}」`);
-      await refreshTasksAfterMutation('任务状态已更新，但看板刷新失败');
+    } catch (error) {
+      console.error('[board] task move failed:', error);
+      toast('移动任务失败，请稍后重试', 3000, null, 'err');
+    } finally {
+      board.setAttribute('aria-busy', 'false');
     }
   });
   // 看板卡片点击编辑
@@ -2595,9 +2678,6 @@ function bindEvents() {
     const t = tasks.find((x) => x.id === parseInt(card.dataset.id, 10));
     if (t) openModal(t);
   });
-
-  // 日历
-  $('#cal-body').addEventListener('click', onCalClick);
 
   // 任务列表拖拽排序
   $('#tasks-list').addEventListener('dragstart', (e) => {
@@ -2797,8 +2877,8 @@ function bindEvents() {
   })();
 
   // 弹窗
-  $('#m-cancel').addEventListener('click', closeModal);
-  $('#m-close').addEventListener('click', closeModal);
+  $('#m-cancel').addEventListener('click', requestCloseModal);
+  $('#m-close').addEventListener('click', requestCloseModal);
   $('#task-form').addEventListener('submit', saveModal);
   $('#m-title').addEventListener('input', () => {
     if ($('#m-title').value.trim()) setTitleError('');
@@ -2810,10 +2890,14 @@ function bindEvents() {
     $('#m-due-date').value = '';
     $('#m-due-time').value = '18:00';
   });
-  $('#modal-mask').addEventListener('click', (e) => { if (e.target === $('#modal-mask')) closeModal(); });
+  $('#modal-mask').addEventListener('click', (e) => { if (e.target === $('#modal-mask')) requestCloseModal(); });
   // 表单原生处理 Enter 提交；此处负责 Esc 和焦点循环。
   $('#modal-mask').addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') closeModal();
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      e.stopPropagation();
+      requestCloseModal();
+    }
     if (e.key === 'Tab') trapFocus($('#modal-mask'), e);
   });
 
@@ -3196,6 +3280,7 @@ function onCalClick(e) {
     openModal(null);
     $('#m-due-date').value = calSelected;
     $('#m-due-time').value = '18:00';
+    captureModalInitialState();
     return;
   }
   const cell = e.target.closest('.cal-cell');

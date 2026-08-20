@@ -141,7 +141,7 @@
       <section class="view" id="view-board" style="display:none">
         <div class="view-head">
           <h2>看板</h2>
-          <span class="view-sub">拖拽卡片到目标列变更状态</span>
+          <span class="view-sub" id="board-sub"></span>
         </div>
         <div class="view-body" id="board-cols"></div>
       </section>
@@ -248,7 +248,7 @@
             </select>
           </div>
         </div>
-        <div class="m-row">
+        <div class="m-row due-tags-row">
           <div class="m-col">
             <label for="m-due-date">截止日期</label>
             <div class="due-row">
