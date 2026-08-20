@@ -24,7 +24,7 @@
   <div class="layout">
     <!-- 侧边导航 -->
     <nav class="sidebar" aria-label="主导航">
-      <button type="button" class="sidebar-create" id="sidebar-new"><span aria-hidden="true">＋</span><span class="nav-label">新建任务</span></button>
+      <button type="button" class="sidebar-create" id="sidebar-new" aria-label="新建任务"><span aria-hidden="true">＋</span><span class="nav-label">新建任务</span></button>
       <div class="nav-section-label">工作</div>
       <button type="button" class="nav-item active" data-view="today" title="今天" aria-current="page"><span class="nav-ico">◐</span><span class="nav-label">今天</span><span class="nav-badge hidden"></span></button>
       <button type="button" class="nav-item" data-view="tasks" title="所有任务"><span class="nav-ico">☰</span><span class="nav-label">所有任务</span><span class="nav-badge hidden"></span></button>
@@ -217,12 +217,13 @@
 
   <!-- 任务编辑弹窗 -->
   <div class="modal-mask hidden" id="modal-mask" aria-hidden="true">
-    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+    <div class="modal task-modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
       <div class="modal-head">
         <h5 id="modal-title">新建任务</h5>
         <button type="button" class="modal-close" id="m-close" title="关闭" aria-label="关闭任务编辑">✕</button>
       </div>
       <form id="task-form" novalidate>
+        <div class="task-modal-fields">
         <label for="m-title">标题 *</label>
         <input id="m-title" maxlength="100" required aria-describedby="m-title-error">
         <div class="field-error hidden" id="m-title-error" aria-live="polite"></div>
@@ -290,6 +291,7 @@
         <label for="m-children">子任务（每行一个，[x] 前缀表示已完成）</label>
         <textarea id="m-children" rows="3" placeholder="[ ] 搭框架&#10;[ ] 写初稿&#10;[ ] 内部校对"></textarea>
         <div class="form-error hidden" id="modal-error" role="alert"></div>
+        </div>
         <div class="m-actions">
           <button type="button" class="btn ghost danger hidden" id="m-delete">删除</button>
           <button type="button" class="btn ghost hidden" id="m-archive">归档</button>

@@ -672,7 +672,8 @@ function setBatchMode(enabled, shouldRender = true) {
   const trigger = $('#btn-select-mode');
   if (trigger) {
     trigger.setAttribute('aria-pressed', String(enabled));
-    trigger.textContent = enabled ? '退出批量' : '批量操作';
+    trigger.textContent = '批量操作';
+    trigger.classList.toggle('hidden', enabled);
   }
   if (shouldRender) renderTasks();
 }
@@ -697,7 +698,7 @@ function renderBoard() {
             ${t.due ? `<span class="cd${isOverdue(t.due, t.status) ? ' over' : ''}">${esc(t.due)}</span>` : ''}
             ${t.tags && t.tags.length ? `<span class="cd">${t.tags.map((x) => '#' + esc(x)).join(' ')}</span>` : ''}
             ${t.children && t.children.length ? `<span class="cd">子任务 ${childProgress(t).done}/${t.children.length}</span>` : ''}
-          </div>`).join('')}
+          </button>`).join('')}
       </div>
     </div>`;
   });
@@ -760,7 +761,7 @@ function renderCal() {
       <span class="cal-day">${c.day}</span>
       ${dayTasks.length ? `<span class="cal-num">${dayTasks.length}</span>` : ''}
       ${dots ? `<span class="cal-dots">${dots}</span>` : ''}
-    </div>`;
+    </button>`;
   });
   html += '</div>';
 
@@ -1060,21 +1061,21 @@ function renderSettings() {
 
   <section class="set-group">
     <h3 class="set-group-title">快捷键</h3>
-    <div class="set-row"><div><div class="sr-t">快捷键</div><div class="sr-d">全局有效，可自定义键位（点击输入框后按新组合键）</div></div></div>
-    <div class="shortcut-row"><span>唤起 AI 输入框</span><span><input class="shortcut-input" id="sc-ai" value="${esc(s.shortcuts && s.shortcuts.ai || 'CommandOrControl+J')}" placeholder="Ctrl+J"></span></div>
-    <div class="shortcut-row"><span>新建任务</span><span><input class="shortcut-input" id="sc-newTask" value="${esc(s.shortcuts && s.shortcuts.newTask || 'CommandOrControl+N')}" placeholder="Ctrl+N"></span></div>
-    <div class="shortcut-row"><span>打开今日视图</span><span><input class="shortcut-input" id="sc-today" value="${esc(s.shortcuts && s.shortcuts.today || 'CommandOrControl+1')}" placeholder="Ctrl+1"></span></div>
-    <div class="shortcut-row"><span>打开统计视图</span><span><input class="shortcut-input" id="sc-stat" value="${esc(s.shortcuts && s.shortcuts.stat || 'CommandOrControl+5')}" placeholder="Ctrl+5"></span></div>
+    <p class="set-group-intro">全局有效。聚焦输入框后，直接按下新的组合键。</p>
+    ${shortcutRow('sc-ai', '唤起助手输入框', s.shortcuts && s.shortcuts.ai || 'CommandOrControl+J')}
+    ${shortcutRow('sc-newTask', '新建任务', s.shortcuts && s.shortcuts.newTask || 'CommandOrControl+N')}
+    ${shortcutRow('sc-today', '打开今日视图', s.shortcuts && s.shortcuts.today || 'CommandOrControl+1')}
+    ${shortcutRow('sc-stat', '打开统计视图', s.shortcuts && s.shortcuts.stat || 'CommandOrControl+5')}
   </section>
   <section class="set-group danger-zone">
     <h3 class="set-group-title">危险操作</h3>
     <div class="set-row">
-      <div><div class="sr-t">演示数据</div><div class="sr-d">重置为初始演示任务</div></div>
-      <button type="button" class="btn mini danger" id="btn-reset">重置演示数据</button>
+      <div><div class="sr-t">重置演示任务</div><div class="sr-d">用初始演示任务替换当前全部任务，备忘录不受影响</div></div>
+      <button type="button" class="btn mini danger" id="btn-reset">重置任务</button>
     </div>
     <div class="set-row">
-      <div><div class="sr-t">清空全部数据</div><div class="sr-d">删除所有任务（含已完成与归档），不可恢复</div></div>
-      <button type="button" class="btn mini danger" id="btn-clear-all">清空全部</button>
+      <div><div class="sr-t">清空全部任务</div><div class="sr-d">删除所有任务（含已完成与归档），备忘录不受影响</div></div>
+      <button type="button" class="btn mini danger" id="btn-clear-all">清空任务</button>
     </div>
   </section>`;
 
@@ -1393,47 +1394,68 @@ function bindSettingsEvents() {
       }
     });
   });
-  $('#btn-reset').addEventListener('click', async () => {
-    tasks = await window.api.tasks.reset();
-    renderAll();
-    toast('演示数据已重置');
+  $('#btn-reset').addEventListener('click', () => {
+    confirmDialog('确定用初始演示任务替换当前全部任务吗？现有任务将被覆盖，备忘录不受影响。', async () => {
+      tasks = await window.api.tasks.reset();
+      renderAll();
+      toast('任务已重置为演示数据', 3000, null, 'ok');
+    }, '重置');
   });
   $('#btn-clear-all').addEventListener('click', async () => {
-    confirmDialog('确定要清空全部任务数据吗？此操作不可恢复！', async () => {
+    confirmDialog('确定要清空全部任务吗？此操作不可恢复，备忘录不受影响。', async () => {
       tasks = await window.api.tasks.clearAll();
       renderAll();
-      toast('已清空全部任务数据', 3000, null, 'ok');
-    }, '清空');
+      toast('已清空全部任务', 3000, null, 'ok');
+    }, '清空任务');
   });
 
-  // 快捷键自定义：点击输入框后按新组合键
+  // 快捷键自定义：保留现有值，聚焦后直接录入新组合键。
   ['sc-ai', 'sc-newTask', 'sc-today', 'sc-stat'].forEach((id) => {
     const el = document.getElementById(id);
     if (!el) return;
     el.addEventListener('focus', () => {
-      el.value = '';
       el.placeholder = '按下新组合键…';
+      el.select();
     });
     el.addEventListener('keydown', async (e) => {
       e.preventDefault();
+      if (['Control', 'Alt', 'Shift', 'Meta'].includes(e.key)) return;
       const mods = [];
       if (e.ctrlKey) mods.push('CommandOrControl');
       if (e.altKey) mods.push('Alt');
       if (e.shiftKey) mods.push('Shift');
       if (e.metaKey) mods.push('Super');
       const key = e.key.length === 1 ? e.key.toUpperCase() : e.key;
-      if (!mods.length) { el.value = ''; el.placeholder = '需要包含修饰键（Ctrl/Alt/Shift）'; return; }
+      if (!mods.length) {
+        el.value = shortcutLabel(el.dataset.accelerator);
+        el.placeholder = '需要包含修饰键（Ctrl/Alt/Shift）';
+        return;
+      }
       const combo = [...mods, key].join('+');
-      el.value = combo;
+      el.dataset.accelerator = combo;
+      el.value = shortcutLabel(combo);
       el.placeholder = 'Ctrl+J';
       const keyMap = { 'sc-ai': 'ai', 'sc-newTask': 'newTask', 'sc-today': 'today', 'sc-stat': 'stat' };
       const shortcuts = Object.assign({}, settings.shortcuts || {}, { [keyMap[id]]: combo });
       settings.shortcuts = shortcuts;
       await window.api.settings.update({ shortcuts });
-      toast(`快捷键已更新：${combo}`);
+      toast(`快捷键已更新：${shortcutLabel(combo)}`);
       el.blur();
     });
   });
+}
+
+function shortcutLabel(accelerator) {
+  const isMac = /Mac|iPhone|iPad/i.test(navigator.platform || '');
+  return String(accelerator || '').split('+').map((part) => {
+    if (part === 'CommandOrControl') return isMac ? '⌘' : 'Ctrl';
+    if (part === 'Super') return isMac ? '⌘' : 'Win';
+    return part;
+  }).join('+');
+}
+
+function shortcutRow(id, label, accelerator) {
+  return `<div class="shortcut-row"><label for="${id}">${label}</label><input class="shortcut-input" id="${id}" data-accelerator="${esc(accelerator)}" value="${esc(shortcutLabel(accelerator))}" placeholder="Ctrl+J"></div>`;
 }
 
 function applyTheme() {

@@ -562,6 +562,7 @@ html, body {
 .task-row.selecting .task-expand,
 .task-row.selecting .task-main,
 .task-row.selecting .task-meta { pointer-events: none; }
+.task-row.selecting .row-actions { display: none; }
 /* 拖拽插入指示线 */
 .task-row.drop-before { box-shadow: 0 -3px 0 0 var(--accent); }
 .task-row.drop-after { box-shadow: 0 3px 0 0 var(--accent); }
@@ -951,6 +952,7 @@ mark { background: rgba(var(--warn-rgb), 0.25); color: inherit; border-radius: 2
   font-size: 12px;
   font-weight: 750;
 }
+.set-group-intro { margin: 0; padding: 10px 4px 6px; color: var(--muted); font-size: 12px; line-height: 1.5; }
 .set-row {
   display: flex; align-items: center; justify-content: space-between; gap: 12px;
   padding: 12px 4px; border-bottom: 1px solid var(--rule); font-size: 13px;
@@ -1003,6 +1005,7 @@ mark { background: rgba(var(--warn-rgb), 0.25); color: inherit; border-radius: 2
   display: flex; justify-content: space-between; gap: 10px;
   font-size: 12.5px; padding: 7px 4px; color: var(--muted);
 }
+.shortcut-row label { align-self: center; color: var(--muted); }
 .kbd {
   font-family: var(--font-num); font-size: 11.5px;
   background: var(--bg3); border: 1px solid var(--rule); border-bottom-width: 2px;
@@ -1192,6 +1195,13 @@ mark { background: rgba(var(--warn-rgb), 0.25); color: inherit; border-radius: 2
   border: 1px solid var(--rule);
 }
 .modal.small { width: 320px; }
+.task-modal { display: flex; flex-direction: column; overflow: hidden; }
+.task-modal #task-form { min-height: 0; display: flex; flex: 1; flex-direction: column; }
+.task-modal-fields { min-height: 0; overflow-y: auto; padding-right: 4px; }
+.task-modal .m-actions {
+  flex: 0 0 auto; margin-top: 14px; padding-top: 12px;
+  border-top: 1px solid var(--rule); background: var(--bg2);
+}
 .modal-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
 .modal h5 { font-size: 15.5px; font-weight: 700; letter-spacing: 0; }
 .modal > h5 { margin-bottom: 14px; }
@@ -1484,11 +1494,11 @@ body.dark .memo-tool:focus-visible { background: var(--bg2); }
   .nav-ico { width: 22px; font-size: 15px; }
   .nav-badge { position: absolute; top: 2px; right: 0; min-width: 15px; padding: 0 4px; font-size: 8.5px; line-height: 15px; }
   .content { padding: 20px 18px; }
-  .ai-panel { width: 288px; flex-basis: 288px; }
+  .ai-panel:not(.collapsed) { width: 288px; flex-basis: 288px; }
 }
 
 @media (max-width: 960px) {
-  .ai-panel { width: 272px; flex-basis: 272px; }
+  .ai-panel:not(.collapsed) { width: 272px; flex-basis: 272px; }
   .tb-badge { display: none; }
   .view-head { align-items: flex-start; flex-direction: column; gap: 2px; }
   .view-head h2 { font-size: 20px; }

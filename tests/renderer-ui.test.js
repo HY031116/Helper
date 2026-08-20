@@ -131,6 +131,7 @@ function loadPetRuntime(elements, tasks) {
 
 test('主导航和任务工具栏使用可聚焦控件', () => {
   assert.match(html, /<nav class="sidebar" aria-label="主导航">/);
+  assert.match(html, /id="sidebar-new" aria-label="新建任务"/);
   assert.match(html, /<button type="button" class="nav-item active"[^>]+aria-current="page"/);
   assert.doesNotMatch(html, /<div class="nav-item/);
   assert.match(html, /<div class="task-search-row">\s*<input id="search-input" type="search" aria-label="搜索任务"/);
@@ -197,7 +198,7 @@ test('快速添加预览展示解析结果并明确普通任务兜底', () => {
 });
 
 test('任务编辑使用语义表单、内联校验和提交中状态', () => {
-  assert.match(html, /id="modal-mask" aria-hidden="true">\s*<div class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">/);
+  assert.match(html, /id="modal-mask" aria-hidden="true">\s*<div class="modal task-modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">/);
   assert.match(html, /<form id="task-form" novalidate>/);
   assert.match(html, /id="m-title"[^>]+required aria-describedby="m-title-error"/);
   assert.match(html, /id="modal-error" role="alert"/);
@@ -231,6 +232,16 @@ test('确认框遵循安全的原生键盘行为', () => {
   assert.match(app, /okBtn\.setAttribute\('aria-busy', 'true'\)/);
   assert.match(app, /await onOk\(\);\s*cleanup\(\)/);
   assert.match(app, /toast\(`操作失败：\$\{esc\(error\.message\)\}`/);
+});
+
+test('设置中的破坏性任务操作均需确认且文案准确', () => {
+  assert.match(app, /id="btn-reset">重置任务<\/button>/);
+  assert.match(app, /#btn-reset'\)\.addEventListener\('click', \(\) => \{\s*confirmDialog\('确定用初始演示任务替换当前全部任务吗？/);
+  assert.match(app, /备忘录不受影响。', async \(\) => \{\s*tasks = await window\.api\.tasks\.reset\(\)/);
+  assert.match(app, /<div class="sr-t">清空全部任务<\/div>/);
+  assert.match(app, /confirmDialog\('确定要清空全部任务吗？此操作不可恢复，备忘录不受影响。'/);
+  assert.match(app, /}, '清空任务'\)/);
+  assert.doesNotMatch(app, /<div class="sr-t">清空全部数据<\/div>/);
 });
 
 test('通知中的撤销操作可聚焦并防止重复执行', () => {
@@ -270,7 +281,20 @@ test('批量模式显式进入，只保留当前可见任务并禁用空操作',
   assert.match(app, /\.task-row\[data-id="\$\{id\}"\] \.task-check/);
   assert.match(app, /if \(active\) active\.focus\(\)/);
   assert.match(css, /\.task-row\.selecting \.task-check \{[\s\S]*?background: transparent; animation: none;/);
+  assert.match(app, /trigger\.classList\.toggle\('hidden', enabled\)/);
+  assert.match(css, /\.task-row\.selecting \.row-actions \{ display: none; \}/);
   assert.match(css, /\.batch-bar \{\s*position: sticky; top: 0; margin-bottom: 12px;/);
+});
+
+test('快捷键设置使用友好显示且聚焦时保留原值', () => {
+  assert.match(app, /function shortcutLabel\(accelerator\)/);
+  assert.match(app, /part === 'CommandOrControl'\) return isMac \? '⌘' : 'Ctrl'/);
+  assert.match(app, /function shortcutRow\(id, label, accelerator\)/);
+  assert.match(app, /data-accelerator="\$\{esc\(accelerator\)\}"/);
+  assert.match(app, /el\.placeholder = '按下新组合键…';\s*el\.select\(\)/);
+  assert.doesNotMatch(app, /el\.addEventListener\('focus',[\s\S]*?el\.value = ''/);
+  assert.match(app, /\['Control', 'Alt', 'Shift', 'Meta'\]\.includes\(e\.key\)/);
+  assert.match(app, /<p class="set-group-intro">全局有效。聚焦输入框后，直接按下新的组合键。<\/p>/);
 });
 
 test('批量栏实际按可完成任务数更新状态', () => {
@@ -555,6 +579,14 @@ test('窗口控件和任务弹窗提供明确语义与小窗布局', () => {
   assert.match(css, /\.task-detail \{[\s\S]*?background: transparent;[\s\S]*?border-left: 2px solid/);
 });
 
+test('任务弹窗固定操作区并让字段区独立滚动', () => {
+  assert.match(html, /class="modal task-modal" role="dialog"/);
+  assert.match(html, /<form id="task-form" novalidate>\s*<div class="task-modal-fields">[\s\S]*?<div class="m-actions">/);
+  assert.match(css, /\.task-modal \{[^}]*display: flex;[^}]*overflow: hidden;/);
+  assert.match(css, /\.task-modal-fields \{[^}]*overflow-y: auto;/);
+  assert.match(css, /\.task-modal \.m-actions \{[^}]*flex: 0 0 auto;[^}]*border-top: 1px solid var\(--rule\);/);
+});
+
 test('界面颜色与间距由统一设计令牌驱动', () => {
   assert.match(css, /--accent-hover: #AC4938/);
   assert.match(css, /--muted-rgb: 102, 113, 127/);
@@ -570,6 +602,21 @@ test('统计图表模板保持有效的容器闭合结构', () => {
   assert.match(renderStatSource, /<div class="trend-column">[\s\S]*?<span class="trend-label">\$\{days\[i\]\}<\/span>\s*<\/div>`\)\.join/);
   assert.doesNotMatch(renderStatSource, /<\/button>`\)\.join/);
   assert.match(renderStatSource, /<section class="stat-panel">[\s\S]*?标签完成率[\s\S]*?<\/section>\s*<\/div>`;/);
+});
+
+test('看板和日历的交互卡片保持有效的按钮闭合结构', () => {
+  const boardSource = app.slice(app.indexOf('function renderBoard()'), app.indexOf('/* ---------- 视图：日历 ---------- */'));
+  const calendarSource = app.slice(app.indexOf('function renderCal()'), app.indexOf('/* ---------- 视图：统计 ---------- */'));
+  assert.match(boardSource, /<button type="button" class="bc-card"[\s\S]*?<\/button>`\)\.join/);
+  assert.doesNotMatch(boardSource, /<button type="button" class="bc-card"[\s\S]*?<\/div>`\)\.join/);
+  assert.match(calendarSource, /\$\{dots \? `<span class="cal-dots">\$\{dots\}<\/span>` : ''\}\s*<\/button>`;/);
+  assert.doesNotMatch(calendarSource, /\$\{dots \? `<span class="cal-dots">\$\{dots\}<\/span>` : ''\}\s*<\/div>`;/);
+});
+
+test('响应式宽度不会覆盖助手折叠态', () => {
+  assert.match(css, /\.ai-panel\.collapsed \{[^}]*width: 40px;[^}]*flex: 0 0 40px;/);
+  assert.match(css, /@media \(max-width: 1100px\)[\s\S]*?\.ai-panel:not\(\.collapsed\) \{ width: 288px; flex-basis: 288px; \}/);
+  assert.match(css, /@media \(max-width: 960px\)[\s\S]*?\.ai-panel:not\(\.collapsed\) \{ width: 272px; flex-basis: 272px; \}/);
 });
 
 test('启动和异步数据读取提供加载、降级与重试状态', () => {
