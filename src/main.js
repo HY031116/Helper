@@ -5,7 +5,7 @@
  * 职责：窗口管理、系统托盘、系统通知、全局快捷键、提醒引擎、IPC
  */
 
-const { app, BrowserWindow, Tray, Menu, Notification, globalShortcut, ipcMain, nativeImage, screen, dialog } = require('electron');
+const { app, BrowserWindow, Tray, Menu, Notification, globalShortcut, ipcMain, nativeImage, screen, dialog, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const store = require('./main/store');
@@ -258,6 +258,7 @@ function registerIpc() {
   ipcMain.handle('tasks:batchComplete', (e, ids) => store.batchComplete(ids));
   ipcMain.handle('tasks:batchDelete', (e, ids) => store.batchDelete(ids));
   ipcMain.handle('tasks:getDeleted', () => store.getDeletedTasks());
+  ipcMain.handle('tasks:purge', (e, id) => store.purgeTask(id));
   ipcMain.handle('tasks:emptyTrash', () => store.emptyTrash());
 
   // 备忘录
@@ -267,6 +268,7 @@ function registerIpc() {
   ipcMain.handle('memos:delete', (e, id) => store.deleteMemo(id));
   ipcMain.handle('memos:getDeleted', () => store.getDeletedMemos());
   ipcMain.handle('memos:restore', (e, id) => store.restoreMemo(id));
+  ipcMain.handle('memos:purge', (e, id) => store.purgeMemo(id));
   ipcMain.handle('memos:emptyTrash', () => store.emptyMemoTrash());
   ipcMain.handle('memos:import', (e, list) => store.importMemos(list));
 
@@ -321,6 +323,11 @@ function registerIpc() {
   ipcMain.handle('data:exportCSV', () => store.exportCSV());
   ipcMain.handle('data:backup', () => store.backup());
   ipcMain.handle('data:getDir', () => store.getDataDir());
+  ipcMain.handle('data:openDir', async () => {
+    const error = await shell.openPath(store.getDataDir());
+    if (error) throw new Error(error);
+    return { ok: true };
+  });
   ipcMain.handle('data:listBackups', () => store.listBackups());
   ipcMain.handle('data:restoreBackup', (e, filePath) => store.restoreFromBackup(filePath));
   ipcMain.handle('data:backupToDir', async () => {
@@ -346,15 +353,6 @@ function registerIpc() {
     return { ok: true, file: res.filePaths[0] };
   });
   ipcMain.handle('data:weeklyReport', (e, weekOffset) => store.generateWeeklyReport(weekOffset));
-  ipcMain.handle('data:pickDir', async () => {
-    const res = await dialog.showOpenDialog(mainWindow, {
-      title: '选择数据目录',
-      properties: ['openDirectory', 'createDirectory']
-    });
-    if (res.canceled || !res.filePaths.length) return { ok: false };
-    return { ok: true, dir: res.filePaths[0] };
-  });
-
   // 桌宠位置：移动窗口 + 保存位置
   ipcMain.handle('pet:setPosition', (e, pos) => {
     if (petWindow && pos && typeof pos.x === 'number' && typeof pos.y === 'number') {

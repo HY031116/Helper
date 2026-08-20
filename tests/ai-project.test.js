@@ -594,9 +594,20 @@ test('回收站：删除后可查询并恢复', () => {
   const deleted = store.getDeletedTasks();
   assert.strictEqual(deleted.length, 1);
   assert.strictEqual(deleted[0].title, '回收站测试');
+  assert.ok(Number.isFinite(deleted[0].deletedAt), '删除任务时应记录删除时间');
   const restored = store.restoreTask(t.id);
   assert.strictEqual(restored.title, '回收站测试');
+  assert.strictEqual(restored.deletedAt, undefined, '恢复任务后应清除删除时间');
   assert.strictEqual(store.getDeletedTasks().length, 0);
+});
+
+test('回收站：只能永久删除已进入回收站的任务', () => {
+  reset();
+  const active = store.createTask({ title: '仍在使用的任务' });
+  assert.throws(() => store.purgeTask(active.id), /回收站中没有这条任务/);
+  store.deleteTask(active.id);
+  assert.deepStrictEqual(store.purgeTask(active.id), { ok: true, id: active.id });
+  assert.strictEqual(store.getDeletedTasks().some((item) => item.id === active.id), false);
 });
 
 test('回收站：emptyTrash 清空', () => {
@@ -948,6 +959,37 @@ test('周报：上周/下周偏移不报错', () => {
   const next = store.generateWeeklyReport(1);
   assert.ok(last.includes('# 工作周报'));
   assert.ok(next.includes('# 工作周报'));
+  assert.ok(last.includes('## 一、上周概览'));
+  assert.ok(last.includes('## 二、上周完成明细'));
+  assert.ok(last.includes('## 六、上周到期未完成'));
+  assert.ok(!last.includes('## 一、本周概览'));
+  assert.ok(next.includes('## 一、下周概览'));
+  assert.ok(next.includes('## 二、下周完成明细'));
+  assert.ok(next.includes('## 六、下周到期未完成'));
+  assert.ok(!next.includes('## 一、本周概览'));
+});
+
+test('周报：计划建议只包含所选周期的下一周待办', () => {
+  reset();
+  const now = new Date();
+  const day = now.getDay() || 7;
+  const nextMonday = new Date(now);
+  nextMonday.setDate(now.getDate() - (day - 1) + 7);
+  nextMonday.setHours(10, 0, 0, 0);
+  const later = new Date(nextMonday);
+  later.setDate(nextMonday.getDate() + 8);
+  const due = (date) => {
+    const pad = (n) => String(n).padStart(2, '0');
+    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+  };
+  store.createTask({ title: '下一周范围内任务', status: 'todo', due: due(nextMonday) });
+  store.createTask({ title: '下一周范围外任务', status: 'todo', due: due(later) });
+
+  const md = store.generateWeeklyReport(0);
+  const plan = md.slice(md.indexOf('## 七、下一周计划建议'));
+  assert.ok(plan.includes('下一周范围内任务'));
+  assert.ok(!plan.includes('下一周范围外任务'));
+  assert.ok(plan.includes(' ~ '), '标题应展示计划周期');
 });
 
 /* ============ 精细化管理：update / child / postpone / restore ============ */
@@ -1539,6 +1581,15 @@ test('备忘录：删除后可从回收站恢复', () => {
   const restored = store.restoreMemo(memo.id);
   assert.strictEqual(restored.title, '待恢复备忘录');
   assert.strictEqual(store.getDeletedMemos().length, 0);
+});
+
+test('备忘录：只能永久删除已进入回收站的内容', () => {
+  resetMemos();
+  const memo = store.createMemo({ title: '待永久删除', content: '过期内容' });
+  assert.throws(() => store.purgeMemo(memo.id), /回收站中没有这条备忘录/);
+  store.deleteMemo(memo.id);
+  assert.deepStrictEqual(store.purgeMemo(memo.id), { ok: true, id: memo.id });
+  assert.strictEqual(store.getDeletedMemos().some((item) => item.id === memo.id), false);
 });
 
 test('备忘录：JSON 导出与备份恢复包含备忘录', () => {

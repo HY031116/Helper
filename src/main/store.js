@@ -213,6 +213,14 @@ function emptyMemoTrash() {
   return { ok: true };
 }
 
+function purgeMemo(id) {
+  const memo = memos.find((item) => item.id === Number(id) && item._deleted);
+  if (!memo) throw new Error('回收站中没有这条备忘录');
+  memos = memos.filter((item) => item.id !== memo.id);
+  saveMemos();
+  return { ok: true, id: memo.id };
+}
+
 function importMemos(list) {
   if (!Array.isArray(list)) throw new Error('备忘录导入格式不正确');
   const imported = list.filter((item) => item && (item.title || item.content)).map((item) => {
@@ -306,6 +314,7 @@ function deleteTask(id) {
   const t = getTask(id);
   if (!t) throw new Error('任务不存在');
   t._deleted = true; // 软删除，支持撤销
+  t.deletedAt = Date.now();
   saveTasks();
   return { ok: true, id };
 }
@@ -314,6 +323,7 @@ function restoreTask(id) {
   const t = tasks.find((x) => x.id === id);
   if (!t) throw new Error('任务不存在');
   delete t._deleted;
+  delete t.deletedAt;
   saveTasks();
   return t;
 }
@@ -341,7 +351,15 @@ function hardDeleteTask(id) {
 }
 
 function getDeletedTasks() {
-  return tasks.filter((t) => t._deleted);
+  return tasks.filter((t) => t._deleted).slice().sort((a, b) => (b.deletedAt || 0) - (a.deletedAt || 0));
+}
+
+function purgeTask(id) {
+  const task = tasks.find((item) => item.id === Number(id) && item._deleted);
+  if (!task) throw new Error('回收站中没有这条任务');
+  tasks = tasks.filter((item) => item.id !== task.id);
+  saveTasks();
+  return { ok: true, id: task.id };
 }
 
 function emptyTrash() {
@@ -743,6 +761,13 @@ function generateWeeklyReport(weekOffset) {
   const pad = (n) => (n < 10 ? '0' + n : '' + n);
   const fmt = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
   const weekLabel = `${fmt(monday)} ~ ${fmt(sunday)}`;
+  const periodName = offset === -1 ? '上周' : offset === 1 ? '下周' : '本周';
+  const nextMonday = new Date(sunday);
+  nextMonday.setDate(sunday.getDate() + 1);
+  nextMonday.setHours(0, 0, 0, 0);
+  const nextSunday = new Date(nextMonday);
+  nextSunday.setDate(nextMonday.getDate() + 6);
+  nextSunday.setHours(23, 59, 59, 999);
 
   const all = tasks.filter((t) => !t._deleted);
   const inWeek = (t) => {
@@ -754,6 +779,11 @@ function generateWeeklyReport(weekOffset) {
     if (!t.due) return false;
     const d = new Date(t.due.replace(' ', 'T') + ':00');
     return d >= monday && d <= sunday;
+  };
+  const dueInNextWeek = (t) => {
+    if (!t.due) return false;
+    const d = new Date(t.due.replace(' ', 'T') + ':00');
+    return d >= nextMonday && d <= nextSunday;
   };
 
   const doneThisWeek = all.filter((t) => t.status === 'done' && inWeek(t));
@@ -781,15 +811,15 @@ function generateWeeklyReport(weekOffset) {
   lines.push('');
   lines.push(`> 生成时间：${new Date().toLocaleString('zh-CN')}`);
   lines.push('');
-  lines.push('## 一、本周概览');
+  lines.push(`## 一、${periodName}概览`);
   lines.push('');
-  lines.push(`- ✅ 本周完成：**${doneThisWeek.length}** 项`);
-  lines.push(`- 🔄 进行中：**${doingNow.length}** 项`);
-  lines.push(`- 📋 待办：**${todoNow.length}** 项`);
-  lines.push(`- ⏰ 本周到期未完成：**${dueThisWeek.length}** 项`);
+  lines.push(`- ✅ ${periodName}完成：**${doneThisWeek.length}** 项`);
+  lines.push(`- 🔄 当前进行中：**${doingNow.length}** 项`);
+  lines.push(`- 📋 当前待办：**${todoNow.length}** 项`);
+  lines.push(`- ⏰ ${periodName}到期未完成：**${dueThisWeek.length}** 项`);
   lines.push('');
 
-  lines.push('## 二、本周完成明细');
+  lines.push(`## 二、${periodName}完成明细`);
   lines.push('');
   if (doneThisWeek.length) {
     doneThisWeek
@@ -804,7 +834,7 @@ function generateWeeklyReport(weekOffset) {
         if (t.desc) lines.push(`   - ${t.desc}`);
       });
   } else {
-    lines.push('（本周暂无完成任务）');
+    lines.push(`（${periodName}暂无完成任务）`);
   }
   lines.push('');
 
@@ -846,7 +876,7 @@ function generateWeeklyReport(weekOffset) {
   }
   lines.push('');
 
-  lines.push('## 六、本周到期未完成');
+  lines.push(`## 六、${periodName}到期未完成`);
   lines.push('');
   if (dueThisWeek.length) {
     dueThisWeek
@@ -860,9 +890,9 @@ function generateWeeklyReport(weekOffset) {
   }
   lines.push('');
 
-  lines.push('## 七、下周计划建议');
+  lines.push(`## 七、下一周计划建议（${fmt(nextMonday)} ~ ${fmt(nextSunday)}）`);
   lines.push('');
-  const nextTodo = all.filter((t) => t.status === 'todo' && t.due)
+  const nextTodo = all.filter((t) => t.status === 'todo' && dueInNextWeek(t))
     .sort((a, b) => (a.due || '').localeCompare(b.due || ''));
   if (nextTodo.length) {
     nextTodo.slice(0, 10).forEach((t) => {
@@ -889,6 +919,7 @@ module.exports = {
   unarchiveTask,
   hardDeleteTask,
   getDeletedTasks,
+  purgeTask,
   emptyTrash,
   batchUpdate,
   batchComplete,
@@ -907,6 +938,7 @@ module.exports = {
   deleteMemo,
   getDeletedMemos,
   restoreMemo,
+  purgeMemo,
   emptyMemoTrash,
   importMemos,
   getSettings,

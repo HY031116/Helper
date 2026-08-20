@@ -27,6 +27,7 @@ contextBridge.exposeInMainWorld('api', {
     batchComplete: (ids) => ipcRenderer.invoke('tasks:batchComplete', ids),
     batchDelete: (ids) => ipcRenderer.invoke('tasks:batchDelete', ids),
     getDeleted: () => ipcRenderer.invoke('tasks:getDeleted'),
+    purge: (id) => ipcRenderer.invoke('tasks:purge', id),
     emptyTrash: () => ipcRenderer.invoke('tasks:emptyTrash')
   },
   /* 备忘录 */
@@ -37,6 +38,7 @@ contextBridge.exposeInMainWorld('api', {
     remove: (id) => ipcRenderer.invoke('memos:delete', id),
     getDeleted: () => ipcRenderer.invoke('memos:getDeleted'),
     restore: (id) => ipcRenderer.invoke('memos:restore', id),
+    purge: (id) => ipcRenderer.invoke('memos:purge', id),
     emptyTrash: () => ipcRenderer.invoke('memos:emptyTrash'),
     import: (list) => ipcRenderer.invoke('memos:import', list)
   },
@@ -64,7 +66,7 @@ contextBridge.exposeInMainWorld('api', {
     exportCSV: () => ipcRenderer.invoke('data:exportCSV'),
     backup: () => ipcRenderer.invoke('data:backup'),
     getDir: () => ipcRenderer.invoke('data:getDir'),
-    pickDir: () => ipcRenderer.invoke('data:pickDir'),
+    openDir: () => ipcRenderer.invoke('data:openDir'),
     listBackups: () => ipcRenderer.invoke('data:listBackups'),
     restoreBackup: (filePath) => ipcRenderer.invoke('data:restoreBackup', filePath),
     backupToDir: () => ipcRenderer.invoke('data:backupToDir'),

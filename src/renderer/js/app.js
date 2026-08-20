@@ -778,18 +778,35 @@ function renderCal() {
 }
 
 /* ---------- 视图：统计 ---------- */
+function weeklyReportFileName(weekOffset) {
+  const date = new Date();
+  const day = date.getDay() || 7;
+  date.setDate(date.getDate() - (day - 1) + weekOffset * 7);
+  const pad = (n) => String(n).padStart(2, '0');
+  const weekName = weekOffset === -1 ? '上周' : weekOffset === 1 ? '下周' : '本周';
+  return `工作周报-${weekName}-${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}.md`;
+}
+
 function renderStat() {
   const all = tasks.filter((t) => !t._deleted && t.status !== 'archived');
   const done = all.filter((t) => t.status === 'done').length;
   const doing = all.filter((t) => t.status === 'doing').length;
   const rate = all.length ? Math.round(done / all.length * 100) + '%' : '0%';
 
-  let html = `<div class="stat-grid">
-    <div class="stat-card"><div class="sc-t">任务总数</div><div class="sc-v">${all.length}</div></div>
-    <div class="stat-card"><div class="sc-t">已完成</div><div class="sc-v">${done}</div></div>
-    <div class="stat-card"><div class="sc-t">进行中</div><div class="sc-v">${doing}</div></div>
-    <div class="stat-card"><div class="sc-t">完成率</div><div class="sc-v">${rate}</div></div>
-  </div>`;
+  let html = '';
+  if (!all.length) {
+    html = `<div class="empty stat-empty">
+      <div class="big" aria-hidden="true">◫</div>
+      <div class="empty-title">还没有任务数据</div>
+      <button type="button" class="btn mini" id="stat-new-task">新建任务</button>
+    </div>`;
+  } else {
+    html = `<dl class="stat-grid">
+      <div class="stat-card"><dt class="sc-t">任务总数</dt><dd class="sc-v">${all.length}</dd></div>
+      <div class="stat-card"><dt class="sc-t">已完成</dt><dd class="sc-v">${done}</dd></div>
+      <div class="stat-card"><dt class="sc-t">进行中</dt><dd class="sc-v">${doing}</dd></div>
+      <div class="stat-card"><dt class="sc-t">完成率</dt><dd class="sc-v">${rate}</dd></div>
+    </dl>`;
 
   // 近 7 天完成趋势（按真实 completedAt 统计）
   const days = [];
@@ -805,15 +822,15 @@ function renderStat() {
     all.filter((t) => t.status === 'done' && t.completedAt && localDateKey(t.completedAt) === key).length
   );
   const maxTrend = Math.max(1, ...trend);
-  html += `<div class="stat-chart-row">
+    html += `<div class="stat-chart-row">
     <section class="stat-panel">
       <h3 class="stat-panel-title">近 7 天完成趋势</h3>
-      <div class="trend-chart" aria-label="近 7 天完成数量">
+      <div class="trend-chart" role="list" aria-label="近 7 天完成数量">
         ${trend.map((v, i) => `
-          <div class="trend-column">
-            <span class="trend-value">${v}</span>
-            <span class="trend-bar" style="--bar-h:${Math.max(4, v / maxTrend * 120)}px;--bar-opacity:${0.46 + i * 0.07}"></span>
-            <span class="trend-label">${days[i]}</span>
+          <div class="trend-column" role="listitem" aria-label="${days[i]} 完成 ${v} 项">
+            <span class="trend-value" aria-hidden="true">${v}</span>
+            <span class="trend-bar" aria-hidden="true" style="--bar-h:${v ? Math.max(4, v / maxTrend * 120) : 0}px;--bar-opacity:${0.46 + i * 0.07}"></span>
+            <span class="trend-label" aria-hidden="true">${days[i]}</span>
           </div>`).join('')}
       </div>
     </section>
@@ -825,7 +842,7 @@ function renderStat() {
           const pct = all.length ? Math.round(n / all.length * 100) : 0;
           return `<div class="metric-row">
             <span class="metric-name">${PRI_NAME[p]}</span>
-            <span class="metric-track"><span class="metric-fill priority-${p}" style="--meter:${pct}%"></span></span>
+            <span class="metric-track" role="meter" aria-label="${PRI_NAME[p]}任务占比" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct}"><span class="metric-fill priority-${p}" style="--meter:${pct}%"></span></span>
             <span class="metric-count">${n}</span>
           </div>`;
         }).join('')}
@@ -844,7 +861,7 @@ function renderStat() {
     tagRank.forEach((d) => {
       const pct = Math.max(4, Math.round(d.count / maxTag * 100));
       html += `<div class="tr-bar"><span class="tr-name">#${esc(d.name)}</span>
-        <span class="tr-track"><span class="tr-fill" style="width:${pct}%"></span></span>
+        <span class="tr-track" role="meter" aria-label="#${esc(d.name)}任务占比" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Math.round(d.count / all.length * 100)}"><span class="tr-fill" style="width:${pct}%"></span></span>
         <span class="tr-count">${d.count}</span></div>`;
     });
     html += '</div>';
@@ -869,7 +886,7 @@ function renderStat() {
             const pct = d.total ? Math.round(d.done / d.total * 100) : 0;
             return `<div class="metric-row wide-label">
               <span class="metric-name" title="${esc(d.name)}">◈ ${esc(d.name)}</span>
-              <span class="metric-track"><span class="metric-fill" style="--meter:${pct}%"></span></span>
+              <span class="metric-track" role="meter" aria-label="${esc(d.name)}项目完成率" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct}"><span class="metric-fill" style="--meter:${pct}%"></span></span>
               <span class="metric-count rate">${d.done}/${d.total} ${pct}%</span>
             </div>`;
           }).join('')}
@@ -884,7 +901,7 @@ function renderStat() {
             const pct = tagged.length ? Math.round(doneN / tagged.length * 100) : 0;
             return `<div class="metric-row wide-label">
               <span class="metric-name" title="${esc(d.name)}">#${esc(d.name)}</span>
-              <span class="metric-track tag"><span class="metric-fill tag" style="--meter:${pct}%"></span></span>
+              <span class="metric-track tag" role="meter" aria-label="#${esc(d.name)}标签完成率" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct}"><span class="metric-fill tag" style="--meter:${pct}%"></span></span>
               <span class="metric-count rate">${doneN}/${tagged.length} ${pct}%</span>
             </div>`;
           }).join('')}
@@ -892,31 +909,41 @@ function renderStat() {
       </section>
     </div>`;
   }
+  }
 
   // 周报生成
   html += `<section class="report-panel">
       <h3 class="stat-panel-title">周报生成</h3>
       <div class="report-actions">
-        <div class="seg" id="report-week-seg">
-          <button type="button" class="seg-it ${reportWeek === -1 ? 'active' : ''}" data-week="-1">上周</button>
-          <button type="button" class="seg-it ${reportWeek === 0 ? 'active' : ''}" data-week="0">本周</button>
-          <button type="button" class="seg-it ${reportWeek === 1 ? 'active' : ''}" data-week="1">下周</button>
+        <div class="seg" id="report-week-seg" role="radiogroup" aria-label="周报周期">
+          <button type="button" role="radio" aria-checked="${reportWeek === -1}" class="seg-it ${reportWeek === -1 ? 'active' : ''}" data-week="-1">上周</button>
+          <button type="button" role="radio" aria-checked="${reportWeek === 0}" class="seg-it ${reportWeek === 0 ? 'active' : ''}" data-week="0">本周</button>
+          <button type="button" role="radio" aria-checked="${reportWeek === 1}" class="seg-it ${reportWeek === 1 ? 'active' : ''}" data-week="1">下周</button>
         </div>
         <button type="button" class="btn mini" id="btn-report-gen">生成周报</button>
         <button type="button" class="btn mini ghost hidden" id="btn-report-copy">复制</button>
         <button type="button" class="btn mini ghost hidden" id="btn-report-download">下载 .md</button>
       </div>
-      <div id="report-preview" class="report-preview hidden"></div>
+      <div id="report-preview" class="report-preview hidden" role="region" aria-label="周报预览" tabindex="0"></div>
   </section>`;
 
   $('#stat-body').innerHTML = html;
+  $('#stat-new-task')?.addEventListener('click', () => openModal(null));
 
   // 周报：选择周
   $$('#report-week-seg .seg-it').forEach((seg) => {
     seg.addEventListener('click', () => {
-      $$('#report-week-seg .seg-it').forEach((x) => x.classList.remove('active'));
+      $$('#report-week-seg .seg-it').forEach((x) => {
+        x.classList.remove('active');
+        x.setAttribute('aria-checked', 'false');
+      });
       seg.classList.add('active');
+      seg.setAttribute('aria-checked', 'true');
       reportWeek = parseInt(seg.dataset.week, 10);
+      $('#report-preview').textContent = '';
+      $('#report-preview').classList.add('hidden');
+      $('#btn-report-copy').classList.add('hidden');
+      $('#btn-report-download').classList.add('hidden');
     });
   });
   // 周报：生成
@@ -924,6 +951,10 @@ function renderStat() {
     const preview = $('#report-preview');
     const copyBtn = $('#btn-report-copy');
     const dlBtn = $('#btn-report-download');
+    const generateBtn = $('#btn-report-gen');
+    generateBtn.disabled = true;
+    generateBtn.setAttribute('aria-busy', 'true');
+    generateBtn.textContent = '生成中…';
     try {
       const md = await window.api.data.weeklyReport(reportWeek);
       preview.textContent = md;
@@ -932,7 +963,12 @@ function renderStat() {
       dlBtn.classList.remove('hidden');
       toast('周报已生成');
     } catch (e) {
-      toast('周报生成失败：' + e.message);
+      console.error('[report] generation failed:', e);
+      toast('周报生成失败，请稍后重试', 3000, null, 'err');
+    } finally {
+      generateBtn.disabled = false;
+      generateBtn.setAttribute('aria-busy', 'false');
+      generateBtn.textContent = '生成周报';
     }
   });
   // 周报：复制
@@ -940,6 +976,9 @@ function renderStat() {
     const md = $('#report-preview').textContent;
     try {
       await navigator.clipboard.writeText(md);
+      const copyBtn = $('#btn-report-copy');
+      copyBtn.textContent = '已复制';
+      setTimeout(() => { if (copyBtn.isConnected) copyBtn.textContent = '复制'; }, 1200);
       toast('周报已复制到剪贴板', 2000, null, 'ok');
     } catch (e) {
       toast('复制失败，请手动选择复制');
@@ -950,9 +989,11 @@ function renderStat() {
     const md = $('#report-preview').textContent;
     const blob = new Blob([md], { type: 'text/markdown;charset=utf-8' });
     const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = `工作周报-${new Date().toISOString().slice(0, 10)}.md`;
+    const url = URL.createObjectURL(blob);
+    a.href = url;
+    a.download = weeklyReportFileName(reportWeek);
     a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 0);
     toast('周报已下载');
   });
 }
@@ -976,7 +1017,7 @@ function renderSettings() {
   let html = `<section class="set-group">
     <h3 class="set-group-title">常规与数据</h3>
     <div class="set-row privacy-row">
-      <div><div class="sr-t">本地数据</div><div class="sr-d">任务、备忘录、设置和对话记录保存在本机。使用真实模型时，当前输入、最近 6 轮对话和最多 30 条未归档任务摘要会发送给所选服务商。</div></div>
+      <div><div class="sr-t">本地数据</div><div class="sr-d">任务、备忘录、设置和对话记录保存在本机。使用真实模型时，当前输入、最近 6 轮对话、最多 30 条未归档任务和 20 条备忘录摘要会发送给所选服务商。</div></div>
       <span class="status-badge">本地存储</span>
     </div>
     ${sw('autoBackup', '自动备份', '每日 22:00 将数据快照备份到备份目录')}
@@ -984,10 +1025,9 @@ function renderSettings() {
     ${sw('notify', '系统通知提醒', '任务到点经系统通知中心推送')}
     ${sw('petEnabled', '桌面桌宠', '常驻桌面最表层的可爱助手，可拖拽、气泡提醒')}
     <div class="set-row">
-      <div><div class="sr-t">本地存储位置</div><div class="sr-d" id="data-dir">${esc(s.dataDir || '')}</div></div>
+      <div><div class="sr-t">本地数据文件夹</div><div class="sr-d data-path" id="data-dir" title="${esc(s.dataDir || '')}">${esc(s.dataDir || '')}</div></div>
       <div class="setting-actions">
-        <button type="button" class="btn mini ghost" id="btn-open-dir">打开目录</button>
-        <button type="button" class="btn mini ghost" id="btn-pick-dir">更改位置</button>
+        <button type="button" class="btn mini ghost" id="btn-open-dir">打开文件夹</button>
       </div>
     </div>
     <div class="set-row">
@@ -1240,13 +1280,20 @@ function bindSettingsEvents() {
     toast('已导出 CSV 表格');
   });
   $('#btn-open-dir').addEventListener('click', async () => {
-    const dir = await window.api.data.getDir();
-    toast(`数据目录：${dir}`);
-  });
-  $('#btn-pick-dir').addEventListener('click', async () => {
-    const res = await window.api.data.pickDir();
-    if (res.ok) {
-      toast(`已选择新数据目录：${res.dir}（重启后生效）`);
+    const button = $('#btn-open-dir');
+    button.disabled = true;
+    button.setAttribute('aria-busy', 'true');
+    button.textContent = '打开中…';
+    try {
+      await window.api.data.openDir();
+      toast('已打开本地数据文件夹');
+    } catch (error) {
+      console.error('[settings] open data folder failed:', error);
+      toast('无法打开数据文件夹，请稍后重试', 3500, null, 'err');
+    } finally {
+      button.disabled = false;
+      button.setAttribute('aria-busy', 'false');
+      button.textContent = '打开文件夹';
     }
   });
   const importButton = $('#btn-import-json');
@@ -1923,13 +1970,16 @@ async function copyMessageText(button, body) {
     button.textContent = '✓';
     button.classList.add('copied');
     button.title = '已复制';
+    button.setAttribute('aria-label', '已复制');
     setTimeout(() => {
       button.textContent = previous;
       button.classList.remove('copied');
       button.title = '复制消息';
+      button.setAttribute('aria-label', '复制消息');
     }, 1200);
   } catch (e) {
-    toast(`复制失败：${esc(e.message)}`, 4000, null, 'err');
+    console.error('[assistant] copy failed:', e);
+    toast('复制失败，请重试', 4000, null, 'err');
   }
 }
 
@@ -1948,6 +1998,7 @@ function createMessage(role, text, ts) {
   copy.textContent = '⧉';
   copy.title = '复制消息';
   copy.setAttribute('aria-label', '复制消息');
+  copy.setAttribute('aria-live', 'polite');
   copy.addEventListener('click', () => copyMessageText(copy, body));
   const footer = document.createElement('span');
   footer.className = 'msg-footer';
@@ -2085,6 +2136,12 @@ function retryAction(retry) {
   return actions;
 }
 
+function assistantRequestFailureMessage() {
+  return settings.aiStage === 'llm'
+    ? '模型暂时没有响应。请检查网络和模型配置后重试。'
+    : '助手暂时没有响应。请重试一次。';
+}
+
 async function runAiTurn(request, retry) {
   if (aiSending) return;
   setAiBusy(true);
@@ -2095,9 +2152,10 @@ async function runAiTurn(request, retry) {
     try {
       result = await request();
     } catch (e) {
+      console.error('[assistant] request failed:', e);
       pending.classList.remove('pending');
       pending.classList.add('error');
-      pending.querySelector('.msg-text').textContent = `暂时没有处理成功：${e.message}`;
+      pending.querySelector('.msg-text').textContent = assistantRequestFailureMessage();
       pending.appendChild(retryAction(retry));
       return;
     }
@@ -2149,15 +2207,17 @@ async function runAiTurn(request, retry) {
         }
       }
     } catch (e) {
+      console.error('[assistant] response rendering failed:', e);
       pending.classList.remove('pending');
       pending.querySelector('.msg-text').textContent = result.message;
-      toast(`回复已收到，但附加操作没有完整显示：${esc(e.message)}`, 5000, null, 'warn');
+      toast('回复已收到，但操作按钮没有完整显示。请刷新后重试。', 5000, null, 'warn');
     }
 
     try {
       await refreshTasks();
     } catch (e) {
-      toast(`操作已完成，但任务列表刷新失败：${esc(e.message)}`, 5000, null, 'warn');
+      console.error('[assistant] task refresh failed:', e);
+      toast('操作已完成，但任务列表没有刷新。请稍后重新打开当前视图。', 5000, null, 'warn');
     }
   } finally {
     setAiBusy(false);
@@ -2638,13 +2698,25 @@ function bindEvents() {
   $('#batch-clear').addEventListener('click', () => setBatchMode(false));
 
   // 回收站
-  $('#trash-empty').addEventListener('click', async () => {
-    confirmDialog('确定清空回收站吗？此操作不可恢复！', async () => {
-      await window.api.tasks.emptyTrash();
-      await window.api.memos.emptyTrash();
-      toast('回收站已清空', 3000, null, 'ok');
+  $('#trash-empty').addEventListener('click', () => {
+    const parts = [];
+    if (trashList.length) parts.push(`${trashList.length} 条任务`);
+    if (deletedMemos.length) parts.push(`${deletedMemos.length} 条备忘录`);
+    const summary = parts.join('、') || '全部内容';
+    confirmDialog(`确定永久删除回收站中的 ${summary}吗？此操作不可恢复。`, async () => {
+      const results = await Promise.allSettled([
+        window.api.tasks.emptyTrash(),
+        window.api.memos.emptyTrash()
+      ]);
       await loadTrash();
-    }, '清空');
+      const failed = results.filter((result) => result.status === 'rejected').length;
+      if (failed === 2) throw new Error('回收站未能清空，请重试');
+      if (failed === 1) {
+        toast('部分内容已永久删除，其余内容未能清空。请重试。', 4500, null, 'warn');
+        return;
+      }
+      toast('回收站已永久清空', 3000, null, 'ok');
+    }, '永久清空');
   });
 
   // AI
@@ -2811,10 +2883,15 @@ function bindEvents() {
 }
 
 /* ---------- 回收站 ---------- */
+function trashDeletedTime(item) {
+  return item && item.deletedAt ? `删除于 ${memoTime(item.deletedAt)}` : '删除时间未知';
+}
+
 async function loadTrash() {
   const list = $('#trash-list');
   if (!list) return;
   list.setAttribute('aria-busy', 'true');
+  list.removeAttribute('role');
   list.innerHTML = '<div class="load-state" role="status"><span class="load-indicator" aria-hidden="true"></span><div><strong>正在读取回收站</strong></div></div>';
   try {
     [trashList, deletedMemos] = await Promise.all([window.api.tasks.getDeleted(), window.api.memos.getDeleted()]);
@@ -2826,32 +2903,42 @@ async function loadTrash() {
   }
   renderNavBadges();
   if (!trashList.length && !deletedMemos.length) {
-    list.innerHTML = '<div class="empty compact"><div class="big">⌫</div><div class="empty-title">回收站是空的</div><p class="empty-hint">删除的任务和备忘录会显示在这里。</p></div>';
+    list.innerHTML = '<div class="empty compact"><div class="big">⌫</div><div class="empty-title">回收站是空的</div><p class="empty-hint">删除的任务和备忘录会显示在这里，并可随时恢复。</p></div>';
     $('#trash-empty').classList.add('hidden');
     list.setAttribute('aria-busy', 'false');
     return;
   }
   $('#trash-empty').classList.remove('hidden');
+  list.setAttribute('role', 'list');
   const taskRows = trashList.map((t) => `
-    <div class="trash-row" data-id="${t.id}">
-      <span class="trash-title">${esc(t.title)}</span>
-      <span class="trash-kind">任务</span>
-      <span class="trash-time">${t.due ? esc(t.due) : '无截止'}</span>
-      <button type="button" class="btn mini" data-restore-task="${t.id}">恢复</button>
+    <div class="trash-row" role="listitem" data-id="${t.id}">
+      <div class="trash-main">
+        <div class="trash-heading"><span class="trash-title">${esc(t.title)}</span><span class="trash-kind">任务</span></div>
+        <span class="trash-time">${esc(trashDeletedTime(t))}</span>
+      </div>
+      <div class="trash-actions">
+        <button type="button" class="btn mini trash-restore" data-restore-task="${t.id}" aria-label="恢复任务「${esc(t.title)}」">恢复</button>
+        <button type="button" class="btn mini danger" data-purge-task="${t.id}" aria-label="永久删除任务「${esc(t.title)}」">永久删除</button>
+      </div>
     </div>`).join('');
   const memoRows = deletedMemos.map((memo) => `
-    <div class="trash-row" data-id="${memo.id}">
-      <span class="trash-title">${esc(memo.title)}</span>
-      <span class="trash-kind">备忘录</span>
-      <span class="trash-time">${esc(memoTime(memo.deletedAt))}</span>
-      <button type="button" class="btn mini" data-restore-memo="${memo.id}">恢复</button>
+    <div class="trash-row" role="listitem" data-id="${memo.id}">
+      <div class="trash-main">
+        <div class="trash-heading"><span class="trash-title">${esc(memo.title)}</span><span class="trash-kind">备忘录</span></div>
+        <span class="trash-time">${esc(trashDeletedTime(memo))}</span>
+      </div>
+      <div class="trash-actions">
+        <button type="button" class="btn mini trash-restore" data-restore-memo="${memo.id}" aria-label="恢复备忘录「${esc(memo.title)}」">恢复</button>
+        <button type="button" class="btn mini danger" data-purge-memo="${memo.id}" aria-label="永久删除备忘录「${esc(memo.title)}」">永久删除</button>
+      </div>
     </div>`).join('');
   list.innerHTML = taskRows + memoRows;
   // 绑定恢复按钮
   $$('#trash-list [data-restore-task]').forEach((b) => {
     b.addEventListener('click', async () => {
       const id = parseInt(b.dataset.restoreTask, 10);
-      b.disabled = true;
+      const rowButtons = Array.from(b.closest('.trash-row').querySelectorAll('button'));
+      rowButtons.forEach((button) => { button.disabled = true; });
       b.setAttribute('aria-busy', 'true');
       b.textContent = '恢复中…';
       try {
@@ -2861,7 +2948,7 @@ async function loadTrash() {
         await loadTrash();
       } catch (error) {
         toast('任务恢复失败，请重试', 3500, null, 'err');
-        b.disabled = false;
+        rowButtons.forEach((button) => { button.disabled = false; });
         b.setAttribute('aria-busy', 'false');
         b.textContent = '恢复';
       }
@@ -2870,7 +2957,8 @@ async function loadTrash() {
   $$('#trash-list [data-restore-memo]').forEach((b) => {
     b.addEventListener('click', async () => {
       const id = parseInt(b.dataset.restoreMemo, 10);
-      b.disabled = true;
+      const rowButtons = Array.from(b.closest('.trash-row').querySelectorAll('button'));
+      rowButtons.forEach((button) => { button.disabled = true; });
       b.setAttribute('aria-busy', 'true');
       b.textContent = '恢复中…';
       try {
@@ -2880,10 +2968,32 @@ async function loadTrash() {
         await loadTrash();
       } catch (error) {
         toast('备忘录恢复失败，请重试', 3500, null, 'err');
-        b.disabled = false;
+        rowButtons.forEach((button) => { button.disabled = false; });
         b.setAttribute('aria-busy', 'false');
         b.textContent = '恢复';
       }
+    });
+  });
+  $$('#trash-list [data-purge-task]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const id = parseInt(button.dataset.purgeTask, 10);
+      const task = trashList.find((item) => item.id === id);
+      confirmDialog(`确定永久删除任务「${task ? task.title : '未命名任务'}」吗？此操作不可恢复。`, async () => {
+        await window.api.tasks.purge(id);
+        toast('任务已永久删除', 2500, null, 'ok');
+        await loadTrash();
+      }, '永久删除');
+    });
+  });
+  $$('#trash-list [data-purge-memo]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const id = parseInt(button.dataset.purgeMemo, 10);
+      const memo = deletedMemos.find((item) => item.id === id);
+      confirmDialog(`确定永久删除备忘录「${memo ? memo.title : '无标题备忘录'}」吗？此操作不可恢复。`, async () => {
+        await window.api.memos.purge(id);
+        toast('备忘录已永久删除', 2500, null, 'ok');
+        await loadTrash();
+      }, '永久删除');
     });
   });
   list.setAttribute('aria-busy', 'false');

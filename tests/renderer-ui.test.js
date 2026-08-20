@@ -333,7 +333,7 @@ test('批量栏实际按可完成任务数更新状态', () => {
 });
 
 test('真实模型设置明确数据范围并校验自定义服务地址', () => {
-  assert.match(app, /当前输入、最近 6 轮对话和最多 30 条未归档任务摘要会发送给所选服务商/);
+  assert.match(app, /当前输入、最近 6 轮对话、最多 30 条未归档任务和 20 条备忘录摘要会发送给所选服务商/);
   assert.match(app, /settings\.aiProvider !== 'custom' \|\| !!settings\.aiBaseUrl/);
   assert.match(app, /s\.aiStage === 'llm'/);
 });
@@ -344,10 +344,11 @@ test('助手输入支持多行、提交中状态和失败重试', () => {
   assert.match(app, /#ai-form'\)\.addEventListener\('submit'/);
   assert.match(app, /e\.key !== 'Enter' \|\| e\.shiftKey \|\| e\.isComposing/);
   assert.match(app, /if \(!raw \|\| aiSending\) return/);
-  assert.match(app, /pending\.querySelector\('\.msg-text'\)\.textContent = `暂时没有处理成功/);
+  assert.match(app, /pending\.querySelector\('\.msg-text'\)\.textContent = assistantRequestFailureMessage\(\)/);
+  assert.doesNotMatch(app, /暂时没有处理成功：\$\{e\.message\}/);
   assert.match(app, /function retryAction\(retry\)/);
   assert.match(app, /actions\.remove\(\);\s*retry\(\)/);
-  assert.match(app, /操作已完成，但任务列表刷新失败/);
+  assert.match(app, /操作已完成，但任务列表没有刷新。请稍后重新打开当前视图。/);
   assert.match(app, /result\.degradeNotice \|\| '模型服务短暂异常，本轮已由本地助手继续处理'/);
   assert.match(app, /memo_split: '已拆成任务'/);
   assert.match(css, /\.ai-input-row textarea \{/);
@@ -365,6 +366,15 @@ test('助手输入支持多行、提交中状态和失败重试', () => {
   assert.strictEqual(send.textContent, '处理中');
   run('setAiBusy(false)');
   assert.strictEqual(send.textContent, '发送');
+
+  assert.strictEqual(
+    run(`settings = { aiStage: 'llm' }; assistantRequestFailureMessage()`),
+    '模型暂时没有响应。请检查网络和模型配置后重试。'
+  );
+  assert.strictEqual(
+    run(`settings = { aiStage: 'mock' }; assistantRequestFailureMessage()`),
+    '助手暂时没有响应。请重试一次。'
+  );
 });
 
 test('助手面板宽度在窄窗口受限并支持键盘调节', () => {
@@ -424,7 +434,7 @@ test('助手刷新失败不重新执行命令，重试操作触发后立即消�
   assert.strictEqual(result.requested, 1);
   assert.strictEqual(result.retryShown, 0);
   assert.strictEqual(result.message, '操作成功');
-  assert.match(result.notices[0], /任务列表刷新失败/);
+  assert.match(result.notices[0], /任务列表没有刷新/);
 });
 
 test('助手歧义选择走结构化解析，并提供上下文下一步', () => {
@@ -476,16 +486,22 @@ test('助手确认与澄清状态提供明确的继续操作', () => {
 
 test('对话消息支持选择、按钮复制和原生右键复制', async () => {
   assert.match(css, /\.msg-text \{[^}]*user-select: text;[^}]*-webkit-user-select: text;/);
+  assert.match(css, /\.msg-copy \{[^}]*width: 24px; height: 24px;[^}]*opacity: 0\.5;/);
   assert.match(app, /copy\.className = 'msg-copy'/);
   assert.match(app, /copy\.setAttribute\('aria-label', '复制消息'\)/);
+  assert.match(app, /copy\.setAttribute\('aria-live', 'polite'\)/);
+  assert.match(app, /toast\('复制失败，请重试'/);
+  assert.doesNotMatch(app, /toast\(`复制失败：\$\{esc\(e\.message\)\}`/);
   assert.match(main, /mainWindow\.webContents\.on\('context-menu'/);
   assert.match(main, /params\.selectionText[\s\S]*?\{ label: '复制', role: 'copy' \}/);
 
   let copied = '';
+  const attrs = {};
   const button = {
     textContent: '⧉',
     title: '复制消息',
-    classList: fakeClassList()
+    classList: fakeClassList(),
+    setAttribute(name, value) { attrs[name] = value; }
   };
   const run = loadRendererRuntime({
     __navigator: { clipboard: { writeText: async (text) => { copied = text; } } },
@@ -496,6 +512,7 @@ test('对话消息支持选择、按钮复制和原生右键复制', async () =>
   assert.strictEqual(copied, '可复制的助手回复');
   assert.strictEqual(button.textContent, '✓');
   assert.strictEqual(button.title, '已复制');
+  assert.strictEqual(attrs['aria-label'], '已复制');
   assert.strictEqual(button.classList.contains('copied'), true);
 });
 
@@ -565,7 +582,7 @@ test('界面样式包含窄容器和低动态偏好支持', () => {
   assert.match(css, /\.task-row:focus-within \.row-actions/);
   assert.doesNotMatch(css, /(?:linear|radial)-gradient\(/);
   assert.match(css, /\.board-cols \{[^}]*overflow-x: auto;/);
-  assert.match(css, /\.trash-row \{ align-items: flex-start; flex-wrap: wrap; \}/);
+  assert.match(css, /@container \(max-width: 560px\)[\s\S]*?\.trash-row \{ grid-template-columns: 1fr; align-items: start; \}/);
 });
 
 test('窗口控件和任务弹窗提供明确语义与小窗布局', () => {
@@ -599,9 +616,30 @@ test('界面颜色与间距由统一设计令牌驱动', () => {
 
 test('统计图表模板保持有效的容器闭合结构', () => {
   const renderStatSource = app.slice(app.indexOf('function renderStat()'), app.indexOf('/* ---------- 视图：设置 ---------- */'));
-  assert.match(renderStatSource, /<div class="trend-column">[\s\S]*?<span class="trend-label">\$\{days\[i\]\}<\/span>\s*<\/div>`\)\.join/);
+  assert.match(renderStatSource, /<div class="trend-column" role="listitem"[\s\S]*?<span class="trend-label" aria-hidden="true">\$\{days\[i\]\}<\/span>\s*<\/div>`\)\.join/);
   assert.doesNotMatch(renderStatSource, /<\/button>`\)\.join/);
   assert.match(renderStatSource, /<section class="stat-panel">[\s\S]*?标签完成率[\s\S]*?<\/section>\s*<\/div>`;/);
+});
+
+test('统计与周报提供准确图表语义、空状态和完整操作反馈', () => {
+  const renderStatSource = app.slice(app.indexOf('function weeklyReportFileName'), app.indexOf('/* ---------- 视图：设置 ---------- */'));
+  assert.match(renderStatSource, /<dl class="stat-grid">[\s\S]*?<dt class="sc-t">任务总数<\/dt><dd class="sc-v">/);
+  assert.match(renderStatSource, /class="trend-chart" role="list"/);
+  assert.match(renderStatSource, /role="meter" aria-label="\$\{PRI_NAME\[p\]\}任务占比"/);
+  assert.match(renderStatSource, /--bar-h:\$\{v \? Math\.max\(4, v \/ maxTrend \* 120\) : 0\}px/);
+  assert.match(css, /\.trend-bar \{[\s\S]*?min-height: 0;/);
+  assert.match(renderStatSource, /class="empty stat-empty"[\s\S]*?id="stat-new-task">新建任务/);
+  assert.match(renderStatSource, /id="report-week-seg" role="radiogroup" aria-label="周报周期"/);
+  assert.match(renderStatSource, /role="radio" aria-checked="\$\{reportWeek === 0\}"/);
+  assert.match(renderStatSource, /x\.setAttribute\('aria-checked', 'false'\)/);
+  assert.match(renderStatSource, /\$\('#report-preview'\)\.textContent = ''/);
+  assert.match(renderStatSource, /id="report-preview"[\s\S]*?role="region" aria-label="周报预览" tabindex="0"/);
+  assert.match(renderStatSource, /generateBtn\.setAttribute\('aria-busy', 'true'\)/);
+  assert.match(renderStatSource, /console\.error\('\[report\] generation failed:', e\)/);
+  assert.match(renderStatSource, /toast\('周报生成失败，请稍后重试'/);
+  assert.match(renderStatSource, /copyBtn\.textContent = '已复制'/);
+  assert.match(renderStatSource, /a\.download = weeklyReportFileName\(reportWeek\)/);
+  assert.match(renderStatSource, /URL\.revokeObjectURL\(url\)/);
 });
 
 test('看板和日历的交互卡片保持有效的按钮闭合结构', () => {
@@ -643,6 +681,36 @@ test('设置操作失败时恢复原状态并结束忙碌反馈', () => {
   assert.match(app, /测试失败，请检查配置或网络/);
   assert.match(app, /box\.setAttribute\('aria-busy', 'true'\)/);
   assert.match(app, /box\.setAttribute\('aria-busy', 'false'\)/);
+  assert.match(app, /await window\.api\.data\.openDir\(\)/);
+  assert.match(app, /无法打开数据文件夹，请稍后重试/);
+  assert.match(app, /button\.textContent = '打开中…'/);
+  assert.match(app, /button\.textContent = '打开文件夹'/);
+  assert.match(main, /ipcMain\.handle\('data:openDir'[\s\S]*?shell\.openPath\(store\.getDataDir\(\)\)/);
+  assert.match(preload, /openDir: \(\) => ipcRenderer\.invoke\('data:openDir'\)/);
+  assert.doesNotMatch(app, /id="btn-pick-dir"/);
+  assert.doesNotMatch(main, /ipcMain\.handle\('data:pickDir'/);
+  assert.doesNotMatch(preload, /pickDir: \(\) => ipcRenderer\.invoke\('data:pickDir'\)/);
+});
+
+test('回收站明确删除时间、单项永久删除和部分失败状态', () => {
+  assert.match(app, /function trashDeletedTime\(item\)/);
+  assert.match(app, /`删除于 \$\{memoTime\(item\.deletedAt\)\}`/);
+  assert.match(app, /list\.setAttribute\('role', 'list'\)/);
+  assert.match(app, /class="trash-row" role="listitem"/);
+  assert.match(app, /data-purge-task="\$\{t\.id\}" aria-label="永久删除任务/);
+  assert.match(app, /data-purge-memo="\$\{memo\.id\}" aria-label="永久删除备忘录/);
+  assert.match(app, /window\.api\.tasks\.purge\(id\)/);
+  assert.match(app, /window\.api\.memos\.purge\(id\)/);
+  assert.match(app, /确定永久删除回收站中的 \$\{summary\}吗？此操作不可恢复。/);
+  assert.match(app, /const summary = parts\.join\('、'\) \|\| '全部内容'/);
+  assert.match(app, /const results = await Promise\.allSettled\(\[/);
+  assert.match(app, /部分内容已永久删除，其余内容未能清空。请重试。/);
+  assert.match(main, /ipcMain\.handle\('tasks:purge'/);
+  assert.match(main, /ipcMain\.handle\('memos:purge'/);
+  assert.match(preload, /purge: \(id\) => ipcRenderer\.invoke\('tasks:purge', id\)/);
+  assert.match(preload, /purge: \(id\) => ipcRenderer\.invoke\('memos:purge', id\)/);
+  assert.match(css, /\.trash-row \{[\s\S]*?display: grid; grid-template-columns: minmax\(0, 1fr\) auto;/);
+  assert.match(css, /\.btn\.trash-restore \{[^}]*color: var\(--ok\)/);
 });
 
 test('数据导入区分解析、部分写入与刷新结果', () => {
@@ -715,7 +783,7 @@ test('备忘录支持防串写自动保存、转任务与统一回收站', () =>
   assert.match(app, /const id = selectedMemoId;[\s\S]*memoSaveChain = memoSaveChain\.then/);
   assert.match(app, /if \(currentView === 'memos' && view !== 'memos'\) saveMemoNow\(\)/);
   assert.match(app, /window\.api\.tasks\.create\(\{ title: memo\.title, desc: memo\.content, tags: memo\.tags/);
-  assert.match(app, /await window\.api\.memos\.emptyTrash\(\)/);
+  assert.match(app, /window\.api\.memos\.emptyTrash\(\)/);
   assert.match(css, /\.memo-list-item\.pinned::before/);
   assert.match(css, /\.memo-content \{[\s\S]*user-select: text;/);
 });
