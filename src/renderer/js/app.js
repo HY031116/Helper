@@ -12,6 +12,7 @@ let memos = [];
 let settings = {};
 let currentView = 'today';
 let currentFilter = 'all';
+let advancedFiltersOpen = false;
 let currentSearch = '';
 let editingTask = null; // 正在编辑的任务（null = 新建）
 let calCursor = new Date();
@@ -38,6 +39,7 @@ let modalSaving = false;
 let modalReturnFocus = null;
 let modalInitialSnapshot = '';
 let aiSending = false;
+let aiRuntimeState = null; // null | ready | degraded
 let eventsBound = false;
 const dataLoadErrors = { tasks: null, memos: null };
 const systemTheme = typeof window.matchMedia === 'function'
@@ -677,25 +679,43 @@ function renderSmartFilters() {
   const tagSet = new Set();
   tasks.filter((t) => !t._deleted).forEach((t) => (t.tags || []).forEach((x) => tagSet.add(x)));
   const tags = [...tagSet].slice(0, 8);
+  const advancedCount = projs.length + tags.length;
+  const advancedSelected = currentFilter.startsWith('proj:') || currentFilter.startsWith('tag:');
+  const advancedLabel = currentFilter.startsWith('proj:')
+    ? `◈ ${currentFilter.slice(5)}`
+    : currentFilter.startsWith('tag:')
+      ? `#${currentFilter.slice(4)}`
+      : `更多筛选 ${advancedCount}`;
 
   let html = `<div class="smart-row">
     ${smart.map((s) => `<button type="button" class="fchip ${currentFilter === s.k ? 'active' : ''}" aria-pressed="${currentFilter === s.k}" data-filter="${s.k}">${s.n}</button>`).join('')}
+    ${advancedCount ? `<button type="button" class="fchip smart-more ${advancedSelected && !advancedFiltersOpen ? 'active' : ''}" id="smart-more" aria-expanded="${advancedFiltersOpen}" aria-controls="smart-advanced" aria-label="${advancedFiltersOpen ? '收起' : '展开'}项目和标签筛选">${esc(advancedLabel)} <span aria-hidden="true">${advancedFiltersOpen ? '▴' : '▾'}</span></button>` : ''}
   </div>`;
-  if (projs.length) {
+  if (advancedCount) html += `<div class="smart-advanced ${advancedFiltersOpen ? '' : 'hidden'}" id="smart-advanced" role="group" aria-label="项目和标签筛选">`;
+  if (advancedCount && projs.length) {
     html += `<div class="smart-row smart-sub">
       <span class="smart-label">项目</span>
       ${projs.map((p) => `<button type="button" class="fchip ${currentFilter === 'proj:' + p ? 'active' : ''}" aria-pressed="${currentFilter === 'proj:' + p}" data-filter="proj:${esc(p)}">◈ ${esc(p)}</button>`).join('')}
     </div>`;
   }
-  if (tags.length) {
+  if (advancedCount && tags.length) {
     html += `<div class="smart-row smart-sub">
       <span class="smart-label">标签</span>
       ${tags.map((t) => `<button type="button" class="fchip ${currentFilter === 'tag:' + t ? 'active' : ''}" aria-pressed="${currentFilter === 'tag:' + t}" data-filter="tag:${esc(t)}">#${esc(t)}</button>`).join('')}
     </div>`;
   }
+  if (advancedCount) html += '</div>';
   wrap.innerHTML = html;
+  const more = $('#smart-more');
+  if (more) {
+    more.addEventListener('click', () => {
+      advancedFiltersOpen = !advancedFiltersOpen;
+      renderSmartFilters();
+      $('#smart-more').focus();
+    });
+  }
   // 绑定事件
-  $$('#smart-filters .fchip').forEach((c) => {
+  $$('#smart-filters .fchip[data-filter]').forEach((c) => {
     c.addEventListener('click', () => {
       currentFilter = c.dataset.filter;
       renderTasks();
@@ -1270,6 +1290,7 @@ function bindSettingsEvents() {
       settings.aiStage = seg.dataset.stage;
       try {
         await window.api.settings.update({ aiStage: seg.dataset.stage });
+        aiRuntimeState = null;
         syncAiConfigVisibility();
         updateAiBadge();
         toast(`AI 引擎已切换为「${seg.textContent}」`);
@@ -1324,9 +1345,11 @@ function bindSettingsEvents() {
       const res = await window.api.ai.test();
       resultEl.textContent = res.message;
       resultEl.className = `sr-d test-result ${res.ok ? 'success' : 'failure'}`;
+      setAiRuntimeState(res.ok ? 'ready' : 'degraded');
     } catch (error) {
       resultEl.textContent = '测试失败，请检查配置或网络';
       resultEl.className = 'sr-d test-result failure';
+      setAiRuntimeState('degraded');
     } finally {
       button.disabled = false;
       button.setAttribute('aria-busy', 'false');
@@ -1368,6 +1391,7 @@ function bindSettingsEvents() {
       throw error;
     }
     if (showToast) toast('AI 配置已保存');
+    aiRuntimeState = null;
     updateAiBadge();
   }
 
@@ -2149,12 +2173,15 @@ async function copyMessageText(button, body) {
 function createMessage(role, text, ts) {
   const el = document.createElement('div');
   el.className = `msg ${role}`;
+  el.setAttribute('role', 'article');
   const body = document.createElement('span');
   body.className = 'msg-text';
   body.textContent = text;
   const meta = document.createElement('span');
   meta.className = 'mt';
-  meta.textContent = new Date(ts || Date.now()).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+  const timeText = new Date(ts || Date.now()).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+  meta.textContent = timeText;
+  el.setAttribute('aria-label', `${role === 'user' ? '你' : '工作台助手'}，${timeText}`);
   const copy = document.createElement('button');
   copy.type = 'button';
   copy.className = 'msg-copy';
@@ -2190,7 +2217,10 @@ function setAiBusy(busy) {
   const send = $('#ai-send');
   chat.setAttribute('aria-busy', String(busy));
   send.disabled = busy;
-  send.textContent = busy ? '处理中' : '发送';
+  send.setAttribute('aria-busy', String(busy));
+  send.textContent = busy ? '处理中…' : '发送';
+  const clear = $('#ai-clear');
+  if (clear) clear.disabled = busy;
   $$('#ai-chips .chip').forEach((chip) => { chip.disabled = busy; });
   $$('.turn-action').forEach((action) => { action.disabled = busy; });
 }
@@ -2255,7 +2285,7 @@ function turnActions(items, label) {
   items.forEach((item) => {
     const button = document.createElement('button');
     button.type = 'button';
-    button.className = 'turn-action';
+    button.className = `turn-action${item.kind ? ` ${item.kind}` : ''}`;
     button.textContent = item.label;
     button.disabled = aiSending;
     button.addEventListener('click', item.run);
@@ -2273,6 +2303,71 @@ function getFollowUps(result) {
 
 function clearTurnActions() {
   $$('#ai-chat .turn-actions').forEach((actions) => actions.remove());
+}
+
+function setAiContext(type) {
+  const context = $('#ai-context');
+  const text = $('#ai-context-text');
+  if (!context || !text) return;
+  const labels = {
+    ask: '等待选择 · 选择后继续原操作',
+    confirm: '等待确认 · 任务尚未执行',
+    clarify: '等待补充 · 回答上一个问题即可继续',
+    error: '请求未完成 · 可重试或检查模型'
+  };
+  const label = labels[type];
+  context.classList.toggle('hidden', !label);
+  if (label) context.dataset.state = type;
+  else delete context.dataset.state;
+  text.textContent = label || '';
+  const input = $('#ai-input');
+  if (!input) return;
+  const placeholders = {
+    ask: '选择上方候选，或输入更完整的标题…',
+    confirm: '也可以输入“确认执行”或“取消”…',
+    clarify: '继续补充刚才缺少的信息…'
+  };
+  input.placeholder = placeholders[type] || '描述任务，或继续补充…';
+}
+
+function setAiRuntimeState(state) {
+  aiRuntimeState = ['ready', 'degraded'].includes(state) ? state : null;
+  updateAiBadge();
+}
+
+function openAiSettings() {
+  switchView('settings');
+  setTimeout(() => {
+    const target = $('#btn-ai-test') || $('#ai-stage-seg');
+    if (!target) return;
+    target.scrollIntoView({ block: 'center' });
+    target.focus();
+  }, 0);
+}
+
+function assistantStatusSummary() {
+  if (dataLoadErrors.tasks) return '任务数据暂时无法读取，恢复后我会同步最新工作状态。';
+  const active = tasks.filter((task) => !task._deleted && task.status !== 'done' && task.status !== 'archived');
+  const byDue = (a, b) => String(a.due || '').localeCompare(String(b.due || ''));
+  const overdue = active.filter((task) => isOverdue(task.due, task.status)).sort(byDue);
+  const dueToday = active.filter((task) => isToday(task.due)).sort(byDue);
+  if (overdue.length) return `当前有 ${overdue.length} 项逾期任务，建议先处理「${overdue[0].title}」。`;
+  if (dueToday.length) return `今天还有 ${dueToday.length} 项任务，下一项是「${dueToday[0].title}」。`;
+  if (active.length) return `当前有 ${active.length} 项待办，今天没有到期任务。`;
+  return '当前没有待办任务。';
+}
+
+function clearAssistantConversation() {
+  confirmDialog('清空当前对话吗？任务和备忘录不会受影响。', async () => {
+    await window.api.chat.clear();
+    clearTurnActions();
+    setAiContext(null);
+    setAiRuntimeState(null);
+    $('#ai-chat').innerHTML = '';
+    addMsg('ai', assistantStatusSummary());
+    $('#ai-input').focus();
+    toast('对话已清空', 2500, null, 'ok');
+  }, '清空对话');
 }
 
 function candidateLabel(candidate) {
@@ -2307,6 +2402,7 @@ function assistantRequestFailureMessage() {
 
 async function runAiTurn(request, retry) {
   if (aiSending) return;
+  setAiContext(null);
   setAiBusy(true);
   const pending = addMsg('ai', '正在理解…');
   pending.classList.add('pending');
@@ -2320,17 +2416,27 @@ async function runAiTurn(request, retry) {
       pending.classList.add('error');
       pending.querySelector('.msg-text').textContent = assistantRequestFailureMessage();
       pending.appendChild(retryAction(retry));
+      setAiContext('error');
+      if (settings.aiStage === 'llm') setAiRuntimeState('degraded');
       return;
     }
 
     try {
       pending.classList.remove('pending', 'error');
       pending.querySelector('.msg-text').textContent = result.message;
+      if (settings.aiStage === 'llm') setAiRuntimeState(result.degraded ? 'degraded' : 'ready');
 
       if (result.degraded) {
         const tip = document.createElement('div');
         tip.className = 'ai-notice';
-        tip.textContent = result.degradeNotice || '模型服务短暂异常，本轮已由本地助手继续处理';
+        const noticeText = document.createElement('span');
+        noticeText.textContent = result.degradeNotice || '模型服务短暂异常，本轮已由本地助手继续处理';
+        const settingsButton = document.createElement('button');
+        settingsButton.type = 'button';
+        settingsButton.className = 'ai-notice-action';
+        settingsButton.textContent = '检查模型';
+        settingsButton.addEventListener('click', openAiSettings);
+        tip.append(noticeText, settingsButton);
         pending.appendChild(tip);
       }
 
@@ -2351,16 +2457,17 @@ async function runAiTurn(request, retry) {
           };
         }), result.candidates.some((candidate) => candidate.entityType === 'memo') ? '选择备忘录' : '选择任务');
         pending.appendChild(choices);
+        setAiContext('ask');
       } else if (result.type === 'confirm') {
         pending.appendChild(turnActions([
-          { label: '确认执行', run: () => sendPrompt('确认执行') },
-          { label: '取消', run: () => sendPrompt('取消') }
+          { label: '确认执行', kind: 'primary', run: () => sendPrompt('确认执行') },
+          { label: '取消', kind: 'quiet', run: () => sendPrompt('取消') }
         ], '确认操作'));
-        $('#ai-input').placeholder = '也可以输入“确认执行”或“取消”…';
+        setAiContext('confirm');
       } else if (result.type === 'clarify') {
-        $('#ai-input').placeholder = '继续补充刚才缺少的信息…';
+        setAiContext('clarify');
       } else {
-        $('#ai-input').placeholder = '描述任务，或继续补充…';
+        setAiContext(null);
         const followUps = getFollowUps(result);
         if (followUps.length) {
           pending.appendChild(turnActions(followUps.map((item) => ({
@@ -2448,12 +2555,16 @@ function updateAiBadge() {
   const stage = settings.aiStage || 'mock';
   const providerReady = settings.aiProvider !== 'custom' || !!settings.aiBaseUrl;
   const configured = !!(settings.aiApiKey && settings.aiModel && providerReady);
-  const stateClass = stage === 'llm' ? (configured ? 'stage-ready' : 'stage-warning') : 'stage-local';
+  const degraded = stage === 'llm' && configured && aiRuntimeState === 'degraded';
+  const stateClass = stage === 'llm' ? (configured && !degraded ? 'stage-ready' : 'stage-warning') : 'stage-local';
   ['stage-ready', 'stage-warning', 'stage-local'].forEach((name) => {
     badge.classList.toggle(name, name === stateClass);
     if (panelStage) panelStage.classList.toggle(name, name === stateClass);
   });
-  if (stage === 'llm' && configured) {
+  if (degraded) {
+    badge.textContent = '模型异常';
+    if (panelStage) panelStage.textContent = '真实模型 · 已切换本地';
+  } else if (stage === 'llm' && configured) {
     badge.textContent = '真实模型';
     if (panelStage) panelStage.textContent = `真实模型 · ${settings.aiModel}`;
   } else if (stage === 'llm' && !configured) {
@@ -2900,6 +3011,7 @@ function bindEvents() {
     e.preventDefault();
     sendPrompt();
   });
+  $('#ai-clear').addEventListener('click', clearAssistantConversation);
   $('#ai-collapse').addEventListener('click', () => {
     const panel = $('#ai-panel');
     const collapsed = panel.classList.toggle('collapsed');
@@ -2915,7 +3027,14 @@ function bindEvents() {
       panel.style.flexBasis = '';
     }
   });
-  $$('#ai-chips .chip').forEach((c) => c.addEventListener('click', () => sendPrompt(c.dataset.prompt)));
+  $$('#ai-chips .chip').forEach((chip) => chip.addEventListener('click', () => {
+    if (chip.dataset.aiAction === 'new-task') {
+      switchView('tasks');
+      openModal(null);
+      return;
+    }
+    sendPrompt(chip.dataset.prompt);
+  }));
   // AI 面板宽度可调（拖拽左边缘）
   (function () {
     const panel = $('#ai-panel');
@@ -3455,23 +3574,7 @@ async function init() {
 
     const chat = $('#ai-chat');
     if (!chat.children.length) {
-      let summary;
-      if (dataLoadErrors.tasks) {
-        summary = '任务数据暂时无法读取，恢复后我会同步最新工作状态。';
-      } else {
-        const active = tasks.filter((task) => !task._deleted && task.status !== 'done' && task.status !== 'archived');
-        const byDue = (a, b) => String(a.due || '').localeCompare(String(b.due || ''));
-        const overdue = active.filter((task) => isOverdue(task.due, task.status)).sort(byDue);
-        const dueToday = active.filter((task) => isToday(task.due)).sort(byDue);
-        summary = overdue.length
-          ? `当前有 ${overdue.length} 项逾期任务，建议先处理「${overdue[0].title}」。`
-          : dueToday.length
-            ? `今天还有 ${dueToday.length} 项任务，下一项是「${dueToday[0].title}」。`
-            : active.length
-              ? `当前有 ${active.length} 项待办，今天没有到期任务。`
-              : '当前没有待办任务。';
-      }
-      addMsg('ai', summary);
+      addMsg('ai', assistantStatusSummary());
     }
     if (settingsResult.status === 'rejected') {
       toast('偏好设置暂时无法读取，已使用默认外观', 4000, null, 'warn');

@@ -190,17 +190,22 @@
     <aside class="ai-panel" id="ai-panel" aria-label="工作台助手">
       <div class="ai-head">
         <span class="ai-avatar">助</span>
-        <div>
+        <div class="ai-identity">
           <div class="ai-name">工作台助手</div>
           <div class="ai-stage stage-local">本地规则引擎</div>
         </div>
+        <button type="button" class="ai-clear" id="ai-clear" title="清空对话" aria-label="清空对话">⌫</button>
         <button type="button" class="ai-collapse" id="ai-collapse" title="收起助手" aria-label="收起助手" aria-expanded="true">»</button>
       </div>
       <div class="ai-chips" id="ai-chips">
-        <button type="button" class="chip" data-prompt="明天下午3点 交周报 #工作 紧急">创建任务</button>
+        <button type="button" class="chip" data-ai-action="new-task">新建任务</button>
         <button type="button" class="chip" data-prompt="今天我要做什么">查看今日</button>
-        <button type="button" class="chip" data-prompt="把 写季度方案 拆成三步">拆分任务</button>
-        <button type="button" class="chip" data-prompt="怎么安排今天的优先级">安排建议</button>
+        <button type="button" class="chip" data-prompt="怎么安排今天的优先级">待办建议</button>
+        <button type="button" class="chip" data-prompt="看看我的备忘录">查看备忘</button>
+      </div>
+      <div class="ai-context hidden" id="ai-context" role="status" aria-live="polite" aria-atomic="true">
+        <span class="ai-context-dot" aria-hidden="true"></span>
+        <span id="ai-context-text"></span>
       </div>
       <div class="ai-chat" id="ai-chat" role="log" aria-live="polite" aria-relevant="additions" aria-busy="true">
         <div class="load-state compact" role="status">
@@ -209,7 +214,7 @@
         </div>
       </div>
       <form class="ai-input-row" id="ai-form">
-        <textarea id="ai-input" rows="1" maxlength="1000" aria-label="给工作台助手发消息，Enter 发送，Shift+Enter 换行" placeholder="描述任务，或继续补充…"></textarea>
+        <textarea id="ai-input" rows="1" maxlength="1000" aria-label="给工作台助手发消息，Enter 发送，Shift+Enter 换行" aria-describedby="ai-context" placeholder="描述任务，或继续补充…"></textarea>
         <button type="submit" class="btn" id="ai-send">发送</button>
       </form>
     </aside>

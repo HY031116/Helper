@@ -151,6 +151,7 @@ test('高频任务操作和设置开关暴露键盘与状态语义', () => {
   assert.match(app, /<button type="button" class="fchip [^`]+aria-pressed=/);
   assert.match(app, /<button type="button" class="bc-card"[^>]+aria-label=/);
   assert.match(app, /<button type="button" class="\$\{cls\}" data-day=[^>]+aria-pressed=/);
+  assert.match(css, /\.ra \{\s*width: 28px; height: 28px; flex: 0 0 28px;/);
 });
 
 test('快速添加同时支持按钮和回车，并防止重复提交', () => {
@@ -380,15 +381,20 @@ test('助手输入支持多行、提交中状态和失败重试', () => {
   assert.match(app, /#ai-chat'\)\.setAttribute\('aria-busy', 'false'\)/);
 
   const attrs = {};
-  const send = { disabled: false, textContent: '' };
+  const send = {
+    disabled: false,
+    textContent: '',
+    setAttribute: (name, value) => { attrs[`send-${name}`] = value; }
+  };
   const run = loadRendererRuntime({
     '#ai-chat': { setAttribute: (name, value) => { attrs[name] = value; } },
     '#ai-send': send
   });
   run('setAiBusy(true)');
   assert.strictEqual(attrs['aria-busy'], 'true');
+  assert.strictEqual(attrs['send-aria-busy'], 'true');
   assert.strictEqual(send.disabled, true);
-  assert.strictEqual(send.textContent, '处理中');
+  assert.strictEqual(send.textContent, '处理中…');
   run('setAiBusy(false)');
   assert.strictEqual(send.textContent, '发送');
 
@@ -503,10 +509,59 @@ test('助手歧义选择走结构化解析，并提供上下文下一步', () =>
 
 test('助手确认与澄清状态提供明确的继续操作', () => {
   assert.match(app, /result\.type === 'confirm'/);
-  assert.match(app, /label: '确认执行', run: \(\) => sendPrompt\('确认执行'\)/);
-  assert.match(app, /label: '取消', run: \(\) => sendPrompt\('取消'\)/);
+  assert.match(app, /label: '确认执行', kind: 'primary', run: \(\) => sendPrompt\('确认执行'\)/);
+  assert.match(app, /label: '取消', kind: 'quiet', run: \(\) => sendPrompt\('取消'\)/);
   assert.match(app, /result\.type === 'clarify'/);
   assert.match(app, /继续补充刚才缺少的信息/);
+});
+
+test('助手持续展示待处理上下文并让模型故障可恢复', () => {
+  assert.match(html, /id="ai-context" role="status" aria-live="polite" aria-atomic="true"/);
+  assert.match(html, /id="ai-input"[^>]+aria-describedby="ai-context"/);
+  assert.match(app, /ask: '等待选择 · 选择后继续原操作'/);
+  assert.match(app, /confirm: '等待确认 · 任务尚未执行'/);
+  assert.match(app, /clarify: '等待补充 · 回答上一个问题即可继续'/);
+  assert.match(app, /settingsButton\.textContent = '检查模型'/);
+  assert.match(app, /settingsButton\.addEventListener\('click', openAiSettings\)/);
+  assert.match(app, /badge\.textContent = '模型异常'/);
+  assert.match(app, /panelStage\.textContent = '真实模型 · 已切换本地'/);
+  assert.match(css, /\.ai-context \{/);
+  assert.match(css, /\.ai-notice-action \{/);
+
+  const context = { classList: fakeClassList(['hidden']), dataset: {} };
+  const contextText = { textContent: '' };
+  const input = { placeholder: '' };
+  const badge = { classList: fakeClassList(), textContent: '' };
+  const stage = { classList: fakeClassList(), textContent: '' };
+  const run = loadRendererRuntime({
+    '#ai-context': context,
+    '#ai-context-text': contextText,
+    '#ai-input': input,
+    '#tb-ai-stage': badge,
+    '.ai-stage': stage
+  });
+  run(`setAiContext('confirm')`);
+  assert.strictEqual(context.classList.contains('hidden'), false);
+  assert.strictEqual(context.dataset.state, 'confirm');
+  assert.strictEqual(contextText.textContent, '等待确认 · 任务尚未执行');
+  assert.match(input.placeholder, /确认执行/);
+
+  run(`settings = { aiStage: 'llm', aiProvider: 'deepseek', aiApiKey: 'key', aiModel: 'deepseek-v4-flash' }; setAiRuntimeState('degraded')`);
+  assert.strictEqual(badge.textContent, '模型异常');
+  assert.strictEqual(stage.textContent, '真实模型 · 已切换本地');
+  assert.strictEqual(stage.classList.contains('stage-warning'), true);
+});
+
+test('助手快捷入口不写入演示数据且支持安全清空历史', () => {
+  assert.match(html, /class="chip" data-ai-action="new-task">新建任务/);
+  assert.doesNotMatch(html, /data-prompt="明天下午3点 交周报/);
+  assert.doesNotMatch(html, /data-prompt="把 写季度方案 拆成三步/);
+  assert.match(html, /data-prompt="看看我的备忘录">查看备忘/);
+  assert.match(html, /id="ai-clear" title="清空对话" aria-label="清空对话"/);
+  assert.match(app, /if \(chip\.dataset\.aiAction === 'new-task'\)[\s\S]*?openModal\(null\)/);
+  assert.match(app, /window\.api\.chat\.clear\(\)/);
+  assert.match(app, /清空当前对话吗？任务和备忘录不会受影响。/);
+  assert.match(app, /addMsg\('ai', assistantStatusSummary\(\)\)/);
 });
 
 test('对话消息支持选择、按钮复制和原生右键复制', async () => {
@@ -515,6 +570,8 @@ test('对话消息支持选择、按钮复制和原生右键复制', async () =>
   assert.match(app, /copy\.className = 'msg-copy'/);
   assert.match(app, /copy\.setAttribute\('aria-label', '复制消息'\)/);
   assert.match(app, /copy\.setAttribute\('aria-live', 'polite'\)/);
+  assert.match(app, /el\.setAttribute\('role', 'article'\)/);
+  assert.match(app, /role === 'user' \? '你' : '工作台助手'/);
   assert.match(app, /toast\('复制失败，请重试'/);
   assert.doesNotMatch(app, /toast\(`复制失败：\$\{esc\(e\.message\)\}`/);
   assert.match(main, /mainWindow\.webContents\.on\('context-menu'/);
@@ -542,6 +599,7 @@ test('对话消息支持选择、按钮复制和原生右键复制', async () =>
 });
 
 test('桌宠点击弹窗展示任务摘要、快捷操作并与提醒气泡互斥', async () => {
+  assert.match(petHtml, /id="pet-bubble" role="status" aria-live="polite" aria-atomic="true"/);
   assert.match(petHtml, /id="pet-menu" role="dialog"[^>]+aria-hidden="true"/);
   assert.match(petHtml, /class="pm-primary"[\s\S]*?data-pet="new"[\s\S]*?data-pet="ai"/);
   assert.strictEqual((petHtml.match(/class="pm-it" data-pet=/g) || []).length, 6);
@@ -562,6 +620,7 @@ test('桌宠点击弹窗展示任务摘要、快捷操作并与提醒气泡互�
   };
   const firstAction = fakePetElement();
   elements['pet-menu'].querySelector = () => firstAction;
+  elements['pet-menu'].querySelectorAll = () => [firstAction, elements['pet-menu-close']];
   const { run } = loadPetRuntime(elements, []);
   await Promise.resolve();
 
@@ -582,6 +641,14 @@ test('桌宠点击弹窗展示任务摘要、快捷操作并与提醒气泡互�
 
   elements.pet.listeners.keydown({ key: 'Enter', preventDefault() {} });
   assert.strictEqual(elements['pet-menu'].classList.contains('hidden'), false);
+
+  firstAction.focused = false;
+  let trapped = false;
+  run('document.activeElement = petMenuClose');
+  elements['pet-menu'].listeners.keydown({ key: 'Tab', shiftKey: false, preventDefault() { trapped = true; } });
+  assert.strictEqual(trapped, true);
+  assert.strictEqual(firstAction.focused, true);
+  assert.match(petApp, /petMenu\.addEventListener\('keydown', trapMenuFocus\)/);
 });
 
 test('主题和 AI 引擎分段控件暴露并同步选中状态', () => {
@@ -754,6 +821,28 @@ test('任务搜索、今日空态、看板与日历形成完整且一致的工�
   assert.strictEqual((app.match(/#cal-body'\)\.addEventListener\('click', onCalClick\)/g) || []).length, 1);
   assert.match(app, /class="cal-title" aria-live="polite"/);
   assert.match(app, /class="cal-dot \$\{dotCls\}" aria-hidden="true"/);
+});
+
+test('任务筛选保留核心状态并将项目标签收进可记忆的更多筛选', () => {
+  const wrap = { innerHTML: '' };
+  const run = loadRendererRuntime({ '#smart-filters': wrap });
+  run(`tasks = [
+    { id: 1, project: 'Q3 规划', tags: ['工作', '规划'] },
+    { id: 2, project: '日常工作', tags: ['工作'] }
+  ]; currentFilter = 'all'; advancedFiltersOpen = false; renderSmartFilters()`);
+  assert.match(wrap.innerHTML, /id="smart-more" aria-expanded="false" aria-controls="smart-advanced"/);
+  assert.match(wrap.innerHTML, /更多筛选 4/);
+  assert.match(wrap.innerHTML, /class="smart-advanced hidden"/);
+  assert.match(wrap.innerHTML, /data-filter="proj:Q3 规划"/);
+  assert.match(wrap.innerHTML, /data-filter="tag:工作"/);
+
+  run(`currentFilter = 'proj:Q3 规划'; advancedFiltersOpen = true; renderSmartFilters()`);
+  assert.match(wrap.innerHTML, /id="smart-more" aria-expanded="true"/);
+  assert.match(wrap.innerHTML, />◈ Q3 规划 <span aria-hidden="true">▴<\/span>/);
+  assert.doesNotMatch(wrap.innerHTML, /class="smart-advanced hidden"/);
+  assert.match(app, /advancedFiltersOpen = !advancedFiltersOpen;\s*renderSmartFilters\(\);\s*\$\('#smart-more'\)\.focus\(\)/);
+  assert.match(app, /#smart-filters \.fchip\[data-filter\]/);
+  assert.match(css, /\.smart-advanced \{[^}]*border-left: 2px solid/);
 });
 
 test('响应式宽度不会覆盖助手折叠态', () => {

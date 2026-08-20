@@ -85,6 +85,21 @@ function setMenuOpen(open, returnFocus) {
   }
 }
 
+function trapMenuFocus(e) {
+  if (e.key !== 'Tab' || petMenu.classList.contains('hidden')) return;
+  const focusable = Array.from(petMenu.querySelectorAll('button:not([disabled])'));
+  if (!focusable.length) return;
+  const first = focusable[0];
+  const last = focusable[focusable.length - 1];
+  if (e.shiftKey && document.activeElement === first) {
+    e.preventDefault();
+    last.focus();
+  } else if (!e.shiftKey && document.activeElement === last) {
+    e.preventDefault();
+    first.focus();
+  }
+}
+
 function showBubble(text, hot, ms) {
   setMenuOpen(false, false);
   petBubble.textContent = text;
@@ -219,6 +234,8 @@ petMenuClose.addEventListener('click', (e) => {
   e.stopPropagation();
   setMenuOpen(false, true);
 });
+
+petMenu.addEventListener('keydown', trapMenuFocus);
 
 petMenu.addEventListener('click', async (e) => {
   const it = e.target.closest('[data-pet]');
