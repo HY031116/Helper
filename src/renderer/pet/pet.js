@@ -10,6 +10,7 @@ const petWrap = document.getElementById('pet-wrap');
 const petBubble = document.getElementById('pet-bubble');
 const petMenu = document.getElementById('pet-menu');
 const petMenuClose = document.getElementById('pet-menu-close');
+const petMenuTitle = document.getElementById('pet-menu-title');
 const petMenuCount = document.getElementById('pet-menu-count');
 const petMenuNext = document.getElementById('pet-menu-next');
 const petSprite = document.getElementById('pet-sprite');
@@ -87,7 +88,7 @@ function setMenuOpen(open, returnFocus) {
 
 function trapMenuFocus(e) {
   if (e.key !== 'Tab' || petMenu.classList.contains('hidden')) return;
-  const focusable = Array.from(petMenu.querySelectorAll('button:not([disabled])'));
+  const focusable = Array.from(petMenu.querySelectorAll('button:not([disabled]):not([tabindex="-1"])'));
   if (!focusable.length) return;
   const first = focusable[0];
   const last = focusable[focusable.length - 1];
@@ -98,6 +99,26 @@ function trapMenuFocus(e) {
     e.preventDefault();
     first.focus();
   }
+}
+
+function onViewGridKeyDown(e) {
+  const item = e.target.closest('.pm-it');
+  if (!item) return;
+  const keys = ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'];
+  if (!keys.includes(e.key)) return;
+  const items = Array.from(e.currentTarget.querySelectorAll('.pm-it'));
+  const index = items.indexOf(item);
+  if (index < 0 || !items.length) return;
+  e.preventDefault();
+  let target = index;
+  if (e.key === 'Home') target = 0;
+  else if (e.key === 'End') target = items.length - 1;
+  else if (e.key === 'ArrowLeft') target = (index - 1 + items.length) % items.length;
+  else if (e.key === 'ArrowRight') target = (index + 1) % items.length;
+  else if (e.key === 'ArrowUp') target = (index - 3 + items.length) % items.length;
+  else target = (index + 3) % items.length;
+  items.forEach((button, itemIndex) => { button.tabIndex = itemIndex === target ? 0 : -1; });
+  items[target].focus();
 }
 
 function showBubble(text, hot, ms) {
@@ -236,6 +257,7 @@ petMenuClose.addEventListener('click', (e) => {
 });
 
 petMenu.addEventListener('keydown', trapMenuFocus);
+petMenu.querySelector('.pm-grid').addEventListener('keydown', onViewGridKeyDown);
 
 petMenu.addEventListener('click', async (e) => {
   const it = e.target.closest('[data-pet]');
@@ -271,16 +293,35 @@ petEl.addEventListener('contextmenu', (e) => {
 });
 
 /* ---------- 状态刷新 ---------- */
+function formatPetDue(value) {
+  if (!value) return '';
+  const [dateKey, time = ''] = String(value).split(' ');
+  const dueDate = new Date(`${dateKey}T00:00:00`);
+  if (Number.isNaN(dueDate.getTime())) return value;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const dayDiff = Math.round((dueDate.getTime() - today.getTime()) / 86400000);
+  let day;
+  if (dayDiff === -1) day = '昨天';
+  else if (dayDiff === 0) day = '今天';
+  else if (dayDiff === 1) day = '明天';
+  else if (dayDiff > 1 && dayDiff < 7) day = `周${'日一二三四五六'[dueDate.getDay()]}`;
+  else day = dateKey.slice(5).replace('-', '月') + '日';
+  return `${day}${time ? ` ${time}` : ''}`;
+}
+
 function renderStatus() {
+  petMenuTitle.textContent = statusSnapshot.overdue ? `工作台 · ${statusSnapshot.overdue} 项逾期` : '工作台';
   petMenuCount.textContent = `${statusSnapshot.todo} 项待办`;
+  petMenu.classList.toggle('has-overdue', statusSnapshot.overdue > 0);
   if (statusSnapshot.overdue) {
-    petMenuNext.textContent = `逾期 ${statusSnapshot.overdue} 项 · 优先处理 ${statusSnapshot.next ? statusSnapshot.next.title : ''}`;
+    petMenuNext.textContent = `优先处理 · ${statusSnapshot.next.title}${statusSnapshot.next.due ? ` · ${formatPetDue(statusSnapshot.next.due)}` : ''}`;
   } else if (statusSnapshot.next) {
-    petMenuNext.textContent = `下一项 · ${statusSnapshot.next.title}${statusSnapshot.next.due ? ' · ' + statusSnapshot.next.due : ''}`;
+    petMenuNext.textContent = `下一项 · ${statusSnapshot.next.title}${statusSnapshot.next.due ? ` · ${formatPetDue(statusSnapshot.next.due)}` : ''}`;
   } else if (statusSnapshot.todo) {
-    petMenuNext.textContent = '当前待办还没有设置截止时间';
+    petMenuNext.textContent = '待办尚未安排时间 · 打开今天查看';
   } else {
-    petMenuNext.textContent = '当前没有待办任务';
+    petMenuNext.textContent = '今天已清空 · 可以新建任务';
   }
 }
 
@@ -324,7 +365,7 @@ if (window.api && typeof window.api.on === 'function') {
   }
   playSprite('idle');
   startIdle();
-  await refreshStatus(true);
+  await refreshStatus(false);
   // 每分钟静默刷新菜单状态，不主动打断用户。
   setInterval(() => refreshStatus(false), 60000);
 })();

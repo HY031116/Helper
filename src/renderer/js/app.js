@@ -239,12 +239,15 @@ function confirmDialog(message, onOk, okText) {
   const mask = $('#confirm-mask');
   const title = $('#confirm-title');
   const text = $('#confirm-text');
+  const errorBox = $('#confirm-error');
   const okBtn = $('#confirm-ok');
   const cancelBtn = $('#confirm-cancel');
   const returnFocus = document.activeElement;
   const actionText = okText || '删除';
   title.textContent = `确认${actionText}`;
   text.textContent = message;
+  errorBox.textContent = '';
+  errorBox.classList.add('hidden');
   okBtn.textContent = actionText;
   mask.classList.remove('hidden');
   mask.setAttribute('aria-hidden', 'false');
@@ -254,6 +257,8 @@ function confirmDialog(message, onOk, okText) {
     cancelBtn.disabled = true;
     okBtn.setAttribute('aria-busy', 'true');
     okBtn.textContent = `${actionText}中…`;
+    errorBox.textContent = '';
+    errorBox.classList.add('hidden');
     try {
       await onOk();
       cleanup();
@@ -263,7 +268,9 @@ function confirmDialog(message, onOk, okText) {
       cancelBtn.disabled = false;
       okBtn.setAttribute('aria-busy', 'false');
       okBtn.textContent = actionText;
-      toast('操作失败，请稍后重试', 4000, null, 'err');
+      errorBox.textContent = `未能${actionText}，请稍后重试。`;
+      errorBox.classList.remove('hidden');
+      toast(`未能${actionText}，请稍后重试`, 4000, null, 'err');
     }
   };
   const onKey = (e) => {
@@ -279,6 +286,8 @@ function confirmDialog(message, onOk, okText) {
     okBtn.disabled = false;
     cancelBtn.disabled = false;
     okBtn.setAttribute('aria-busy', 'false');
+    errorBox.textContent = '';
+    errorBox.classList.add('hidden');
     if (returnFocus && returnFocus.isConnected && !returnFocus.closest('.hidden')) returnFocus.focus();
   }
   cancelBtn.addEventListener('click', cleanup);
@@ -1030,10 +1039,10 @@ function renderStat() {
     </div>`;
   } else {
     html = `<dl class="stat-grid">
-      <div class="stat-card"><dt class="sc-t">任务总数</dt><dd class="sc-v">${all.length}</dd></div>
-      <div class="stat-card"><dt class="sc-t">已完成</dt><dd class="sc-v">${done}</dd></div>
-      <div class="stat-card"><dt class="sc-t">进行中</dt><dd class="sc-v">${doing}</dd></div>
-      <div class="stat-card"><dt class="sc-t">完成率</dt><dd class="sc-v">${rate}</dd></div>
+      <div class="stat-card total"><dt class="sc-t">任务总数</dt><dd class="sc-v">${all.length}</dd></div>
+      <div class="stat-card done"><dt class="sc-t">已完成</dt><dd class="sc-v">${done}</dd></div>
+      <div class="stat-card doing"><dt class="sc-t">进行中</dt><dd class="sc-v">${doing}</dd></div>
+      <div class="stat-card rate"><dt class="sc-t">完成率</dt><dd class="sc-v">${rate}</dd></div>
     </dl>`;
   // 近 7 天完成趋势（按真实 completedAt 统计）
   const maxTrend = Math.max(1, ...trend);
@@ -1042,7 +1051,7 @@ function renderStat() {
       <h3 class="stat-panel-title">近 7 天完成趋势</h3>
       ${recentDone ? `<div class="trend-chart" role="list" aria-label="近 7 天完成数量">
         ${trend.map((v, i) => `
-          <div class="trend-column" role="listitem" aria-label="${days[i]} 完成 ${v} 项">
+          <div class="trend-column${i === trend.length - 1 ? ' today' : ''}" role="listitem" aria-label="${days[i]} 完成 ${v} 项">
             <span class="trend-value" aria-hidden="true">${v}</span>
             <span class="trend-bar" aria-hidden="true" style="--bar-h:${v ? Math.max(4, v / maxTrend * 120) : 0}px;--bar-opacity:${0.46 + i * 0.07}"></span>
             <span class="trend-label" aria-hidden="true">${days[i]}</span>
@@ -1233,10 +1242,10 @@ function renderSettings() {
   ];
 
   let html = `<nav class="settings-nav" aria-label="设置章节">
-    <button type="button" class="settings-nav-item" data-settings-target="settings-general">数据</button>
-    <button type="button" class="settings-nav-item" data-settings-target="settings-assistant">助手</button>
-    <button type="button" class="settings-nav-item" data-settings-target="settings-shortcuts">快捷键</button>
-    <button type="button" class="settings-nav-item danger" data-settings-target="settings-danger">危险操作</button>
+    <button type="button" class="settings-nav-item active" data-settings-target="settings-general" aria-controls="settings-general" aria-current="location" tabindex="0">数据</button>
+    <button type="button" class="settings-nav-item" data-settings-target="settings-assistant" aria-controls="settings-assistant" tabindex="-1">助手</button>
+    <button type="button" class="settings-nav-item" data-settings-target="settings-shortcuts" aria-controls="settings-shortcuts" tabindex="-1">快捷键</button>
+    <button type="button" class="settings-nav-item danger" data-settings-target="settings-danger" aria-controls="settings-danger" tabindex="-1">危险操作</button>
   </nav>
   <section class="set-group" id="settings-general" tabindex="-1" aria-labelledby="settings-general-title">
     <h3 class="set-group-title" id="settings-general-title">常规与数据</h3>
@@ -1347,9 +1356,33 @@ function renderSettings() {
   bindSettingsEvents();
 }
 
+function setSettingsNavActive(targetId) {
+  $$('#settings-body .settings-nav [data-settings-target]').forEach((button) => {
+    const active = button.dataset.settingsTarget === targetId;
+    button.classList.toggle('active', active);
+    if (active) button.setAttribute('aria-current', 'location');
+    else button.removeAttribute('aria-current');
+  });
+}
+
+function syncSettingsNavFromScroll() {
+  const content = $('.content');
+  const nav = $('#settings-body .settings-nav');
+  if (!content || !nav) return;
+  const sections = $$('#settings-body .set-group');
+  if (!sections.length) return;
+  const marker = content.getBoundingClientRect().top + nav.getBoundingClientRect().height + 18;
+  let active = sections[0];
+  sections.forEach((section) => {
+    if (section.getBoundingClientRect().top <= marker) active = section;
+  });
+  setSettingsNavActive(active.id);
+}
+
 function focusSettingsSection(targetId) {
   const target = document.getElementById(targetId);
   if (!target) return false;
+  setSettingsNavActive(targetId);
   target.scrollIntoView({ block: 'start' });
   const content = target.closest('.content');
   const nav = $('#settings-body .settings-nav');
@@ -1360,6 +1393,24 @@ function focusSettingsSection(targetId) {
   }
   target.focus({ preventScroll: true });
   return true;
+}
+
+function onSettingsNavKeyDown(event) {
+  const button = event.target.closest('[data-settings-target]');
+  if (!button) return;
+  const keys = ['ArrowLeft', 'ArrowRight', 'Home', 'End'];
+  if (!keys.includes(event.key)) return;
+  const buttons = Array.from(event.currentTarget.querySelectorAll('[data-settings-target]'));
+  const index = buttons.indexOf(button);
+  if (index < 0 || !buttons.length) return;
+  event.preventDefault();
+  let target = index;
+  if (event.key === 'Home') target = 0;
+  else if (event.key === 'End') target = buttons.length - 1;
+  else if (event.key === 'ArrowLeft') target = (index - 1 + buttons.length) % buttons.length;
+  else target = (index + 1) % buttons.length;
+  buttons.forEach((item, itemIndex) => { item.tabIndex = itemIndex === target ? 0 : -1; });
+  buttons[target].focus();
 }
 
 function bindSettingsEvents() {
@@ -1394,6 +1445,15 @@ function bindSettingsEvents() {
   $$('#settings-body [data-settings-target]').forEach((button) => {
     button.addEventListener('click', () => focusSettingsSection(button.dataset.settingsTarget));
   });
+  $('#settings-body .settings-nav')?.addEventListener('keydown', onSettingsNavKeyDown);
+  const content = $('.content');
+  if (content && !content.__settingsScrollBound) {
+    content.__settingsScrollBound = true;
+    content.addEventListener('scroll', () => {
+      if (currentView === 'settings') syncSettingsNavFromScroll();
+    }, { passive: true });
+  }
+  syncSettingsNavFromScroll();
 
   $$('#settings-body .switch[data-switch]').forEach((sw) => {
     sw.addEventListener('click', async () => {
@@ -2472,20 +2532,61 @@ function opCard(result) {
   return card;
 }
 
-function turnActions(items, label) {
+function onTurnActionsKeyDown(event) {
+  const button = event.target.closest('.turn-action');
+  if (!button) return;
+  const keys = ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'];
+  if (!keys.includes(event.key)) return;
+  const buttons = Array.from(event.currentTarget.querySelectorAll('.turn-action:not(:disabled)'));
+  const index = buttons.indexOf(button);
+  if (index < 0 || !buttons.length) return;
+  event.preventDefault();
+  let targetIndex = index;
+  if (event.key === 'Home') targetIndex = 0;
+  else if (event.key === 'End') targetIndex = buttons.length - 1;
+  else if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') targetIndex = (index - 1 + buttons.length) % buttons.length;
+  else targetIndex = (index + 1) % buttons.length;
+  buttons.forEach((item, itemIndex) => { item.tabIndex = itemIndex === targetIndex ? 0 : -1; });
+  buttons[targetIndex].focus();
+}
+
+function turnActions(items, label, variant) {
   const bar = document.createElement('div');
-  bar.className = 'turn-actions';
+  bar.className = `turn-actions${variant ? ` ${variant}` : ''}`;
   bar.setAttribute('role', 'group');
   bar.setAttribute('aria-label', label || '下一步');
-  items.forEach((item) => {
+  items.forEach((item, index) => {
     const button = document.createElement('button');
     button.type = 'button';
-    button.className = `turn-action${item.kind ? ` ${item.kind}` : ''}`;
-    button.textContent = item.label;
+    button.className = `turn-action${item.kind ? ` ${item.kind}` : ''}${item.index ? ' candidate' : ''}`;
+    button.tabIndex = index === 0 ? 0 : -1;
+    if (item.index) {
+      const number = document.createElement('span');
+      number.className = 'candidate-index';
+      number.textContent = item.index;
+      number.setAttribute('aria-hidden', 'true');
+      const copy = document.createElement('span');
+      copy.className = 'candidate-copy';
+      const title = document.createElement('span');
+      title.className = 'candidate-title';
+      title.textContent = item.label;
+      copy.appendChild(title);
+      if (item.description) {
+        const meta = document.createElement('span');
+        meta.className = 'candidate-meta';
+        meta.textContent = item.description;
+        copy.appendChild(meta);
+      }
+      button.append(number, copy);
+    } else {
+      button.textContent = item.label;
+    }
+    button.setAttribute('aria-label', item.ariaLabel || item.label);
     button.disabled = aiSending;
     button.addEventListener('click', item.run);
     bar.appendChild(button);
   });
+  bar.addEventListener('keydown', onTurnActionsKeyDown);
   return bar;
 }
 
@@ -2505,6 +2606,9 @@ function setAiContext(type) {
   const text = $('#ai-context-text');
   if (!context || !text) return;
   const labels = {
+    working: settings.aiStage === 'llm' && settings.aiModel
+      ? `真实模型正在处理 · ${settings.aiModel}`
+      : '本地助手正在处理',
     ask: '等待选择 · 选择后继续原操作',
     confirm: '等待确认 · 任务尚未执行',
     clarify: '等待补充 · 回答上一个问题即可继续',
@@ -2597,9 +2701,9 @@ function assistantRequestFailureMessage() {
 
 async function runAiTurn(request, retry) {
   if (aiSending) return;
-  setAiContext(null);
+  setAiContext('working');
   setAiBusy(true);
-  const pending = addMsg('ai', '正在理解…');
+  const pending = addMsg('ai', settings.aiStage === 'llm' ? '正在调用模型并理解你的要求…' : '正在理解你的要求…');
   pending.classList.add('pending');
   try {
     let result;
@@ -2640,17 +2744,27 @@ async function runAiTurn(request, retry) {
       if (String(result.type).startsWith('memo_')) await refreshMemos();
 
       if (result.type === 'ask' && result.candidates && result.candidates.length) {
-        const choices = turnActions(result.candidates.map((candidate) => {
+        const candidateItems = result.candidates.map((candidate, index) => {
           const label = candidateLabel(candidate);
+          const description = label === candidate.title ? '' : label.slice(candidate.title.length + 3);
           return {
-            label,
+            label: candidate.title,
+            description,
+            index: String(index + 1),
+            ariaLabel: `第 ${index + 1} 项，${label}`,
             run: async () => {
               choices.querySelectorAll('button').forEach((button) => { button.disabled = true; });
               choices.remove();
               await resolveCandidate(result, candidate, label);
             }
           };
-        }), result.candidates.some((candidate) => candidate.entityType === 'memo') ? '选择备忘录' : '选择任务');
+        });
+        candidateItems.push({ label: '取消操作', kind: 'quiet', run: () => sendPrompt('取消') });
+        const choices = turnActions(
+          candidateItems,
+          result.candidates.some((candidate) => candidate.entityType === 'memo') ? '选择备忘录' : '选择任务',
+          'candidate-actions'
+        );
         pending.appendChild(choices);
         setAiContext('ask');
       } else if (result.type === 'confirm') {
@@ -2660,6 +2774,9 @@ async function runAiTurn(request, retry) {
         ], '确认操作'));
         setAiContext('confirm');
       } else if (result.type === 'clarify') {
+        pending.appendChild(turnActions([
+          { label: '取消操作', kind: 'quiet', run: () => sendPrompt('取消') }
+        ], '取消当前操作'));
         setAiContext('clarify');
       } else {
         setAiContext(null);
@@ -2675,6 +2792,7 @@ async function runAiTurn(request, retry) {
       console.error('[assistant] response rendering failed:', e);
       pending.classList.remove('pending');
       pending.querySelector('.msg-text').textContent = result.message;
+      setAiContext('error');
       toast('回复已收到，但操作按钮没有完整显示。请刷新后重试。', 5000, null, 'warn');
     }
 

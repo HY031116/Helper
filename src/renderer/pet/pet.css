@@ -8,6 +8,7 @@
   --pet-rule: #DCE1E7;
   --pet-accent: #C1523E;
   --pet-accent-rgb: 193, 82, 62;
+  --pet-primary: #C1523E;
   --pet-info: #4C6A92;
   --pet-danger: #C2413A;
   --pet-shadow: 0 12px 30px rgba(23, 32, 43, 0.24);
@@ -108,8 +109,9 @@ html, body {
   bottom: 182px;
   left: 50%;
   transform: translateX(-50%);
-  min-width: 150px;
-  max-width: 240px;
+  width: calc(100% - 8px);
+  min-width: 0;
+  max-width: none;
   padding: 8px 12px;
   border: 1px solid var(--pet-rule);
   border-radius: 8px;
@@ -151,6 +153,7 @@ html, body {
 }
 .pm-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
 .pm-kicker { display: block; color: var(--pet-muted); font-size: 10px; line-height: 1.2; }
+.pet-menu.has-overdue .pm-kicker { color: var(--pet-danger); font-weight: 650; }
 .pm-count { display: block; margin-top: 2px; color: var(--pet-ink); font-size: 14px; line-height: 1.25; }
 .pm-close {
   width: 24px; height: 24px; border: 0; border-radius: 6px; background: transparent;
@@ -161,10 +164,11 @@ html, body {
   min-height: 30px; margin-top: 7px; padding-left: 8px; border-left: 2px solid var(--pet-info); color: var(--pet-muted); font-size: 10.5px; line-height: 1.4;
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
 }
+.pet-menu.has-overdue .pm-next { border-left-color: var(--pet-danger); color: var(--pet-ink2); }
 .pm-primary { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 8px; }
 .pm-main {
-  min-width: 0; min-height: 38px; border: 1px solid var(--pet-accent); border-radius: 6px;
-  background: var(--pet-accent); color: #fff; font-family: inherit; font-size: 11.5px; font-weight: 600; line-height: 1.2;
+  min-width: 0; min-height: 38px; border: 1px solid var(--pet-primary); border-radius: 6px;
+  background: var(--pet-primary); color: #fff; font-family: inherit; font-size: 11.5px; font-weight: 600; line-height: 1.2;
   display: flex; align-items: center; justify-content: center; gap: 4px; cursor: pointer;
 }
 .pm-main.secondary { border-color: rgba(76, 106, 146, 0.35); background: rgba(76, 106, 146, 0.09); color: var(--pet-info); }
@@ -201,6 +205,7 @@ body.dark {
   --pet-rule: #303A45;
   --pet-accent: #E87058;
   --pet-accent-rgb: 232, 112, 88;
+  --pet-primary: #B54A38;
   --pet-info: #7F9BC2;
   --pet-danger: #DE7068;
   --pet-shadow: 0 12px 30px rgba(0, 0, 0, 0.42);

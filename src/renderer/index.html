@@ -311,11 +311,12 @@
 
   <!-- 删除确认 -->
   <div class="modal-mask hidden" id="confirm-mask" aria-hidden="true">
-    <div class="modal small" role="alertdialog" aria-modal="true" aria-labelledby="confirm-title" aria-describedby="confirm-text">
+    <div class="modal small" role="alertdialog" aria-modal="true" aria-labelledby="confirm-title" aria-describedby="confirm-text confirm-error">
       <h5 id="confirm-title">确认删除</h5>
       <p id="confirm-text">确定要删除这条任务吗？</p>
+      <div class="form-error hidden" id="confirm-error" role="alert"></div>
       <div class="m-actions">
-        <button type="button" class="btn ghost" id="confirm-cancel">取消</button>
+        <button type="button" class="btn neutral" id="confirm-cancel">取消</button>
         <button type="button" class="btn danger" id="confirm-ok">删除</button>
       </div>
     </div>

@@ -123,7 +123,8 @@ function loadPetRuntime(elements, tasks) {
         },
         on: () => () => {}
       }
-    }
+    },
+    testValues: elements.__testValues || {}
   });
   vm.runInContext(petApp, context);
   return { run: (source) => vm.runInContext(source, context), documentListeners };
@@ -243,7 +244,10 @@ test('任务弹窗保护未保存内容并保证截止日期完整显示', () =>
 });
 
 test('确认框遵循安全的原生键盘行为', () => {
-  assert.match(html, /role="alertdialog" aria-modal="true" aria-labelledby="confirm-title" aria-describedby="confirm-text"/);
+  assert.match(html, /role="alertdialog" aria-modal="true" aria-labelledby="confirm-title" aria-describedby="confirm-text confirm-error"/);
+  assert.match(html, /id="confirm-error" role="alert"/);
+  assert.match(html, /class="btn neutral" id="confirm-cancel">取消<\/button>/);
+  assert.match(css, /\.btn\.neutral \{[^}]*border: 1px solid var\(--rule\);[^}]*color: var\(--ink2\);/);
   assert.match(app, /if \(e\.key === 'Tab'\) trapFocus\(mask, e\)/);
   assert.doesNotMatch(app, /if \(e\.key === 'Enter'\) \{ onOkClick\(\); \}/);
   assert.match(app, /const onOkClick = async \(\) => \{/);
@@ -251,7 +255,43 @@ test('确认框遵循安全的原生键盘行为', () => {
   assert.match(app, /okBtn\.setAttribute\('aria-busy', 'true'\)/);
   assert.match(app, /await onOk\(\);\s*cleanup\(\)/);
   assert.match(app, /console\.error\('\[confirm\] action failed:', error\)/);
-  assert.match(app, /toast\('操作失败，请稍后重试', 4000, null, 'err'\)/);
+  assert.match(app, /errorBox\.textContent = `未能\$\{actionText\}，请稍后重试。`/);
+  assert.match(app, /errorBox\.classList\.remove\('hidden'\)/);
+  assert.match(app, /toast\(`未能\$\{actionText\}，请稍后重试`, 4000, null, 'err'\)/);
+});
+
+test('确认操作失败后保留弹窗、恢复按钮并显示内联错误', async () => {
+  const makeElement = (initial) => ({
+    attrs: {}, listeners: {}, textContent: '', disabled: false,
+    classList: fakeClassList(initial),
+    setAttribute(name, value) { this.attrs[name] = value; },
+    addEventListener(name, listener) { this.listeners[name] = listener; },
+    removeEventListener(name) { delete this.listeners[name]; },
+    focus() { this.focused = true; },
+    closest() { return null; }
+  });
+  const mask = makeElement(['hidden']);
+  const title = makeElement();
+  const text = makeElement();
+  const errorBox = makeElement(['hidden']);
+  const ok = makeElement();
+  const cancel = makeElement();
+  const run = loadRendererRuntime({
+    '#confirm-mask': mask,
+    '#confirm-title': title,
+    '#confirm-text': text,
+    '#confirm-error': errorBox,
+    '#confirm-ok': ok,
+    '#confirm-cancel': cancel
+  });
+  run(`document.activeElement = null; toast = () => {}; confirmDialog('永久删除吗？', async () => { throw new Error('失败'); }, '永久删除')`);
+  await ok.listeners.click();
+  assert.strictEqual(mask.classList.contains('hidden'), false);
+  assert.strictEqual(ok.disabled, false);
+  assert.strictEqual(cancel.disabled, false);
+  assert.strictEqual(ok.textContent, '永久删除');
+  assert.strictEqual(errorBox.textContent, '未能永久删除，请稍后重试。');
+  assert.strictEqual(errorBox.classList.contains('hidden'), false);
 });
 
 test('设置中的破坏性任务操作均需确认且文案准确', () => {
@@ -475,6 +515,10 @@ test('助手歧义选择走结构化解析，并提供上下文下一步', () =>
   assert.match(app, /window\.api\.ai\.resolve\(/);
   assert.match(app, /result\.type === 'ask' && result\.candidates/);
   assert.match(css, /\.turn-actions \{/);
+  assert.match(app, /index: String\(index \+ 1\)/);
+  assert.match(app, /ariaLabel: `第 \$\{index \+ 1\} 项，\$\{label\}`/);
+  assert.match(app, /'candidate-actions'/);
+  assert.match(css, /\.turn-actions\.candidate-actions \{[^}]*display: grid;/);
 
   const run = loadRendererRuntime({});
   const followUps = JSON.parse(run(`JSON.stringify(getFollowUps({
@@ -514,12 +558,39 @@ test('助手确认与澄清状态提供明确的继续操作', () => {
   assert.match(app, /label: '取消', kind: 'quiet', run: \(\) => sendPrompt\('取消'\)/);
   assert.match(app, /result\.type === 'clarify'/);
   assert.match(app, /继续补充刚才缺少的信息/);
+  assert.match(app, /\{ label: '取消操作', kind: 'quiet', run: \(\) => sendPrompt\('取消'\) \}/);
+});
+
+test('助手操作组使用单一 Tab 停靠点并支持方向键浏览', () => {
+  assert.match(app, /button\.tabIndex = index === 0 \? 0 : -1/);
+  assert.match(app, /bar\.addEventListener\('keydown', onTurnActionsKeyDown\)/);
+  assert.match(app, /event\.key === 'Home'/);
+  assert.match(app, /event\.key === 'End'/);
+  assert.match(css, /\.turn-action:focus-visible \{/);
+
+  const first = { tabIndex: 0, focused: false, focus() { this.focused = true; } };
+  const second = { tabIndex: -1, focused: false, focus() { this.focused = true; } };
+  const buttons = [first, second];
+  const event = {
+    key: 'ArrowDown',
+    target: { closest: () => first },
+    currentTarget: { querySelectorAll: () => buttons },
+    preventDefaultCalled: false,
+    preventDefault() { this.preventDefaultCalled = true; }
+  };
+  const run = loadRendererRuntime({ __testValues: { event } });
+  run('onTurnActionsKeyDown(testValues.event)');
+  assert.strictEqual(event.preventDefaultCalled, true);
+  assert.strictEqual(first.tabIndex, -1);
+  assert.strictEqual(second.tabIndex, 0);
+  assert.strictEqual(second.focused, true);
 });
 
 test('助手持续展示待处理上下文并让模型故障可恢复', () => {
   assert.match(html, /id="ai-context" role="status" aria-live="polite" aria-atomic="true"/);
   assert.match(html, /id="ai-input"[^>]+aria-describedby="ai-context"/);
   assert.match(app, /ask: '等待选择 · 选择后继续原操作'/);
+  assert.match(app, /working: settings\.aiStage === 'llm'/);
   assert.match(app, /confirm: '等待确认 · 任务尚未执行'/);
   assert.match(app, /clarify: '等待补充 · 回答上一个问题即可继续'/);
   assert.match(app, /settingsButton\.textContent = '检查模型'/);
@@ -546,6 +617,10 @@ test('助手持续展示待处理上下文并让模型故障可恢复', () => {
   assert.strictEqual(context.dataset.state, 'confirm');
   assert.strictEqual(contextText.textContent, '等待确认 · 任务尚未执行');
   assert.match(input.placeholder, /确认执行/);
+
+  run(`settings = { aiStage: 'llm', aiModel: 'deepseek-v4-flash' }; setAiContext('working')`);
+  assert.strictEqual(context.dataset.state, 'working');
+  assert.strictEqual(contextText.textContent, '真实模型正在处理 · deepseek-v4-flash');
 
   run(`settings = { aiStage: 'llm', aiProvider: 'deepseek', aiApiKey: 'key', aiModel: 'deepseek-v4-flash' }; setAiRuntimeState('degraded')`);
   assert.strictEqual(badge.textContent, '模型异常');
@@ -604,8 +679,12 @@ test('桌宠点击弹窗展示任务摘要、快捷操作并与提醒气泡互�
   assert.match(petHtml, /id="pet-menu" role="dialog"[^>]+aria-hidden="true"/);
   assert.match(petHtml, /class="pm-primary"[\s\S]*?data-pet="new"[\s\S]*?data-pet="ai"/);
   assert.strictEqual((petHtml.match(/class="pm-it" data-pet=/g) || []).length, 6);
+  assert.match(petHtml, /class="pm-grid" role="toolbar" aria-label="打开视图"/);
+  assert.strictEqual((petHtml.match(/class="pm-it" data-pet="[^"]+" tabindex="0"/g) || []).length, 1);
+  assert.strictEqual((petHtml.match(/class="pm-it" data-pet="[^"]+" tabindex="-1"/g) || []).length, 5);
   assert.match(petHtml, /id="pet" role="button" tabindex="0"[^>]+aria-expanded="false"/);
   assert.match(petCss, /\.pm-grid \{[\s\S]*?grid-template-columns: repeat\(3, minmax\(0, 1fr\)\)/);
+  assert.match(petCss, /\.pet-bubble \{[\s\S]*?width: calc\(100% - 8px\);[\s\S]*?max-width: none;/);
   assert.match(petCss, /@media \(prefers-reduced-motion: reduce\)/);
   assert.match(main, /if \(view === 'new'\) \{\s*if \(mainWindow\) mainWindow\.webContents\.send\('app:new-task'\)/);
 
@@ -615,6 +694,7 @@ test('桌宠点击弹窗展示任务摘要、快捷操作并与提醒气泡互�
     'pet-bubble': fakePetElement(['hidden']),
     'pet-menu': fakePetElement(['hidden']),
     'pet-menu-close': fakePetElement(),
+    'pet-menu-title': fakePetElement(),
     'pet-menu-count': fakePetElement(),
     'pet-menu-next': fakePetElement(),
     'pet-sprite': fakePetElement()
@@ -631,7 +711,8 @@ test('桌宠点击弹窗展示任务摘要、快捷操作并与提醒气泡互�
     next: { title: '提交周报', due: '2026-08-19 18:00' }
   }; renderStatus(); setMenuOpen(true, false);`);
   assert.strictEqual(elements['pet-menu-count'].textContent, '3 项待办');
-  assert.match(elements['pet-menu-next'].textContent, /逾期 1 项.*提交周报/);
+  assert.strictEqual(elements['pet-menu-title'].textContent, '工作台 · 1 项逾期');
+  assert.match(elements['pet-menu-next'].textContent, /优先处理.*提交周报/);
   assert.strictEqual(elements['pet-menu'].classList.contains('hidden'), false);
   assert.strictEqual(elements.pet.attrs['aria-expanded'], 'true');
   assert.strictEqual(firstAction.focused, true);
@@ -650,6 +731,42 @@ test('桌宠点击弹窗展示任务摘要、快捷操作并与提醒气泡互�
   assert.strictEqual(trapped, true);
   assert.strictEqual(firstAction.focused, true);
   assert.match(petApp, /petMenu\.addEventListener\('keydown', trapMenuFocus\)/);
+  assert.match(petApp, /querySelector\('\.pm-grid'\)\.addEventListener\('keydown', onViewGridKeyDown\)/);
+  assert.match(petApp, /button:not\(\[disabled\]\):not\(\[tabindex="-1"\]\)/);
+  assert.match(petApp, /await refreshStatus\(false\)/);
+  assert.doesNotMatch(petApp, /await refreshStatus\(true\)/);
+  assert.strictEqual(run(`formatPetDue('${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}-${String(new Date().getDate()).padStart(2, '0')} 18:00')`), '今天 18:00');
+});
+
+test('桌宠视图工具栏支持二维方向键且只保留一个 Tab 入口', () => {
+  const elements = {
+    pet: fakePetElement(),
+    'pet-wrap': fakePetElement(),
+    'pet-bubble': fakePetElement(['hidden']),
+    'pet-menu': fakePetElement(['hidden']),
+    'pet-menu-close': fakePetElement(),
+    'pet-menu-title': fakePetElement(),
+    'pet-menu-count': fakePetElement(),
+    'pet-menu-next': fakePetElement(),
+    'pet-sprite': fakePetElement()
+  };
+  const buttons = Array.from({ length: 6 }, () => fakePetElement());
+  buttons.forEach((button, index) => { button.tabIndex = index === 0 ? 0 : -1; });
+  elements['pet-menu'].querySelector = () => ({ addEventListener() {} });
+  elements['pet-menu'].querySelectorAll = () => buttons.filter((button) => button.tabIndex === 0);
+  const event = {
+    key: 'ArrowDown', target: { closest: () => buttons[0] },
+    currentTarget: { querySelectorAll: () => buttons }, prevented: false,
+    preventDefault() { this.prevented = true; }
+  };
+  elements.__testValues = { event };
+  const { run: runKey } = loadPetRuntime(elements);
+  runKey('onViewGridKeyDown(testValues.event)');
+  assert.strictEqual(event.prevented, true);
+  assert.strictEqual(buttons[0].tabIndex, -1);
+  assert.strictEqual(buttons[3].tabIndex, 0);
+  assert.strictEqual(buttons[3].focused, true);
+  assert.match(petApp, /else target = \(index \+ 3\) % items\.length/);
 });
 
 test('主题和 AI 引擎分段控件暴露并同步选中状态', () => {
@@ -778,7 +895,7 @@ test('界面颜色与间距由统一设计令牌驱动', () => {
 
 test('统计图表模板保持有效的容器闭合结构', () => {
   const renderStatSource = app.slice(app.indexOf('function renderStat()'), app.indexOf('/* ---------- 视图：设置 ---------- */'));
-  assert.match(renderStatSource, /<div class="trend-column" role="listitem"[\s\S]*?<span class="trend-label" aria-hidden="true">\$\{days\[i\]\}<\/span>\s*<\/div>`\)\.join/);
+  assert.match(renderStatSource, /<div class="trend-column(?:\$\{i === trend\.length - 1 \? ' today' : ''\})?" role="listitem"[\s\S]*?<span class="trend-label" aria-hidden="true">\$\{days\[i\]\}<\/span>\s*<\/div>`\)\.join/);
   assert.doesNotMatch(renderStatSource, /<\/button>`\)\.join/);
   assert.match(renderStatSource, /<section class="stat-panel">[\s\S]*?标签完成率[\s\S]*?<\/section>\s*<\/div>`;/);
 });
@@ -792,6 +909,13 @@ test('统计与周报提供准确图表语义、空状态和完整操作反馈',
   assert.match(css, /\.trend-bar \{[\s\S]*?min-height: 0;/);
   assert.match(renderStatSource, /class="empty stat-empty"[\s\S]*?id="stat-new-task">新建任务/);
   assert.match(renderStatSource, /id="report-week-seg" role="radiogroup" aria-label="周报周期"/);
+  assert.match(renderStatSource, /class="stat-card total"/);
+  assert.match(renderStatSource, /class="stat-card done"/);
+  assert.match(renderStatSource, /class="stat-card doing"/);
+  assert.match(renderStatSource, /class="stat-card rate"/);
+  assert.match(renderStatSource, /class="trend-column\$\{i === trend\.length - 1 \? ' today' : ''\}"/);
+  assert.match(css, /\.stat-card\.done \.sc-v \{ color: var\(--ok\); \}/);
+  assert.match(css, /\.trend-column\.today \.trend-bar \{ background: var\(--accent\);/);
   assert.match(renderStatSource, /role="radio" aria-checked="\$\{reportWeek === 0\}"/);
   assert.match(renderStatSource, /x\.setAttribute\('aria-checked', 'false'\)/);
   assert.match(renderStatSource, /\$\('#report-preview'\)\.textContent = ''/);
@@ -953,11 +1077,20 @@ test('任务筛选保留核心状态并将项目标签收进可记忆的更多�
 
 test('设置页提供章节导航并将焦点送到真实内容分组', () => {
   assert.match(app, /class="settings-nav" aria-label="设置章节"/);
-  assert.match(app, /data-settings-target="settings-general">数据<\/button>/);
+  assert.match(app, /data-settings-target="settings-general" aria-controls="settings-general" aria-current="location" tabindex="0">数据<\/button>/);
+  assert.match(app, /function setSettingsNavActive\(targetId\)/);
+  assert.match(app, /function syncSettingsNavFromScroll\(\)/);
+  assert.match(app, /content\.addEventListener\('scroll', \(\) =>/);
+  assert.match(app, /button\.classList\.toggle\('active', active\)/);
+  assert.match(app, /setSettingsNavActive\(targetId\);/);
+  assert.strictEqual((app.match(/class="settings-nav-item[^>]+tabindex="-1"/g) || []).length, 3);
+  assert.match(app, /settings-body \.settings-nav'\)\?\.addEventListener\('keydown', onSettingsNavKeyDown\)/);
+  assert.match(app, /function onSettingsNavKeyDown\(event\)/);
   assert.match(app, /id="settings-assistant" tabindex="-1" aria-labelledby="settings-assistant-title"/);
   assert.match(app, /id="settings-shortcuts" tabindex="-1" aria-labelledby="settings-shortcuts-title"/);
   assert.match(app, /id="settings-danger" tabindex="-1" aria-labelledby="settings-danger-title"/);
   assert.match(css, /\.settings-nav \{[^}]*position: sticky;[^}]*overflow-x: auto;/);
+  assert.match(css, /\.settings-nav-item\.active \{[^}]*border-bottom-color: var\(--accent\);/);
   assert.match(css, /\.set-group \{[^}]*scroll-margin-top: 52px;/);
 
   const target = {
@@ -971,6 +1104,19 @@ test('设置页提供章节导航并将焦点送到真实内容分组', () => {
   assert.strictEqual(run(`focusSettingsSection('settings-shortcuts')`), true);
   assert.strictEqual(target.scrollOptions.block, 'start');
   assert.strictEqual(target.focusOptions.preventScroll, true);
+
+  const first = { tabIndex: 0, focused: false, focus() { this.focused = true; }, closest() { return this; } };
+  const second = { tabIndex: -1, focused: false, focus() { this.focused = true; }, closest() { return this; } };
+  const event = {
+    key: 'ArrowRight', target: first, currentTarget: { querySelectorAll: () => [first, second] },
+    prevented: false, preventDefault() { this.prevented = true; }
+  };
+  const runNav = loadRendererRuntime({ __testValues: { event } });
+  runNav('onSettingsNavKeyDown(testValues.event)');
+  assert.strictEqual(event.prevented, true);
+  assert.strictEqual(first.tabIndex, -1);
+  assert.strictEqual(second.tabIndex, 0);
+  assert.strictEqual(second.focused, true);
 });
 
 test('响应式宽度不会覆盖助手折叠态', () => {
@@ -1084,6 +1230,17 @@ test('暗色搜索聚焦保持深色背景，主操作色满足白字对比度',
   const dark = css.match(/body\.dark\s*\{([\s\S]*?)\}/)[1];
   assert.ok(contrastRatio(cssVar(root, 'grad'), '#FFFFFF') >= 4.5);
   assert.ok(contrastRatio(cssVar(dark, 'grad'), '#FFFFFF') >= 4.5);
+  ['solid-accent', 'solid-info', 'solid-ok', 'solid-warn', 'solid-danger', 'solid-neutral'].forEach((name) => {
+    assert.ok(contrastRatio(cssVar(root, name), '#FFFFFF') >= 4.5, `${name} 与白字对比度不足`);
+  });
+  assert.match(css, /\.pri-dot\.p3 \{ background: var\(--solid-warn\); \}/);
+  assert.match(css, /body\.dark \.turn-action\.primary \{ border-color: var\(--solid-accent\); background: var\(--solid-accent\);/);
+
+  const petRoot = petCss.match(/:root\s*\{([\s\S]*?)\}/)[1];
+  const petDark = petCss.match(/body\.dark\s*\{([\s\S]*?)\}/)[1];
+  assert.ok(contrastRatio(cssVar(petRoot, 'pet-primary'), '#FFFFFF') >= 4.5);
+  assert.ok(contrastRatio(cssVar(petDark, 'pet-primary'), '#FFFFFF') >= 4.5);
+  assert.match(petCss, /\.pm-main \{[\s\S]*?background: var\(--pet-primary\); color: #fff;/);
 });
 
 test('备忘录工作区具备可访问导航、编辑与完整 IPC', () => {
