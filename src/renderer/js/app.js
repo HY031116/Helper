@@ -2,12 +2,13 @@
 
 /* ============================================================
  * 渲染进程主逻辑 - 工作台助手
- * 视图：今日 / 所有任务 / 看板 / 日历 / 统计 / 设置
+ * 视图：今日 / 所有任务 / 备忘录 / 看板 / 日历 / 统计 / 设置
  * 右侧：AI 助手面板
  * ============================================================ */
 
 /* ---------- 状态 ---------- */
 let tasks = [];
+let memos = [];
 let settings = {};
 let currentView = 'today';
 let currentFilter = 'all';
@@ -22,6 +23,13 @@ let batchMode = false;
 let visibleTaskIds = [];
 let expandedIds = new Set(); // 展开的子任务
 let trashList = []; // 回收站列表
+let deletedMemos = [];
+let selectedMemoId = null;
+let memoSearch = '';
+let memoSaveTimer = null;
+let memoSaveChain = Promise.resolve();
+let memoDirty = false;
+let memoCreating = false;
 let reportWeek = 0; // 周报选择的周（0=本周, -1=上周, 1=下周）
 let quickParseTimer = null;
 let quickParseToken = 0;
@@ -29,6 +37,15 @@ let quickParseCache = { raw: '', parsed: null };
 let modalSaving = false;
 let modalReturnFocus = null;
 let aiSending = false;
+let eventsBound = false;
+const dataLoadErrors = { tasks: null, memos: null };
+const systemTheme = typeof window.matchMedia === 'function'
+  ? window.matchMedia('(prefers-color-scheme: dark)')
+  : { matches: false, addEventListener() {} };
+
+systemTheme.addEventListener('change', () => {
+  if ((settings.theme || 'auto') === 'auto') applyTheme();
+});
 
 /* ---------- 工具 ---------- */
 const $ = (sel) => document.querySelector(sel);
@@ -38,6 +55,94 @@ function esc(s) {
   return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
   }[c]));
+}
+
+function loadErrorHtml(source, compact) {
+  const labels = {
+    tasks: ['任务暂时无法读取', '已有数据不会被修改，请重试。'],
+    memos: ['备忘录暂时无法读取', '已有内容不会被修改，请重试。'],
+    trash: ['回收站暂时无法读取', '请稍后重试。'],
+    startup: ['工作台暂时无法启动', '本地数据不会被修改，请重试。']
+  };
+  const [title, detail] = labels[source] || labels.startup;
+  return `<div class="load-state error${compact ? ' compact' : ''}" role="alert">
+    <div><strong>${title}</strong><span>${detail}</span></div>
+    <button type="button" class="btn mini ghost load-action" data-retry-source="${source}">重试</button>
+  </div>`;
+}
+
+function applyDataLoadStates() {
+  if (dataLoadErrors.tasks) {
+    ['today-list', 'tasks-list', 'board-cols', 'cal-body', 'stat-body'].forEach((id) => {
+      const target = document.getElementById(id);
+      if (target) target.innerHTML = loadErrorHtml('tasks');
+    });
+    $('#today-sub').textContent = '任务数据暂时不可用';
+    $('#tasks-sub').textContent = '任务数据暂时不可用';
+    $('#cal-sub').textContent = '任务数据暂时不可用';
+  }
+  const memoError = $('#memo-load-error');
+  if (memoError) {
+    memoError.classList.toggle('hidden', !dataLoadErrors.memos);
+    if (dataLoadErrors.memos) {
+      memoError.innerHTML = loadErrorHtml('memos');
+      $('#memo-empty').classList.add('hidden');
+      $('#memo-editor').classList.add('hidden');
+      $('#memo-list').innerHTML = '<div class="memo-list-empty">备忘录暂时不可用</div>';
+      $('#memos-sub').textContent = '读取失败';
+    }
+  }
+}
+
+async function retryDataSource(source, button) {
+  if (button) {
+    button.disabled = true;
+    button.setAttribute('aria-busy', 'true');
+    button.textContent = '重试中…';
+  }
+  try {
+    if (source === 'tasks') {
+      tasks = await window.api.tasks.getAll();
+      dataLoadErrors.tasks = null;
+      try { trashList = await window.api.tasks.getDeleted(); } catch (e) { /* 徽标稍后同步 */ }
+    } else if (source === 'memos') {
+      memos = await window.api.memos.getAll();
+      dataLoadErrors.memos = null;
+      try { deletedMemos = await window.api.memos.getDeleted(); } catch (e) { /* 徽标稍后同步 */ }
+    } else if (source === 'trash') {
+      await loadTrash();
+      return;
+    } else {
+      await init();
+      return;
+    }
+    renderAll();
+    toast(source === 'tasks' ? '任务已重新载入' : '备忘录已重新载入', 2500, null, 'ok');
+  } catch (error) {
+    if (source === 'tasks' || source === 'memos') dataLoadErrors[source] = error;
+    applyDataLoadStates();
+    toast('仍然无法读取，请稍后重试', 3500, null, 'err');
+  } finally {
+    if (button && button.isConnected) {
+      button.disabled = false;
+      button.setAttribute('aria-busy', 'false');
+      button.textContent = '重试';
+    }
+  }
+}
+
+function renderStartupError(error) {
+  console.error('Work Helper init failed:', error);
+  $$('.view').forEach((view) => { view.style.display = view.id === 'view-today' ? '' : 'none'; });
+  $('#today-sub').textContent = '启动失败';
+  $('#today-list').innerHTML = loadErrorHtml('startup');
+  $('#ai-chat').innerHTML = '<div class="load-state error compact" role="alert"><div><strong>助手暂时不可用</strong><span>工作台恢复后会自动同步。</span></div></div>';
+  const panelStage = $('.ai-stage');
+  if (panelStage) panelStage.textContent = '暂时不可用';
+  if (!eventsBound) {
+    const retry = $('#today-list [data-retry-source="startup"]');
+    if (retry) retry.addEventListener('click', () => retryDataSource('startup', retry));
+  }
 }
 
 const PRI_NAME = { 4: '紧急', 3: '高', 2: '中', 1: '低' };
@@ -69,14 +174,29 @@ function toast(html, ms, actions, type) {
   const layer = $('#toast-layer');
   const el = document.createElement('div');
   el.className = 'toast' + (type ? ' t-' + type : '');
+  el.setAttribute('role', type === 'err' ? 'alert' : 'status');
+  el.setAttribute('aria-atomic', 'true');
   const icons = { ok: '✓', err: '✕', warn: '⚠' };
   el.innerHTML = (icons[type] ? `<span class="t-ico">${icons[type]}</span>` : '') + `<span>${html}</span>`;
   if (actions) {
     actions.forEach((a) => {
-      const b = document.createElement('span');
+      const b = document.createElement('button');
+      b.type = 'button';
       b.className = 't-undo';
       b.textContent = a.label;
-      b.addEventListener('click', () => { a.run(); el.remove(); });
+      b.addEventListener('click', async () => {
+        if (b.disabled) return;
+        b.disabled = true;
+        b.setAttribute('aria-busy', 'true');
+        try {
+          await a.run();
+          el.remove();
+        } catch (error) {
+          b.disabled = false;
+          b.setAttribute('aria-busy', 'false');
+          toast(`操作失败：${esc(error.message)}`, 4000, null, 'err');
+        }
+      });
       el.appendChild(b);
     });
   }
@@ -84,20 +204,49 @@ function toast(html, ms, actions, type) {
   setTimeout(() => el.remove(), ms || 3000);
 }
 
+if (typeof window.addEventListener === 'function') {
+  window.addEventListener('unhandledrejection', (event) => {
+    event.preventDefault();
+    const reason = event.reason;
+    const message = reason && reason.message ? reason.message : String(reason || '未知错误');
+    console.error('Unhandled renderer operation:', reason);
+    toast(`操作未完成：${esc(message)}`, 4500, null, 'err');
+  });
+}
+
 /* ---------- 统一确认框 ---------- */
 function confirmDialog(message, onOk, okText) {
   const mask = $('#confirm-mask');
+  const title = $('#confirm-title');
   const text = $('#confirm-text');
   const okBtn = $('#confirm-ok');
   const cancelBtn = $('#confirm-cancel');
   const returnFocus = document.activeElement;
+  const actionText = okText || '删除';
+  title.textContent = `确认${actionText}`;
   text.textContent = message;
-  okBtn.textContent = okText || '删除';
+  okBtn.textContent = actionText;
   mask.classList.remove('hidden');
   mask.setAttribute('aria-hidden', 'false');
-  const onOkClick = () => { cleanup(); onOk(); };
+  const onOkClick = async () => {
+    if (okBtn.disabled) return;
+    okBtn.disabled = true;
+    cancelBtn.disabled = true;
+    okBtn.setAttribute('aria-busy', 'true');
+    okBtn.textContent = `${actionText}中…`;
+    try {
+      await onOk();
+      cleanup();
+    } catch (error) {
+      okBtn.disabled = false;
+      cancelBtn.disabled = false;
+      okBtn.setAttribute('aria-busy', 'false');
+      okBtn.textContent = actionText;
+      toast(`操作失败：${esc(error.message)}`, 4000, null, 'err');
+    }
+  };
   const onKey = (e) => {
-    if (e.key === 'Escape') { cleanup(); }
+    if (e.key === 'Escape' && !okBtn.disabled) { cleanup(); }
     if (e.key === 'Tab') trapFocus(mask, e);
   };
   function cleanup() {
@@ -106,6 +255,9 @@ function confirmDialog(message, onOk, okText) {
     cancelBtn.removeEventListener('click', cleanup);
     okBtn.removeEventListener('click', onOkClick);
     document.removeEventListener('keydown', onKey);
+    okBtn.disabled = false;
+    cancelBtn.disabled = false;
+    okBtn.setAttribute('aria-busy', 'false');
     if (returnFocus && returnFocus.isConnected) returnFocus.focus();
   }
   cancelBtn.addEventListener('click', cleanup);
@@ -209,7 +361,7 @@ function rowHTML(t) {
       ${repeatTag}
       ${dueHtml}
       ${doneTime}
-      <button type="button" class="statectl s-${t.status}" title="点击流转状态">${STATE_NAME[t.status]}</button>
+      <button type="button" class="statectl s-${t.status}" title="切换任务状态" aria-label="当前状态：${STATE_NAME[t.status]}，点击切换">${STATE_NAME[t.status]}</button>
       ${quickActions}
     </div>
   </div>`;
@@ -325,14 +477,14 @@ function renderList(container, list) {
   if (!list.length) {
     // 空状态 = 指引时刻：说明现状 + 给出下一步动作
     const emptyStates = {
-      today: { ico: '🌤', title: '今天没有到期任务', hint: '享受一段不被打扰的专注时间，或现在就安排下一件要紧事。' },
-      all: { ico: '◔', title: '还没有任务', hint: '从一句话开始：在下方输入框回车，或让 AI 助手帮你记下第一件事。' },
-      active: { ico: '🌱', title: '没有未完成的任务', hint: '手头的事都清了，可以放心收工。' },
-      done: { ico: '🎉', title: '还没有已完成的任务', hint: '完成一件任务后，它会出现在这里。' },
-      archived: { ico: '📦', title: '没有已归档的任务', hint: '归档的任务会收在这里，随时可恢复。' },
-      nodate: { ico: '🗓', title: '所有任务都设了截止日期', hint: '没有遗漏的"无日期"任务。' },
-      overdue: { ico: '✨', title: '没有过期任务', hint: '一切都在计划内，继续保持。' },
-      week: { ico: '📅', title: '本周没有新任务', hint: '这周很安静，可以专注在已有的事项上。' }
+      today: { ico: '◐', title: '今天没有到期任务', hint: '可以继续当前工作，或安排下一件要紧事。' },
+      all: { ico: '＋', title: '还没有任务', hint: '在快速添加框输入一句话，或让助手记下第一件事。' },
+      active: { ico: '✓', title: '没有未完成的任务', hint: '当前待办已经处理完。' },
+      done: { ico: '✓', title: '还没有已完成的任务', hint: '完成的任务会集中显示在这里。' },
+      archived: { ico: '□', title: '没有已归档的任务', hint: '暂时收起的任务会保存在这里。' },
+      nodate: { ico: '—', title: '所有任务都设了截止日期', hint: '当前没有遗漏截止时间的任务。' },
+      overdue: { ico: '✓', title: '没有过期任务', hint: '当前任务都在计划内。' },
+      week: { ico: '▦', title: '本周没有新任务', hint: '可以继续处理已有事项。' }
     };
     const key = currentFilter.startsWith('proj:') || currentFilter.startsWith('tag:') ? 'all' : currentFilter;
     const st = emptyStates[key] || emptyStates.all;
@@ -341,7 +493,7 @@ function renderList(container, list) {
       <div class="big">${st.ico}</div>
       <div class="empty-title">${st.title}</div>
       <p class="empty-hint">${st.hint}</p>
-      ${showBtn ? '<button class="btn mini empty-cta" id="empty-new-task">新建任务</button>' : ''}
+      ${showBtn ? '<button type="button" class="btn mini empty-cta" id="empty-new-task">新建任务</button>' : ''}
     </div>`;
     const cta = container.querySelector('#empty-new-task');
     if (cta) cta.addEventListener('click', () => openModal(null));
@@ -370,15 +522,15 @@ function renderToday() {
 
   let html = '';
   if (overdue.length) {
-    html += `<div class="today-group" style="font-size:12px;font-weight:700;color:var(--danger);margin:10px 0 6px">已过期 ${overdue.length}</div>`;
-    html += overdue.map((t) => rowHTML(t) + `<div class="overdue-actions" data-id="${t.id}"><button class="btn mini" data-postpone="1">顺延到明天</button><button class="btn mini ghost" data-postpone="7">顺延一周</button></div>`).join('');
+    html += `<div class="today-group overdue"><span>已过期</span><strong>${overdue.length}</strong></div>`;
+    html += overdue.map((t) => rowHTML(t) + `<div class="overdue-actions" data-id="${t.id}"><button type="button" class="btn mini" data-postpone="1">顺延到明天</button><button type="button" class="btn mini ghost" data-postpone="7">顺延一周</button></div>`).join('');
   }
   if (todays.length) {
-    html += `<div class="today-group" style="font-size:12px;font-weight:700;color:var(--accent);margin:10px 0 6px">今天到期 ${todays.length}</div>`;
+    html += `<div class="today-group due"><span>今天到期</span><strong>${todays.length}</strong></div>`;
     html += todays.map(rowHTML).join('');
   }
   if (!html) {
-    html = '<div class="empty"><div class="big">🌤</div>今天没有到期任务，享受专注时间</div>';
+    html = '<div class="empty"><div class="big">◐</div><div class="empty-title">今天没有到期任务</div><p class="empty-hint">可以继续当前工作，或安排下一件要紧事。</p></div>';
   }
   $('#today-list').innerHTML = html;
   $('#today-sub').textContent = `${overdue.length} 过期 · ${todays.length} 今天 · 今日完成 ${doneToday.length}`;
@@ -540,11 +692,11 @@ function renderBoard() {
       <div class="bc-head">${col.name} <span class="n">${cards.length}</span></div>
       <div class="bc-cards">
         ${cards.map((t) => `
-          <div class="bc-card" draggable="true" data-id="${t.id}" title="点击编辑">
-            <div class="cb"><span class="nm">${esc(t.title)}</span><span class="pri-dot p${t.pri}">${PRI_NAME[t.pri]}</span></div>
-            ${t.due ? `<div class="cd${isOverdue(t.due, t.status) ? ' over' : ''}">${esc(t.due)}</div>` : ''}
-            ${t.tags && t.tags.length ? `<div class="cd">${t.tags.map((x) => '#' + esc(x)).join(' ')}</div>` : ''}
-            ${t.children && t.children.length ? `<div class="cd">子任务 ${childProgress(t).done}/${t.children.length}</div>` : ''}
+          <button type="button" class="bc-card" draggable="true" data-id="${t.id}" title="编辑任务" aria-label="编辑任务：${esc(t.title)}">
+            <span class="cb"><span class="nm">${esc(t.title)}</span><span class="pri-dot p${t.pri}">${PRI_NAME[t.pri]}</span></span>
+            ${t.due ? `<span class="cd${isOverdue(t.due, t.status) ? ' over' : ''}">${esc(t.due)}</span>` : ''}
+            ${t.tags && t.tags.length ? `<span class="cd">${t.tags.map((x) => '#' + esc(x)).join(' ')}</span>` : ''}
+            ${t.children && t.children.length ? `<span class="cd">子任务 ${childProgress(t).done}/${t.children.length}</span>` : ''}
           </div>`).join('')}
       </div>
     </div>`;
@@ -588,9 +740,9 @@ function renderCal() {
 
   let html = `<div class="cal-head">
     <div class="cal-nav">
-      <button class="cal-btn" data-cal="prev">‹</button>
-      <button class="cal-btn" data-cal="today">今</button>
-      <button class="cal-btn" data-cal="next">›</button>
+      <button type="button" class="cal-btn" data-cal="prev" title="上个月" aria-label="上个月">‹</button>
+      <button type="button" class="cal-btn" data-cal="today" title="回到本月" aria-label="回到本月">今</button>
+      <button type="button" class="cal-btn" data-cal="next" title="下个月" aria-label="下个月">›</button>
     </div>
     <span class="cal-title">${y} 年 ${m + 1} 月</span>
   </div>
@@ -604,10 +756,10 @@ function renderCal() {
       const dotCls = t.status === 'done' ? 'done' : (isOverdue(t.due, t.status) ? 'over' : '');
       return `<span class="cal-dot ${dotCls}" title="${esc(t.title)}"></span>`;
     }).join('');
-    html += `<div class="${cls}" data-day="${c.key}">
+    html += `<button type="button" class="${cls}" data-day="${c.key}" aria-pressed="${calSelected === c.key}" aria-label="${c.key}，${dayTasks.length} 项任务">
       <span class="cal-day">${c.day}</span>
       ${dayTasks.length ? `<span class="cal-num">${dayTasks.length}</span>` : ''}
-      ${dots ? `<div class="cal-dots">${dots}</div>` : ''}
+      ${dots ? `<span class="cal-dots">${dots}</span>` : ''}
     </div>`;
   });
   html += '</div>';
@@ -615,8 +767,8 @@ function renderCal() {
   if (calSelected) {
     const selTasks = tasksOnDay(calSelected);
     html += `<div class="cal-detail"><div class="cd-title">${calSelected} 的任务（${selTasks.length}）</div>`;
-    html += `<div class="cal-add-row"><button class="btn mini" id="cal-add-task">＋ 在该天新建任务</button></div>`;
-    html += selTasks.length ? selTasks.map(rowHTML).join('') : '<div class="empty" style="padding:16px 0"><div class="big">🌤</div>当天没有到期任务</div>';
+    html += `<div class="cal-add-row"><button type="button" class="btn mini" id="cal-add-task">＋ 在该天新建任务</button></div>`;
+    html += selTasks.length ? selTasks.map(rowHTML).join('') : '<div class="empty compact"><div class="big">◐</div><div class="empty-title">当天没有到期任务</div></div>';
     html += '</div>';
   }
 
@@ -653,34 +805,31 @@ function renderStat() {
   );
   const maxTrend = Math.max(1, ...trend);
   html += `<div class="stat-chart-row">
-    <div>
-      <div style="font-size:12.5px;font-weight:700;margin-bottom:8px">近 7 天完成趋势</div>
-      <div style="display:flex;align-items:flex-end;gap:6px;height:160px;padding:0 4px">
+    <section class="stat-panel">
+      <h3 class="stat-panel-title">近 7 天完成趋势</h3>
+      <div class="trend-chart" aria-label="近 7 天完成数量">
         ${trend.map((v, i) => `
-          <div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:4px">
-            <span style="font-size:11px;color:var(--muted)">${v}</span>
-            <div style="width:100%;background:linear-gradient(180deg,#E8743B,#F0A04B);border-radius:4px 4px 0 0;height:${Math.max(4, v / maxTrend * 120)}px;opacity:${0.4 + i * 0.08}"></div>
-            <span style="font-size:10px;color:var(--muted)">${days[i]}</span>
-          </div>`).join('')}
+          <div class="trend-column">
+            <span class="trend-value">${v}</span>
+            <span class="trend-bar" style="--bar-h:${Math.max(4, v / maxTrend * 120)}px;--bar-opacity:${0.46 + i * 0.07}"></span>
+            <span class="trend-label">${days[i]}</span>
+          </button>`).join('')}
       </div>
-    </div>
-    <div>
-      <div style="font-size:12.5px;font-weight:700;margin-bottom:8px">优先级分布</div>
-      <div style="display:flex;flex-direction:column;gap:8px;padding:8px 4px">
+    </section>
+    <section class="stat-panel">
+      <h3 class="stat-panel-title">优先级分布</h3>
+      <div class="metric-list">
         ${[4, 3, 2, 1].map((p) => {
           const n = all.filter((t) => t.pri === p).length;
           const pct = all.length ? Math.round(n / all.length * 100) : 0;
-          const colors = { 4: '#C4453B', 3: '#C78A2B', 2: '#E8743B', 1: '#B0A492' };
-          return `<div style="display:flex;align-items:center;gap:8px;font-size:12px">
-            <span style="flex:0 0 56px;color:var(--muted)">${PRI_NAME[p]}</span>
-            <div style="flex:1;height:14px;border-radius:999px;background:rgba(232,116,59,0.08);overflow:hidden">
-              <div style="height:100%;width:${pct}%;background:${colors[p]};border-radius:999px"></div>
-            </div>
-            <span style="flex:0 0 24px;font-family:Consolas,monospace;font-size:11px;color:var(--muted)">${n}</span>
+          return `<div class="metric-row">
+            <span class="metric-name">${PRI_NAME[p]}</span>
+            <span class="metric-track"><span class="metric-fill priority-${p}" style="--meter:${pct}%"></span></span>
+            <span class="metric-count">${n}</span>
           </div>`;
         }).join('')}
       </div>
-    </div>
+    </section>
   </div>`;
 
   // 标签排行
@@ -711,59 +860,53 @@ function renderStat() {
   const projRank = Object.keys(projAcc).map((k) => ({ name: k, ...projAcc[k] }))
     .sort((a, b) => b.total - a.total).slice(0, 6);
   if (projRank.length) {
-    html += `<div class="stat-chart-row" style="margin-top:14px">
-      <div>
-        <div style="font-size:12.5px;font-weight:700;margin-bottom:8px">项目完成率</div>
-        <div style="display:flex;flex-direction:column;gap:8px;padding:8px 4px">
+    html += `<div class="stat-chart-row stat-section-gap">
+      <section class="stat-panel">
+        <h3 class="stat-panel-title">项目完成率</h3>
+        <div class="metric-list">
           ${projRank.map((d) => {
             const pct = d.total ? Math.round(d.done / d.total * 100) : 0;
-            return `<div style="display:flex;align-items:center;gap:8px;font-size:12px">
-              <span style="flex:0 0 90px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">◈ ${esc(d.name)}</span>
-              <div style="flex:1;height:14px;border-radius:999px;background:rgba(232,116,59,0.08);overflow:hidden">
-                <div style="height:100%;width:${pct}%;background:linear-gradient(90deg,#E8743B,#F0A04B);border-radius:999px"></div>
-              </div>
-              <span style="flex:0 0 64px;font-family:Consolas,monospace;font-size:11px;color:var(--muted)">${d.done}/${d.total} ${pct}%</span>
+            return `<div class="metric-row wide-label">
+              <span class="metric-name" title="${esc(d.name)}">◈ ${esc(d.name)}</span>
+              <span class="metric-track"><span class="metric-fill" style="--meter:${pct}%"></span></span>
+              <span class="metric-count rate">${d.done}/${d.total} ${pct}%</span>
             </div>`;
           }).join('')}
         </div>
-      </div>
-      <div>
-        <div style="font-size:12.5px;font-weight:700;margin-bottom:8px">标签完成率</div>
-        <div style="display:flex;flex-direction:column;gap:8px;padding:8px 4px">
+      </section>
+      <section class="stat-panel">
+        <h3 class="stat-panel-title">标签完成率</h3>
+        <div class="metric-list">
           ${tagRank.slice(0, 6).map((d) => {
             const tagged = all.filter((t) => (t.tags || []).includes(d.name));
             const doneN = tagged.filter((t) => t.status === 'done').length;
             const pct = tagged.length ? Math.round(doneN / tagged.length * 100) : 0;
-            return `<div style="display:flex;align-items:center;gap:8px;font-size:12px">
-              <span style="flex:0 0 90px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">#${esc(d.name)}</span>
-              <div style="flex:1;height:14px;border-radius:999px;background:rgba(199,138,43,0.08);overflow:hidden">
-                <div style="height:100%;width:${pct}%;background:linear-gradient(90deg,#C78A2B,#E8743B);border-radius:999px"></div>
-              </div>
-              <span style="flex:0 0 64px;font-family:Consolas,monospace;font-size:11px;color:var(--muted)">${doneN}/${tagged.length} ${pct}%</span>
+            return `<div class="metric-row wide-label">
+              <span class="metric-name" title="${esc(d.name)}">#${esc(d.name)}</span>
+              <span class="metric-track tag"><span class="metric-fill tag" style="--meter:${pct}%"></span></span>
+              <span class="metric-count rate">${doneN}/${tagged.length} ${pct}%</span>
             </div>`;
           }).join('')}
         </div>
-      </div>
-    </div>`;
+      </section>
+    </button>`;
   }
 
   // 周报生成
-  html += `<div class="stat-chart-row" style="margin-top:14px">
-    <div style="flex:1">
-      <div style="font-size:12.5px;font-weight:700;margin-bottom:8px">📄 周报生成</div>
-      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+  html += `<section class="report-panel">
+      <h3 class="stat-panel-title">周报生成</h3>
+      <div class="report-actions">
         <div class="seg" id="report-week-seg">
-          <span class="seg-it ${reportWeek === -1 ? 'active' : ''}" data-week="-1">上周</span>
-          <span class="seg-it ${reportWeek === 0 ? 'active' : ''}" data-week="0">本周</span>
-          <span class="seg-it ${reportWeek === 1 ? 'active' : ''}" data-week="1">下周</span>
+          <button type="button" class="seg-it ${reportWeek === -1 ? 'active' : ''}" data-week="-1">上周</button>
+          <button type="button" class="seg-it ${reportWeek === 0 ? 'active' : ''}" data-week="0">本周</button>
+          <button type="button" class="seg-it ${reportWeek === 1 ? 'active' : ''}" data-week="1">下周</button>
         </div>
-        <button class="btn mini" id="btn-report-gen">生成周报</button>
-        <button class="btn mini" id="btn-report-copy" style="display:none">复制</button>
-        <button class="btn mini" id="btn-report-download" style="display:none">下载 .md</button>
+        <button type="button" class="btn mini" id="btn-report-gen">生成周报</button>
+        <button type="button" class="btn mini ghost hidden" id="btn-report-copy">复制</button>
+        <button type="button" class="btn mini ghost hidden" id="btn-report-download">下载 .md</button>
       </div>
-      <div id="report-preview" style="margin-top:10px;max-height:320px;overflow:auto;background:rgba(0,0,0,0.03);border-radius:10px;padding:12px;font-size:12px;line-height:1.6;white-space:pre-wrap;font-family:Consolas,monospace;color:var(--ink);display:none"></div>
-    </div>
-  </div>`;
+      <div id="report-preview" class="report-preview hidden"></div>
+  </section>`;
 
   $('#stat-body').innerHTML = html;
 
@@ -783,9 +926,9 @@ function renderStat() {
     try {
       const md = await window.api.data.weeklyReport(reportWeek);
       preview.textContent = md;
-      preview.style.display = 'block';
-      copyBtn.style.display = '';
-      dlBtn.style.display = '';
+      preview.classList.remove('hidden');
+      copyBtn.classList.remove('hidden');
+      dlBtn.classList.remove('hidden');
       toast('周报已生成');
     } catch (e) {
       toast('周报生成失败：' + e.message);
@@ -829,9 +972,10 @@ function renderSettings() {
     { v: 'custom', n: '自定义（OpenAI 兼容）' }
   ];
 
-  let html = `<div class="set-group">
+  let html = `<section class="set-group">
+    <h3 class="set-group-title">常规与数据</h3>
     <div class="set-row privacy-row">
-      <div><div class="sr-t">任务数据</div><div class="sr-d">任务、设置和对话记录保存在本机。使用真实模型时，当前输入、最近 6 轮对话和最多 30 条未归档任务摘要会发送给所选服务商。</div></div>
+      <div><div class="sr-t">本地数据</div><div class="sr-d">任务、备忘录、设置和对话记录保存在本机。使用真实模型时，当前输入、最近 6 轮对话和最多 30 条未归档任务摘要会发送给所选服务商。</div></div>
       <span class="status-badge">本地存储</span>
     </div>
     ${sw('autoBackup', '自动备份', '每日 22:00 将数据快照备份到备份目录')}
@@ -840,26 +984,28 @@ function renderSettings() {
     ${sw('petEnabled', '桌面桌宠', '常驻桌面最表层的可爱助手，可拖拽、气泡提醒')}
     <div class="set-row">
       <div><div class="sr-t">本地存储位置</div><div class="sr-d" id="data-dir">${esc(s.dataDir || '')}</div></div>
-      <button class="btn mini" id="btn-open-dir">打开目录</button>
-      <button class="btn mini" id="btn-pick-dir">更改位置</button>
+      <div class="setting-actions">
+        <button type="button" class="btn mini ghost" id="btn-open-dir">打开目录</button>
+        <button type="button" class="btn mini ghost" id="btn-pick-dir">更改位置</button>
+      </div>
     </div>
     <div class="set-row">
-      <div><div class="sr-t">导出与备份</div><div class="sr-d">导出 .json 备份或 .csv 表格</div></div>
+      <div><div class="sr-t">导出与备份</div><div class="sr-d">JSON 包含任务与备忘录，CSV 仅包含任务</div></div>
       <div class="setting-actions">
-        <button class="btn mini" id="btn-export-json">导出 JSON</button>
-        <button class="btn mini" id="btn-export-csv">导出 CSV</button>
-        <button class="btn mini" id="btn-import-json">导入 JSON</button>
+        <button type="button" class="btn mini ghost" id="btn-export-json">导出 JSON</button>
+        <button type="button" class="btn mini ghost" id="btn-export-csv">导出 CSV</button>
+        <button type="button" class="btn mini ghost" id="btn-import-json">导入 JSON</button>
       </div>
     </div>
     <div class="set-row">
       <div><div class="sr-t">备份管理</div><div class="sr-d">查看自动备份，可一键恢复到任意备份点</div></div>
       <div class="setting-actions">
-        <button class="btn mini" id="btn-backup-now">立即备份</button>
-        <button class="btn mini" id="btn-backup-to-dir">备份到文件夹</button>
-        <button class="btn mini" id="btn-restore-file">从文件恢复</button>
+        <button type="button" class="btn mini" id="btn-backup-now">立即备份</button>
+        <button type="button" class="btn mini ghost" id="btn-backup-to-dir">备份到文件夹</button>
+        <button type="button" class="btn mini ghost" id="btn-restore-file">从文件恢复</button>
       </div>
     </div>
-    <div class="backup-list" id="backup-list" style="margin-top:6px"></div>
+    <div class="backup-list" id="backup-list"></div>
     <div class="set-row">
       <div><div class="sr-t">外观主题</div><div class="sr-d">浅色 / 深色 / 跟随系统</div></div>
       <div class="seg" id="theme-seg" role="radiogroup" aria-label="外观主题">
@@ -868,10 +1014,11 @@ function renderSettings() {
         <button type="button" role="radio" aria-checked="${s.theme === 'auto'}" class="seg-it ${s.theme === 'auto' ? 'active' : ''}" data-theme="auto">自动</button>
       </div>
     </div>
-  </div>
+  </section>
 
   <!-- AI 接入配置 -->
-  <div class="set-group">
+  <section class="set-group">
+    <h3 class="set-group-title">助手接入</h3>
     <div class="set-row">
       <div><div class="sr-t">AI 助手引擎</div><div class="sr-d">本地助手无需配置；真实模型负责理解意图，任务操作仍由本地执行</div></div>
       <div class="seg" id="ai-stage-seg" role="radiogroup" aria-label="AI 助手引擎">
@@ -881,53 +1028,55 @@ function renderSettings() {
     </div>
     <div class="set-row ai-config-row">
       <div><div class="sr-t">供应商</div><div class="sr-d">选择模型供应商，或自定义 OpenAI 兼容接口</div></div>
-      <select id="ai-provider" style="width:auto;min-width:180px">
+      <select id="ai-provider" class="setting-control">
         ${providers.map((p) => `<option value="${p.v}" ${s.aiProvider === p.v ? 'selected' : ''}>${p.n}</option>`).join('')}
       </select>
     </div>
     <div class="set-row ai-config-row">
       <div><div class="sr-t">API Base URL</div><div class="sr-d">OpenAI 兼容接口地址</div></div>
-      <input id="ai-base-url" type="text" placeholder="https://api.openai.com/v1" value="${esc(s.aiBaseUrl || '')}" style="width:auto;min-width:240px">
+      <input id="ai-base-url" class="setting-control wide" type="text" placeholder="https://api.openai.com/v1" value="${esc(s.aiBaseUrl || '')}">
     </div>
     <div class="set-row ai-config-row">
       <div><div class="sr-t">API Key</div><div class="sr-d">保存在本机，请求时仅用于所选服务商鉴权</div></div>
-      <input id="ai-api-key" type="password" placeholder="sk-..." value="${esc(s.aiApiKey || '')}" style="width:auto;min-width:240px">
+      <input id="ai-api-key" class="setting-control wide" type="password" placeholder="sk-..." value="${esc(s.aiApiKey || '')}">
     </div>
     <div class="set-row ai-config-row">
       <div><div class="sr-t">模型名称</div><div class="sr-d">如 gpt-4o-mini / deepseek-chat</div></div>
-      <input id="ai-model" type="text" placeholder="gpt-4o-mini" value="${esc(s.aiModel || '')}" style="width:auto;min-width:240px">
+      <input id="ai-model" class="setting-control wide" type="text" placeholder="gpt-4o-mini" value="${esc(s.aiModel || '')}">
     </div>
     <div class="set-row ai-config-row">
       <div><div class="sr-t">温度</div><div class="sr-d">越低越稳定，建议 0.2</div></div>
-      <input id="ai-temperature" type="number" min="0" max="2" step="0.1" value="${s.aiTemperature != null ? s.aiTemperature : 0.2}" style="width:auto;min-width:80px">
+      <input id="ai-temperature" class="setting-control number" type="number" min="0" max="2" step="0.1" value="${s.aiTemperature != null ? s.aiTemperature : 0.2}">
     </div>
     <div class="set-row ai-config-row">
       <div><div class="sr-t">连接测试</div><div class="sr-d" id="ai-test-result">未测试</div></div>
-      <button class="btn mini" id="btn-ai-test">测试连接</button>
+      <button type="button" class="btn mini ghost" id="btn-ai-test">测试连接</button>
     </div>
     <div class="set-row ai-config-row">
       <div><div class="sr-t">保存配置</div><div class="sr-d">保存后 AI 面板将使用所选引擎</div></div>
-      <button class="btn mini" id="btn-ai-save">保存 AI 配置</button>
+      <button type="button" class="btn mini" id="btn-ai-save">保存 AI 配置</button>
     </div>
-  </div>
+  </section>
 
-  <div class="set-group">
+  <section class="set-group">
+    <h3 class="set-group-title">快捷键</h3>
     <div class="set-row"><div><div class="sr-t">快捷键</div><div class="sr-d">全局有效，可自定义键位（点击输入框后按新组合键）</div></div></div>
     <div class="shortcut-row"><span>唤起 AI 输入框</span><span><input class="shortcut-input" id="sc-ai" value="${esc(s.shortcuts && s.shortcuts.ai || 'CommandOrControl+J')}" placeholder="Ctrl+J"></span></div>
     <div class="shortcut-row"><span>新建任务</span><span><input class="shortcut-input" id="sc-newTask" value="${esc(s.shortcuts && s.shortcuts.newTask || 'CommandOrControl+N')}" placeholder="Ctrl+N"></span></div>
     <div class="shortcut-row"><span>打开今日视图</span><span><input class="shortcut-input" id="sc-today" value="${esc(s.shortcuts && s.shortcuts.today || 'CommandOrControl+1')}" placeholder="Ctrl+1"></span></div>
     <div class="shortcut-row"><span>打开统计视图</span><span><input class="shortcut-input" id="sc-stat" value="${esc(s.shortcuts && s.shortcuts.stat || 'CommandOrControl+5')}" placeholder="Ctrl+5"></span></div>
-  </div>
-  <div class="set-group">
+  </section>
+  <section class="set-group danger-zone">
+    <h3 class="set-group-title">危险操作</h3>
     <div class="set-row">
       <div><div class="sr-t">演示数据</div><div class="sr-d">重置为初始演示任务</div></div>
-      <button class="btn mini danger" id="btn-reset">重置演示数据</button>
+      <button type="button" class="btn mini danger" id="btn-reset">重置演示数据</button>
     </div>
     <div class="set-row">
       <div><div class="sr-t">清空全部数据</div><div class="sr-d">删除所有任务（含已完成与归档），不可恢复</div></div>
-      <button class="btn mini danger" id="btn-clear-all">清空全部</button>
+      <button type="button" class="btn mini danger" id="btn-clear-all">清空全部</button>
     </div>
-  </div>`;
+  </section>`;
 
   $('#settings-body').innerHTML = html;
   bindSettingsEvents();
@@ -936,19 +1085,33 @@ function renderSettings() {
 function bindSettingsEvents() {
   $$('#settings-body .switch[data-switch]').forEach((sw) => {
     sw.addEventListener('click', async () => {
+      const previous = sw.classList.contains('on');
       const on = sw.classList.toggle('on');
       sw.setAttribute('aria-checked', String(on));
       const key = sw.dataset.switch;
       settings[key] = on;
-      await window.api.settings.update({ [key]: on });
-      const names = { autoBackup: '自动备份', autoStart: '开机自启', notify: '系统通知提醒', petEnabled: '桌面桌宠' };
-      toast(`已${on ? '开启' : '关闭'}「${names[key]}」`);
+      sw.disabled = true;
+      sw.setAttribute('aria-busy', 'true');
+      try {
+        await window.api.settings.update({ [key]: on });
+        const names = { autoBackup: '自动备份', autoStart: '开机自启', notify: '系统通知提醒', petEnabled: '桌面桌宠' };
+        toast(`已${on ? '开启' : '关闭'}「${names[key]}」`);
+      } catch (error) {
+        settings[key] = previous;
+        sw.classList.toggle('on', previous);
+        sw.setAttribute('aria-checked', String(previous));
+        toast('设置保存失败，已恢复原状态', 3500, null, 'err');
+      } finally {
+        sw.disabled = false;
+        sw.setAttribute('aria-busy', 'false');
+      }
     });
   });
 
   // AI 引擎切换
   $$('#ai-stage-seg .seg-it').forEach((seg) => {
     seg.addEventListener('click', async () => {
+      const previous = settings.aiStage || 'local';
       $$('#ai-stage-seg .seg-it').forEach((x) => {
         x.classList.remove('active');
         x.setAttribute('aria-checked', 'false');
@@ -956,10 +1119,22 @@ function bindSettingsEvents() {
       seg.classList.add('active');
       seg.setAttribute('aria-checked', 'true');
       settings.aiStage = seg.dataset.stage;
-      await window.api.settings.update({ aiStage: seg.dataset.stage });
-      syncAiConfigVisibility();
-      updateAiBadge();
-      toast(`AI 引擎已切换为「${seg.textContent}」`);
+      try {
+        await window.api.settings.update({ aiStage: seg.dataset.stage });
+        syncAiConfigVisibility();
+        updateAiBadge();
+        toast(`AI 引擎已切换为「${seg.textContent}」`);
+      } catch (error) {
+        settings.aiStage = previous;
+        $$('#ai-stage-seg .seg-it').forEach((x) => {
+          const active = x.dataset.stage === previous;
+          x.classList.toggle('active', active);
+          x.setAttribute('aria-checked', String(active));
+        });
+        syncAiConfigVisibility();
+        updateAiBadge();
+        toast('AI 引擎切换失败，已恢复原设置', 3500, null, 'err');
+      }
     });
   });
 
@@ -988,18 +1163,39 @@ function bindSettingsEvents() {
   // 测试连接
   $('#btn-ai-test').addEventListener('click', async () => {
     const resultEl = $('#ai-test-result');
+    const button = $('#btn-ai-test');
     resultEl.textContent = '测试中…';
-    resultEl.style.color = 'var(--muted)';
-    // 先保存当前输入到设置，再测试
-    await saveAiConfig(false);
-    const res = await window.api.ai.test();
-    resultEl.textContent = res.message;
-    resultEl.style.color = res.ok ? 'var(--ok)' : 'var(--danger)';
+    resultEl.className = 'sr-d test-result testing';
+    button.disabled = true;
+    button.setAttribute('aria-busy', 'true');
+    try {
+      // 先保存当前输入到设置，再测试
+      await saveAiConfig(false);
+      const res = await window.api.ai.test();
+      resultEl.textContent = res.message;
+      resultEl.className = `sr-d test-result ${res.ok ? 'success' : 'failure'}`;
+    } catch (error) {
+      resultEl.textContent = '测试失败，请检查配置或网络';
+      resultEl.className = 'sr-d test-result failure';
+    } finally {
+      button.disabled = false;
+      button.setAttribute('aria-busy', 'false');
+    }
   });
 
   // 保存 AI 配置
   $('#btn-ai-save').addEventListener('click', async () => {
-    await saveAiConfig(true);
+    const button = $('#btn-ai-save');
+    button.disabled = true;
+    button.setAttribute('aria-busy', 'true');
+    try {
+      await saveAiConfig(true);
+    } catch (error) {
+      toast('AI 配置保存失败，请重试', 3500, null, 'err');
+    } finally {
+      button.disabled = false;
+      button.setAttribute('aria-busy', 'false');
+    }
   });
 
   async function saveAiConfig(showToast) {
@@ -1011,8 +1207,15 @@ function bindSettingsEvents() {
       aiModel: $('#ai-model').value.trim(),
       aiTemperature: parseFloat($('#ai-temperature').value) || 0.2
     };
+    const previous = settings;
     settings = Object.assign({}, settings, patch);
-    await window.api.settings.update(patch);
+    try {
+      await window.api.settings.update(patch);
+    } catch (error) {
+      settings = previous;
+      updateAiBadge();
+      throw error;
+    }
     if (showToast) toast('AI 配置已保存');
     updateAiBadge();
   }
@@ -1045,23 +1248,61 @@ function bindSettingsEvents() {
       toast(`已选择新数据目录：${res.dir}（重启后生效）`);
     }
   });
-  $('#btn-import-json').addEventListener('click', async () => {
+  const importButton = $('#btn-import-json');
+  importButton.addEventListener('click', async () => {
     const input = document.createElement('input');
     input.type = 'file';
     input.accept = '.json,application/json';
     input.addEventListener('change', async () => {
       const file = input.files[0];
       if (!file) return;
+      importButton.disabled = true;
+      importButton.setAttribute('aria-busy', 'true');
+      importButton.textContent = '导入中…';
       try {
-        const text = await file.text();
-        const data = JSON.parse(text);
-        const list = Array.isArray(data) ? data : (data.tasks || []);
-        if (!list.length) { toast('导入文件为空或格式不正确'); return; }
-        const imported = await window.api.tasks.import(list);
-        await refreshTasks();
-        toast(`已导入 ${imported.length} 条任务`);
-      } catch (e) {
-        toast('导入失败：' + e.message);
+        let data;
+        try {
+          data = JSON.parse(await file.text());
+        } catch (error) {
+          toast(`无法读取导入文件：${esc(error.message)}`, 4000, null, 'err');
+          return;
+        }
+        const taskList = Array.isArray(data) ? data : (Array.isArray(data.tasks) ? data.tasks : []);
+        const memoList = Array.isArray(data) ? [] : (Array.isArray(data.memos) ? data.memos : []);
+        if (!taskList.length && !memoList.length) {
+          toast('导入文件为空或格式不正确', 3500, null, 'warn');
+          return;
+        }
+
+        let imported = [];
+        let importedMemos = [];
+        try {
+          if (taskList.length) imported = (await window.api.tasks.import(taskList)) || [];
+        } catch (error) {
+          toast(`任务导入失败：${esc(error.message)}`, 4000, null, 'err');
+          return;
+        }
+        try {
+          if (memoList.length) importedMemos = (await window.api.memos.import(memoList)) || [];
+        } catch (error) {
+          const partial = imported.length ? `已导入 ${imported.length} 条任务，但` : '';
+          toast(`${partial}备忘录导入失败：${esc(error.message)}`, 5000, null, imported.length ? 'warn' : 'err');
+          if (imported.length) await refreshTasksAfterMutation('任务已导入，但列表刷新失败');
+          return;
+        }
+
+        const parts = [];
+        if (imported.length) parts.push(`${imported.length} 条任务`);
+        if (importedMemos.length) parts.push(`${importedMemos.length} 条备忘录`);
+        toast(parts.length ? `已导入 ${parts.join('、')}` : '没有可导入的新内容', 3500, null, parts.length ? 'ok' : 'warn');
+        await Promise.all([
+          imported.length ? refreshTasksAfterMutation('任务已导入，但列表刷新失败') : Promise.resolve(),
+          importedMemos.length ? refreshMemosAfterMutation('备忘录已导入，但列表刷新失败') : Promise.resolve()
+        ]);
+      } finally {
+        importButton.disabled = false;
+        importButton.setAttribute('aria-busy', 'false');
+        importButton.textContent = '导入 JSON';
       }
     });
     input.click();
@@ -1071,37 +1312,34 @@ function bindSettingsEvents() {
   async function loadBackupList() {
     const box = $('#backup-list');
     if (!box) return;
+    box.setAttribute('aria-busy', 'true');
+    box.innerHTML = '<div class="load-state compact" role="status"><span class="load-indicator" aria-hidden="true"></span><div><strong>正在读取备份</strong></div></div>';
     try {
       const list = await window.api.data.listBackups();
       if (!list.length) {
-        box.innerHTML = '<div style="font-size:12px;color:var(--muted);padding:4px 2px">暂无备份，点击「立即备份」创建第一份</div>';
+        box.innerHTML = '<div class="backup-empty">暂无备份，点击「立即备份」创建第一份</div>';
         return;
       }
       box.innerHTML = list.map((b) => `
-        <div style="display:flex;align-items:center;gap:8px;padding:5px 8px;border-radius:8px;background:rgba(232,116,59,0.06);margin-bottom:4px;font-size:12px">
-          <span style="flex:1;color:var(--muted);font-family:Consolas,monospace">${esc(b.time || b.name)}</span>
-          <span style="color:var(--muted)">${(b.size / 1024).toFixed(1)} KB</span>
-          <button class="btn mini" data-restore="${esc(b.path)}">恢复</button>
+        <div class="backup-row">
+          <span class="backup-time">${esc(b.time || b.name)}</span>
+          <span class="backup-size">${(b.size / 1024).toFixed(1)} KB</span>
+          <button type="button" class="btn mini ghost" data-restore="${esc(b.path)}">恢复</button>
         </div>`).join('');
       box.querySelectorAll('[data-restore]').forEach((btn) => {
         btn.addEventListener('click', async () => {
           const filePath = btn.dataset.restore;
           confirmDialog('确定要恢复到该备份点吗？当前数据会先自动备份，然后被该备份覆盖。', async () => {
-            try {
-              const res = await window.api.data.restoreBackup(filePath);
-              if (res.ok) {
-                tasks = await window.api.tasks.getAll();
-                renderAll();
-                toast(`已恢复到备份点（${res.count} 条任务）`, 3000, null, 'ok');
-              }
-            } catch (e) {
-              toast('恢复失败：' + e.message);
-            }
+            if ((await saveMemoNow()) === false) return;
+            const result = await window.api.data.restoreBackup(filePath);
+            await reloadRestoredWorkspace(result, '已恢复到备份点');
           }, '恢复');
         });
       });
     } catch (e) {
-      box.innerHTML = '<div style="font-size:12px;color:var(--danger)">备份列表加载失败</div>';
+      box.innerHTML = '<div class="backup-empty error">备份列表加载失败</div>';
+    } finally {
+      box.setAttribute('aria-busy', 'false');
     }
   }
 
@@ -1123,21 +1361,15 @@ function bindSettingsEvents() {
     const res = await window.api.data.pickBackupFile();
     if (!res.ok) return;
     confirmDialog('确定要从该文件恢复吗？当前数据会先自动备份，然后被该文件覆盖。', async () => {
-      try {
-        const r = await window.api.data.restoreBackup(res.file);
-        if (r.ok) {
-          tasks = await window.api.tasks.getAll();
-          renderAll();
-          toast(`已从文件恢复（${r.count} 条任务）`, 3000, null, 'ok');
-        }
-      } catch (e) {
-        toast('恢复失败：' + e.message);
-      }
+      if ((await saveMemoNow()) === false) return;
+      const result = await window.api.data.restoreBackup(res.file);
+      await reloadRestoredWorkspace(result, '已从文件恢复');
     }, '恢复');
   });
   loadBackupList();
   $$('#theme-seg .seg-it').forEach((seg) => {
     seg.addEventListener('click', async () => {
+      const previous = settings.theme || 'auto';
       $$('#theme-seg .seg-it').forEach((x) => {
         x.classList.remove('active');
         x.setAttribute('aria-checked', 'false');
@@ -1145,9 +1377,20 @@ function bindSettingsEvents() {
       seg.classList.add('active');
       seg.setAttribute('aria-checked', 'true');
       settings.theme = seg.dataset.theme;
-      await window.api.settings.update({ theme: seg.dataset.theme });
       applyTheme();
-      toast(`主题已切换为「${seg.textContent}」`);
+      try {
+        await window.api.settings.update({ theme: seg.dataset.theme });
+        toast(`主题已切换为「${seg.textContent}」`);
+      } catch (error) {
+        settings.theme = previous;
+        $$('#theme-seg .seg-it').forEach((x) => {
+          const active = x.dataset.theme === previous;
+          x.classList.toggle('active', active);
+          x.setAttribute('aria-checked', String(active));
+        });
+        applyTheme();
+        toast('主题保存失败，已恢复原设置', 3500, null, 'err');
+      }
     });
   });
   $('#btn-reset').addEventListener('click', async () => {
@@ -1199,8 +1442,212 @@ function applyTheme() {
   document.body.classList.toggle('dark', dark);
 }
 
+/* ---------- 备忘录 ---------- */
+function parseMemoTags(value) {
+  return String(value || '').split(/[，,\s]+/).map((tag) => tag.trim()).filter(Boolean).slice(0, 5);
+}
+
+function memoTime(ts) {
+  if (!ts) return '';
+  const date = new Date(ts);
+  const today = new Date();
+  if (localDateKey(ts) === localDateKey(today.getTime())) {
+    return date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false });
+  }
+  return date.toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' });
+}
+
+function currentMemo() {
+  return memos.find((memo) => memo.id === selectedMemoId) || null;
+}
+
+function memoDraft() {
+  return {
+    title: $('#memo-title').value.trim() || '无标题备忘录',
+    content: $('#memo-content').value,
+    tags: parseMemoTags($('#memo-tags').value)
+  };
+}
+
+function renderMemoList() {
+  const list = $('#memo-list');
+  if (!list) return;
+  const query = memoSearch.trim().toLowerCase();
+  const visible = memos
+    .filter((memo) => {
+      if (!query) return true;
+      return [memo.title, memo.content, ...(memo.tags || [])].join(' ').toLowerCase().includes(query);
+    })
+    .sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.updatedAt - a.updatedAt);
+  $('#memos-sub').textContent = `${memos.length} 条${memos.some((memo) => memo.pinned) ? ' · 含置顶' : ''}`;
+  if (!visible.length) {
+    list.innerHTML = `<div class="memo-list-empty">${query ? '没有匹配的备忘录' : '暂无备忘录'}</div>`;
+    return;
+  }
+  list.innerHTML = visible.map((memo) => {
+    const preview = memo.content.trim().replace(/\s+/g, ' ') || (memo.tags || []).map((tag) => `#${tag}`).join(' ') || '空白备忘录';
+    return `<button type="button" class="memo-list-item${memo.id === selectedMemoId ? ' active' : ''}${memo.pinned ? ' pinned' : ''}" data-memo-id="${memo.id}" role="option" aria-selected="${memo.id === selectedMemoId}">
+      <span class="memo-list-title">${esc(memo.title)}</span>
+      <span class="memo-list-preview">${esc(preview)}</span>
+      <span class="memo-list-time">${memo.pinned ? '置顶 · ' : ''}${esc(memoTime(memo.updatedAt))}</span>
+    </button>`;
+  }).join('');
+}
+
+function renderMemoEditor() {
+  const memo = currentMemo();
+  $('#memo-empty').classList.toggle('hidden', !!memo);
+  $('#memo-editor').classList.toggle('hidden', !memo);
+  if (!memo) return;
+  const copyButton = $('#memo-copy');
+  copyButton.classList.remove('copied');
+  copyButton.querySelector('span').textContent = '⧉';
+  copyButton.dataset.tooltip = '复制';
+  copyButton.disabled = false;
+  $('#memo-title').value = memo.title;
+  $('#memo-content').value = memo.content || '';
+  $('#memo-tags').value = (memo.tags || []).join(' ');
+  $('#memo-pin').classList.toggle('active', !!memo.pinned);
+  $('#memo-pin').setAttribute('aria-pressed', String(!!memo.pinned));
+  $('#memo-pin').setAttribute('aria-label', memo.pinned ? '取消置顶备忘录' : '置顶备忘录');
+  $('#memo-pin').dataset.tooltip = memo.pinned ? '取消置顶' : '置顶';
+  $('#memo-save-state').textContent = '已保存';
+  $('#memo-updated').textContent = `最近编辑 ${memoTime(memo.updatedAt)}`;
+  memoDirty = false;
+}
+
+function renderMemos() {
+  if (selectedMemoId && !currentMemo()) selectedMemoId = null;
+  if (!selectedMemoId && memos.length) selectedMemoId = memos[0].id;
+  renderMemoList();
+  if (!memoDirty) renderMemoEditor();
+}
+
+function saveMemoNow() {
+  if (memoSaveTimer) {
+    clearTimeout(memoSaveTimer);
+    memoSaveTimer = null;
+  }
+  if (!memoDirty) return memoSaveChain;
+  const id = selectedMemoId;
+  if (!id || !currentMemo() || $('#memo-editor').classList.contains('hidden')) return memoSaveChain;
+  const patch = memoDraft();
+  memoDirty = false;
+  $('#memo-save-state').textContent = '保存中…';
+  memoSaveChain = memoSaveChain.then(async () => {
+    const updated = await window.api.memos.update(id, patch);
+    const index = memos.findIndex((memo) => memo.id === id);
+    if (index >= 0) memos[index] = updated;
+    memos.sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.updatedAt - a.updatedAt);
+    renderMemoList();
+    if (selectedMemoId === id) {
+      $('#memo-save-state').textContent = '已保存';
+      $('#memo-updated').textContent = `最近编辑 ${memoTime(updated.updatedAt)}`;
+    }
+  }).catch((error) => {
+    memoDirty = true;
+    if (selectedMemoId === id) $('#memo-save-state').textContent = '保存失败';
+    toast(`备忘录保存失败：${esc(error.message)}`, 4000, null, 'err');
+    return false;
+  });
+  return memoSaveChain;
+}
+
+function scheduleMemoSave() {
+  memoDirty = true;
+  $('#memo-save-state').textContent = '等待保存…';
+  if (memoSaveTimer) clearTimeout(memoSaveTimer);
+  memoSaveTimer = setTimeout(saveMemoNow, 450);
+}
+
+async function selectMemo(id) {
+  if ((await saveMemoNow()) === false) return;
+  selectedMemoId = id;
+  renderMemoList();
+  renderMemoEditor();
+}
+
+async function createMemo() {
+  if (memoCreating || (await saveMemoNow()) === false) return;
+  memoCreating = true;
+  $('#memo-new').disabled = true;
+  $('#memo-empty-new').disabled = true;
+  try {
+    const memo = await window.api.memos.create({ title: '无标题备忘录', content: '', tags: [] });
+    memos.unshift(memo);
+    selectedMemoId = memo.id;
+    renderMemos();
+    $('#memo-title').select();
+  } catch (error) {
+    toast(`新建备忘录失败：${esc(error.message)}`, 4000, null, 'err');
+  } finally {
+    memoCreating = false;
+    $('#memo-new').disabled = false;
+    $('#memo-empty-new').disabled = false;
+  }
+}
+
+async function refreshMemos() {
+  if ((await saveMemoNow()) === false) return false;
+  try {
+    memos = await window.api.memos.getAll();
+    dataLoadErrors.memos = null;
+    try { deletedMemos = await window.api.memos.getDeleted(); } catch (e) { /* 忽略 */ }
+    renderMemos();
+    renderNavBadges();
+    applyDataLoadStates();
+    return true;
+  } catch (error) {
+    dataLoadErrors.memos = error;
+    applyDataLoadStates();
+    throw error;
+  }
+}
+
+async function refreshMemosAfterMutation(message) {
+  try {
+    const refreshed = await refreshMemos();
+    if (refreshed === false) {
+      toast(`${message}：仍有备忘录未保存`, 5000, null, 'warn');
+      return false;
+    }
+    return true;
+  } catch (error) {
+    toast(`${message}：${esc(error.message)}`, 5000, null, 'warn');
+    return false;
+  }
+}
+
+async function reloadRestoredWorkspace(result, label) {
+  if (memoSaveTimer) clearTimeout(memoSaveTimer);
+  memoSaveTimer = null;
+  memoDirty = false;
+  memoSaveChain = Promise.resolve();
+
+  const [taskResult, memoResult, taskTrashResult, memoTrashResult] = await Promise.allSettled([
+    window.api.tasks.getAll(),
+    window.api.memos.getAll(),
+    window.api.tasks.getDeleted(),
+    window.api.memos.getDeleted()
+  ]);
+  tasks = taskResult.status === 'fulfilled' ? taskResult.value : [];
+  memos = memoResult.status === 'fulfilled' ? memoResult.value : [];
+  trashList = taskTrashResult.status === 'fulfilled' ? taskTrashResult.value : [];
+  deletedMemos = memoTrashResult.status === 'fulfilled' ? memoTrashResult.value : [];
+  dataLoadErrors.tasks = taskResult.status === 'rejected' ? taskResult.reason : null;
+  dataLoadErrors.memos = memoResult.status === 'rejected' ? memoResult.reason : null;
+  if (!memos.some((memo) => memo.id === selectedMemoId)) selectedMemoId = memos.length ? memos[0].id : null;
+  renderAll();
+
+  toast(`${label}（${result.count} 条任务、${result.memoCount || 0} 条备忘录）`, 3500, null, 'ok');
+  if (dataLoadErrors.tasks || dataLoadErrors.memos) {
+    toast('数据已经恢复，但界面未完整刷新，请使用页面中的重试按钮', 5000, null, 'warn');
+  }
+}
+
 /* ---------- 视图切换 ---------- */
 function switchView(view) {
+  if (currentView === 'memos' && view !== 'memos') saveMemoNow();
   currentView = view;
   $$('.nav-item').forEach((n) => {
     const active = n.dataset.view === view;
@@ -1219,31 +1666,34 @@ function switchView(view) {
     activeView.classList.add('view-enter');
   }
   // 标题栏显示当前视图名
-  const viewNames = { today: '今天', tasks: '所有任务', board: '看板', cal: '日历', stat: '统计', trash: '回收站', settings: '设置' };
+  const viewNames = { today: '今天', tasks: '所有任务', memos: '备忘录', board: '看板', cal: '日历', stat: '统计', trash: '回收站', settings: '设置' };
   const tbTitle = $('#tb-title');
   if (tbTitle) tbTitle.textContent = `工作台助手 · ${viewNames[view] || ''}`;
   if (view === 'today') renderToday();
   if (view === 'tasks') renderTasks();
+  if (view === 'memos') renderMemos();
   if (view === 'board') renderBoard();
   if (view === 'cal') renderCal();
   if (view === 'stat') renderStat();
   if (view === 'settings') renderSettings();
   if (view === 'trash') loadTrash();
+  applyDataLoadStates();
 }
 
 /* ---------- 侧边栏计数徽标 ---------- */
 function renderNavBadges() {
   const active = tasks.filter((t) => !t._deleted && t.status !== 'done' && t.status !== 'archived').length;
-  const trashCount = trashList.length;
+  const trashCount = trashList.length + deletedMemos.length;
   const todayCount = tasks.filter((t) => !t._deleted && t.status !== 'done' && t.status !== 'archived' && isToday(t.due)).length;
   const badge = (view, count) => {
     const el = document.querySelector(`.nav-item[data-view="${view}"] .nav-badge`);
     if (!el) return;
-    if (count > 0) { el.textContent = count > 99 ? '99+' : count; el.style.display = ''; }
-    else el.style.display = 'none';
+    el.textContent = count > 99 ? '99+' : count;
+    el.classList.toggle('hidden', count <= 0);
   };
   badge('today', todayCount);
   badge('tasks', active);
+  badge('memos', memos.length);
   badge('trash', trashCount);
 }
 
@@ -1253,6 +1703,7 @@ function updateMaxBtn(maximized) {
   if (!btn) return;
   btn.textContent = maximized ? '❐' : '□';
   btn.title = maximized ? '还原' : '最大化';
+  btn.setAttribute('aria-label', maximized ? '还原窗口' : '最大化窗口');
 }
 
 /* ---------- 弹窗 ---------- */
@@ -1393,10 +1844,10 @@ async function saveModal(event) {
     setModalBusy(false);
   }
   closeModal(false);
-  await refreshTasks();
   restoreModalFocus();
   const nextText = completion && completion.next ? ` · 已安排下一次（${completion.next.due}）` : '';
   toast(`${wasEditing ? '已保存' : '已创建'}「${esc(title)}」${nextText}`, nextText ? 5000 : 3000, null, 'ok');
+  await refreshTasksAfterMutation(`任务已${wasEditing ? '保存' : '创建'}，但列表刷新失败`);
 }
 
 async function deleteEditingTask() {
@@ -1409,11 +1860,11 @@ async function deleteEditingTask() {
     label: '撤销',
     run: async () => {
       await window.api.tasks.restore(id);
-      await refreshTasks();
       toast('已恢复');
+      await refreshTasksAfterMutation('任务已恢复，但列表刷新失败');
     }
   }]);
-  await refreshTasks();
+  await refreshTasksAfterMutation('任务已删除，但列表刷新失败');
 }
 
 async function archiveEditingTask() {
@@ -1426,11 +1877,11 @@ async function archiveEditingTask() {
     label: '撤销',
     run: async () => {
       await window.api.tasks.unarchive(id);
-      await refreshTasks();
       toast('已恢复');
+      await refreshTasksAfterMutation('任务已恢复，但列表刷新失败');
     }
   }]);
-  await refreshTasks();
+  await refreshTasksAfterMutation('任务已归档，但列表刷新失败');
 }
 
 async function unarchiveEditingTask() {
@@ -1439,7 +1890,7 @@ async function unarchiveEditingTask() {
   closeModal();
   await window.api.tasks.unarchive(id);
   toast('已恢复为待办');
-  await refreshTasks();
+  await refreshTasksAfterMutation('任务已恢复，但列表刷新失败');
 }
 
 /* ---------- AI 对话 ---------- */
@@ -1527,7 +1978,12 @@ function opCard(result) {
     update: '已更新',
     child: '已添加子任务',
     postpone: '已顺延',
-    restore: '已恢复'
+    restore: '已恢复',
+    memo_create: '已记录',
+    memo_delete: '已删除备忘录',
+    memo_pin: result.memo && result.memo.pinned ? '已置顶' : '已取消置顶',
+    memo_to_task: '已转为任务',
+    memo_split: '已拆成任务'
   };
   card.innerHTML = `<div class="op-title">${titles[result.type] || '操作'}</div>`;
   if (result.undoable && result.undo) {
@@ -1543,7 +1999,7 @@ function opCard(result) {
           undo.remove();
           return;
         }
-        await refreshTasks();
+        await Promise.all([refreshTasks(), refreshMemos()]);
         toast('已撤销');
         card.remove();
       } catch (e) {
@@ -1585,6 +2041,10 @@ function clearTurnActions() {
 
 function candidateLabel(candidate) {
   const context = [];
+  if (candidate.entityType === 'memo') {
+    if (candidate.pinned) context.push('置顶');
+    if (candidate.preview) context.push(candidate.preview);
+  }
   if (candidate.project) context.push(`◈ ${candidate.project}`);
   if (candidate.due) context.push(candidate.due);
   if (candidate.status) context.push(STATE_NAME[candidate.status] || candidate.status);
@@ -1627,12 +2087,13 @@ async function runAiTurn(request, retry) {
       if (result.degraded) {
         const tip = document.createElement('div');
         tip.className = 'ai-notice';
-        tip.textContent = '模型暂时无法连接，已切换到本地助手';
+        tip.textContent = result.degradeNotice || '模型服务短暂异常，本轮已由本地助手继续处理';
         pending.appendChild(tip);
       }
 
-      const operationTypes = ['create', 'complete', 'start', 'delete', 'archive', 'split', 'update', 'child', 'postpone', 'restore'];
+      const operationTypes = ['create', 'memo_create', 'memo_delete', 'memo_pin', 'memo_to_task', 'memo_split', 'complete', 'start', 'delete', 'archive', 'split', 'update', 'child', 'postpone', 'restore'];
       if (operationTypes.includes(result.type)) pending.appendChild(opCard(result));
+      if (String(result.type).startsWith('memo_')) await refreshMemos();
 
       if (result.type === 'ask' && result.candidates && result.candidates.length) {
         const choices = turnActions(result.candidates.map((candidate) => {
@@ -1645,9 +2106,18 @@ async function runAiTurn(request, retry) {
               await resolveCandidate(result, candidate, label);
             }
           };
-        }), '选择任务');
+        }), result.candidates.some((candidate) => candidate.entityType === 'memo') ? '选择备忘录' : '选择任务');
         pending.appendChild(choices);
+      } else if (result.type === 'confirm') {
+        pending.appendChild(turnActions([
+          { label: '确认执行', run: () => sendPrompt('确认执行') },
+          { label: '取消', run: () => sendPrompt('取消') }
+        ], '确认操作'));
+        $('#ai-input').placeholder = '也可以输入“确认执行”或“取消”…';
+      } else if (result.type === 'clarify') {
+        $('#ai-input').placeholder = '继续补充刚才缺少的信息…';
       } else {
+        $('#ai-input').placeholder = '描述任务，或继续补充…';
         const followUps = getFollowUps(result);
         if (followUps.length) {
           pending.appendChild(turnActions(followUps.map((item) => ({
@@ -1710,17 +2180,18 @@ async function sendPrompt(text) {
 
 /* ---------- 聊天历史 ---------- */
 async function loadChatHistory() {
+  const chat = $('#ai-chat');
   try {
     const log = await window.api.chat.get();
-    if (!log || !log.length) return;
-    const chat = $('#ai-chat');
     chat.innerHTML = '';
+    if (!log || !log.length) return;
     log.slice(-50).forEach((entry) => {
       chat.appendChild(createMessage(entry.role, entry.text, entry.ts));
     });
     scrollChat();
   } catch (e) {
-    // 历史加载失败不阻塞
+    // 历史加载失败不阻塞当前工作状态展示。
+    chat.innerHTML = '';
   }
 }
 
@@ -1732,50 +2203,76 @@ function updateAiBadge() {
   const stage = settings.aiStage || 'mock';
   const providerReady = settings.aiProvider !== 'custom' || !!settings.aiBaseUrl;
   const configured = !!(settings.aiApiKey && settings.aiModel && providerReady);
+  const stateClass = stage === 'llm' ? (configured ? 'stage-ready' : 'stage-warning') : 'stage-local';
+  ['stage-ready', 'stage-warning', 'stage-local'].forEach((name) => {
+    badge.classList.toggle(name, name === stateClass);
+    if (panelStage) panelStage.classList.toggle(name, name === stateClass);
+  });
   if (stage === 'llm' && configured) {
     badge.textContent = '真实模型';
     if (panelStage) panelStage.textContent = `真实模型 · ${settings.aiModel}`;
-    badge.style.background = 'rgba(47, 125, 91, 0.1)';
-    badge.style.color = 'var(--ok)';
-    badge.style.borderColor = 'rgba(47, 125, 91, 0.2)';
   } else if (stage === 'llm' && !configured) {
     badge.textContent = '待配置';
     if (panelStage) panelStage.textContent = '真实模型 · 待配置';
-    badge.style.background = 'rgba(183, 121, 31, 0.1)';
-    badge.style.color = 'var(--warn)';
-    badge.style.borderColor = 'rgba(183, 121, 31, 0.2)';
   } else {
     badge.textContent = '本地助手';
     if (panelStage) panelStage.textContent = '本地规则引擎';
-    badge.style.background = 'var(--accent-weak)';
-    badge.style.color = 'var(--accent)';
-    badge.style.borderColor = 'rgba(217, 92, 69, 0.2)';
   }
 }
 
 /* ---------- 刷新 ---------- */
 async function refreshTasks() {
-  tasks = await window.api.tasks.getAll();
-  // 同步回收站列表，保证侧边栏回收站徽标准确
-  try { trashList = await window.api.tasks.getDeleted(); } catch (e) { /* 忽略 */ }
-  renderAll();
+  try {
+    tasks = await window.api.tasks.getAll();
+    dataLoadErrors.tasks = null;
+    // 同步回收站列表，保证侧边栏回收站徽标准确
+    try { trashList = await window.api.tasks.getDeleted(); } catch (e) { /* 忽略 */ }
+    renderAll();
+  } catch (error) {
+    dataLoadErrors.tasks = error;
+    renderAll();
+    throw error;
+  }
+}
+
+async function refreshTasksAfterMutation(message) {
+  try {
+    await refreshTasks();
+    return true;
+  } catch (error) {
+    toast(`${message}：${esc(error.message)}`, 5000, null, 'warn');
+    return false;
+  }
 }
 
 function renderAll() {
   renderToday();
   renderTasks();
+  renderMemos();
   renderBoard();
   renderCal();
   renderNavBadges();
   if (currentView === 'stat') renderStat();
   if (currentView === 'settings') renderSettings();
   if (currentView === 'trash') loadTrash();
+  applyDataLoadStates();
 }
 
 /* ---------- 事件绑定 ---------- */
 function bindEvents() {
+  $('.content').addEventListener('click', (event) => {
+    const retry = event.target.closest('[data-retry-source]');
+    if (!retry) return;
+    event.preventDefault();
+    event.stopPropagation();
+    retryDataSource(retry.dataset.retrySource, retry);
+  });
   // 导航
   $$('.nav-item').forEach((n) => n.addEventListener('click', () => switchView(n.dataset.view)));
+  $('#sidebar-new').addEventListener('click', () => {
+    switchView('tasks');
+    openModal(null);
+  });
 
   // 标题栏
   $('#tb-min').addEventListener('click', () => window.api.window.minimize());
@@ -1797,6 +2294,97 @@ function bindEvents() {
   $('#tasks-list').addEventListener('click', onTaskClick);
   $('#cal-body').addEventListener('click', onCalClick);
 
+  // 备忘录
+  $('#memo-new').addEventListener('click', createMemo);
+  $('#memo-empty-new').addEventListener('click', createMemo);
+  $('#memo-search').addEventListener('input', (event) => {
+    memoSearch = event.target.value;
+    renderMemoList();
+  });
+  $('#memo-list').addEventListener('click', (event) => {
+    const item = event.target.closest('[data-memo-id]');
+    if (item) selectMemo(parseInt(item.dataset.memoId, 10));
+  });
+  ['memo-title', 'memo-tags', 'memo-content'].forEach((id) => {
+    $(`#${id}`).addEventListener('input', scheduleMemoSave);
+  });
+  $('#memo-pin').addEventListener('click', async () => {
+    if ((await saveMemoNow()) === false) return;
+    const memo = currentMemo();
+    if (!memo) return;
+    const button = $('#memo-pin');
+    button.disabled = true;
+    try {
+      const updated = await window.api.memos.update(memo.id, { pinned: !memo.pinned });
+      memos = memos.map((item) => item.id === updated.id ? updated : item)
+        .sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.updatedAt - a.updatedAt);
+      renderMemos();
+    } catch (error) {
+      toast(`置顶操作失败：${esc(error.message)}`, 3000, null, 'err');
+    } finally {
+      button.disabled = false;
+    }
+  });
+  $('#memo-copy').addEventListener('click', async () => {
+    if ((await saveMemoNow()) === false) return;
+    const memo = currentMemo();
+    if (!memo) return;
+    const text = [memo.title, memo.content, (memo.tags || []).map((tag) => `#${tag}`).join(' ')].filter(Boolean).join('\n\n');
+    try {
+      const button = $('#memo-copy');
+      button.disabled = true;
+      await navigator.clipboard.writeText(text);
+      button.classList.add('copied');
+      button.querySelector('span').textContent = '✓';
+      button.dataset.tooltip = '已复制';
+      toast('备忘录已复制', 2500, null, 'ok');
+      setTimeout(() => {
+        button.classList.remove('copied');
+        button.querySelector('span').textContent = '⧉';
+        button.dataset.tooltip = '复制';
+        button.disabled = false;
+      }, 1200);
+    } catch (error) {
+      $('#memo-copy').disabled = false;
+      toast('复制失败，请稍后重试', 3000, null, 'err');
+    }
+  });
+  $('#memo-to-task').addEventListener('click', async () => {
+    if ((await saveMemoNow()) === false) return;
+    const memo = currentMemo();
+    if (!memo) return;
+    const button = $('#memo-to-task');
+    const label = button.querySelector('span:last-child');
+    button.disabled = true;
+    label.textContent = '创建中…';
+    let task;
+    try {
+      task = await window.api.tasks.create({ title: memo.title, desc: memo.content, tags: memo.tags || [], pri: 2, status: 'todo' });
+    } catch (error) {
+      toast(`创建任务失败：${esc(error.message)}`, 3000, null, 'err');
+      return;
+    } finally {
+      label.textContent = '转为任务';
+      button.disabled = false;
+    }
+    toast(`已创建任务「${esc(task.title)}」`, 3000, null, 'ok');
+    await refreshTasksAfterMutation('任务已创建，但列表刷新失败');
+  });
+  $('#memo-delete').addEventListener('click', async () => {
+    if ((await saveMemoNow()) === false) return;
+    const memo = currentMemo();
+    if (!memo) return;
+    confirmDialog(`确定删除备忘录「${memo.title}」吗？`, async () => {
+      await window.api.memos.remove(memo.id);
+      memos = memos.filter((item) => item.id !== memo.id);
+      selectedMemoId = memos.length ? memos[0].id : null;
+      deletedMemos = await window.api.memos.getDeleted();
+      renderMemos();
+      renderNavBadges();
+      toast('备忘录已移到回收站', 3000, null, 'ok');
+    });
+  });
+
   // 搜索
   $('#search-input').addEventListener('input', (e) => {
     currentSearch = e.target.value.trim();
@@ -1812,6 +2400,8 @@ function bindEvents() {
     button.disabled = true;
     button.setAttribute('aria-busy', 'true');
     button.textContent = '添加中…';
+    let createdTitle = raw;
+    let createdDue = null;
     try {
       const parsed = quickParseCache.raw === raw && quickParseCache.parsed
         ? quickParseCache.parsed
@@ -1824,23 +2414,24 @@ function bindEvents() {
           due: p.due || null,
           tags: p.tags || []
         });
-        input.value = '';
-        toast(`已创建「${esc(p.title)}」${p.due ? ' · ' + esc(p.due) : ''}`);
+        createdTitle = p.title;
+        createdDue = p.due || null;
       } else {
         await window.api.tasks.create({ title: raw, pri: 2 });
-        input.value = '';
-        toast(`已创建「${esc(raw)}」`);
       }
-      resetQuickPreview();
-      await refreshTasks();
-      input.focus();
     } catch (err) {
       toast('创建失败：' + esc(err.message), 4000, null, 'err');
+      return;
     } finally {
       button.disabled = false;
       button.setAttribute('aria-busy', 'false');
       button.textContent = '快速添加';
     }
+    input.value = '';
+    resetQuickPreview();
+    toast(`已创建「${esc(createdTitle)}」${createdDue ? ' · ' + esc(createdDue) : ''}`, 3000, null, 'ok');
+    await refreshTasksAfterMutation('任务已创建，但列表刷新失败');
+    input.focus();
   }
   $('#quick-input').addEventListener('input', (e) => scheduleQuickPreview(e.target.value));
   $('#quick-input').addEventListener('keydown', (e) => {
@@ -1902,8 +2493,8 @@ function bindEvents() {
         if (fromIdx < toIdx) toIdx--;
         cardIds.splice(toIdx, 0, parseInt(id, 10));
         await window.api.tasks.reorder(cardIds);
-        await refreshTasks();
         toast('已调整卡片顺序');
+        await refreshTasksAfterMutation('顺序已保存，但看板刷新失败');
       }
       return;
     }
@@ -1912,7 +2503,7 @@ function bindEvents() {
     } else {
       await window.api.tasks.update(t.id, { status: col.dataset.col });
       toast(`「${t.title}」已移至「${STATE_NAME[col.dataset.col]}」`);
-      await refreshTasks();
+      await refreshTasksAfterMutation('任务状态已更新，但看板刷新失败');
     }
   });
   // 看板卡片点击编辑
@@ -1978,8 +2569,8 @@ function bindEvents() {
     if (fromIdx < toIdx) toIdx--;
     rows.splice(toIdx, 0, parseInt(dragId, 10));
     await window.api.tasks.reorder(rows);
-    await refreshTasks();
     toast('已调整任务顺序');
+    await refreshTasksAfterMutation('顺序已保存，但列表刷新失败');
   });
 
   // 批量操作
@@ -1999,7 +2590,7 @@ function bindEvents() {
       generated ? `已安排 ${generated} 个下次任务` : ''
     ].filter(Boolean).join(' · ');
     toast(`已完成 ${result.completed} 项任务${detail ? ' · ' + detail : ''}`);
-    await refreshTasks();
+    await refreshTasksAfterMutation('批量完成已保存，但列表刷新失败');
   });
   $('#batch-delete').addEventListener('click', async () => {
     const ids = Array.from(selectedIds);
@@ -2008,7 +2599,7 @@ function bindEvents() {
       await window.api.tasks.batchDelete(ids);
       setBatchMode(false, false);
       toast(`已删除 ${ids.length} 项任务`, 3000, null, 'ok');
-      await refreshTasks();
+      await refreshTasksAfterMutation('批量删除已完成，但列表刷新失败');
     });
   });
   $('#batch-pri').addEventListener('change', async () => {
@@ -2020,7 +2611,7 @@ function bindEvents() {
     setBatchMode(false, false);
     $('#batch-pri').value = '';
     toast(`已更新 ${ids.length} 项任务优先级`);
-    await refreshTasks();
+    await refreshTasksAfterMutation('优先级已更新，但列表刷新失败');
   });
   $('#batch-clear').addEventListener('click', () => setBatchMode(false));
 
@@ -2028,6 +2619,7 @@ function bindEvents() {
   $('#trash-empty').addEventListener('click', async () => {
     confirmDialog('确定清空回收站吗？此操作不可恢复！', async () => {
       await window.api.tasks.emptyTrash();
+      await window.api.memos.emptyTrash();
       toast('回收站已清空', 3000, null, 'ok');
       await loadTrash();
     }, '清空');
@@ -2047,9 +2639,12 @@ function bindEvents() {
   $('#ai-collapse').addEventListener('click', () => {
     const panel = $('#ai-panel');
     const collapsed = panel.classList.toggle('collapsed');
+    const control = $('#ai-collapse');
     // 收起时显示「«」（点击展开），展开时显示「»」（点击收起）
-    $('#ai-collapse').textContent = collapsed ? '«' : '»';
-    $('#ai-collapse').title = collapsed ? '展开 AI 助手' : '收起 AI 助手';
+    control.textContent = collapsed ? '«' : '»';
+    control.title = collapsed ? '展开助手' : '收起助手';
+    control.setAttribute('aria-label', collapsed ? '展开助手' : '收起助手');
+    control.setAttribute('aria-expanded', String(!collapsed));
     // 收起/展开时清除内联宽度，避免与 collapsed 的窄条样式冲突
     if (collapsed) {
       panel.style.width = '';
@@ -2062,8 +2657,23 @@ function bindEvents() {
     const panel = $('#ai-panel');
     const handle = document.createElement('div');
     handle.className = 'ai-resize';
+    handle.tabIndex = 0;
+    handle.setAttribute('role', 'separator');
+    handle.setAttribute('aria-orientation', 'vertical');
+    handle.setAttribute('aria-label', '调整助手面板宽度');
+    handle.setAttribute('aria-valuemin', '260');
     panel.insertBefore(handle, panel.firstChild);
     let resizing = false, startX = 0, startW = 0;
+    const maxWidth = () => Math.max(260, Math.min(480, window.innerWidth - 540));
+    handle.setAttribute('aria-valuemax', String(Math.round(maxWidth())));
+    const setPanelWidth = (width) => {
+      const value = Math.max(260, Math.min(maxWidth(), width));
+      panel.style.width = value + 'px';
+      panel.style.flexBasis = value + 'px';
+      handle.setAttribute('aria-valuemax', String(Math.round(maxWidth())));
+      handle.setAttribute('aria-valuenow', String(Math.round(value)));
+    };
+    handle.setAttribute('aria-valuenow', String(Math.round(panel.offsetWidth)));
     handle.addEventListener('mousedown', (e) => {
       resizing = true;
       startX = e.clientX;
@@ -2073,9 +2683,7 @@ function bindEvents() {
     });
     document.addEventListener('mousemove', (e) => {
       if (!resizing) return;
-      const w = Math.max(260, Math.min(480, startW - (e.clientX - startX)));
-      panel.style.width = w + 'px';
-      panel.style.flexBasis = w + 'px';
+      setPanelWidth(startW - (e.clientX - startX));
     });
     document.addEventListener('mouseup', () => {
       if (resizing) {
@@ -2083,10 +2691,20 @@ function bindEvents() {
         document.body.classList.remove('resizing');
       }
     });
+    handle.addEventListener('keydown', (e) => {
+      if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+      e.preventDefault();
+      setPanelWidth(panel.offsetWidth + (e.key === 'ArrowLeft' ? 16 : -16));
+    });
+    window.addEventListener('resize', () => {
+      handle.setAttribute('aria-valuemax', String(Math.round(maxWidth())));
+      if (panel.style.width) setPanelWidth(panel.offsetWidth);
+    });
   })();
 
   // 弹窗
   $('#m-cancel').addEventListener('click', closeModal);
+  $('#m-close').addEventListener('click', closeModal);
   $('#task-form').addEventListener('submit', saveModal);
   $('#m-title').addEventListener('input', () => {
     if ($('#m-title').value.trim()) setTitleError('');
@@ -2111,14 +2729,16 @@ function bindEvents() {
     const panel = $('#ai-panel');
     panel.classList.remove('collapsed');
     $('#ai-collapse').textContent = '»';
-    $('#ai-collapse').title = '收起 AI 助手';
+    $('#ai-collapse').title = '收起助手';
+    $('#ai-collapse').setAttribute('aria-label', '收起助手');
+    $('#ai-collapse').setAttribute('aria-expanded', 'true');
     $('#ai-input').focus();
   });
   window.api.on('app:switch-view', (view) => {
-    if (['today', 'tasks', 'board', 'cal', 'stat', 'settings', 'trash'].includes(view)) switchView(view);
+    if (['today', 'tasks', 'memos', 'board', 'cal', 'stat', 'settings', 'trash'].includes(view)) switchView(view);
   });
   window.api.on('app:reminder', (data) => {
-    toast(`⏰ ${data.title}${data.due ? ' · ' + data.due : ''}`, 6000);
+    toast(`提醒 · ${data.title}${data.due ? ' · ' + data.due : ''}`, 6000);
   });
 
   // 应用内快捷键（不抢输入框焦点）
@@ -2155,9 +2775,10 @@ function bindEvents() {
       $('#m-due-time').value = '18:00';
       return;
     }
-    // N 新建任务
+    // N 在当前工作区新建内容
     if (e.key === 'n' || e.key === 'N') {
-      openModal(null);
+      if (currentView === 'memos') createMemo();
+      else openModal(null);
       return;
     }
     // Esc 退出批量模式
@@ -2169,31 +2790,81 @@ function bindEvents() {
 
 /* ---------- 回收站 ---------- */
 async function loadTrash() {
-  trashList = await window.api.tasks.getDeleted();
   const list = $('#trash-list');
   if (!list) return;
-  if (!trashList.length) {
-    list.innerHTML = '<div class="empty" style="padding:16px 0"><div class="big">🗑</div>回收站是空的</div>';
+  list.setAttribute('aria-busy', 'true');
+  list.innerHTML = '<div class="load-state" role="status"><span class="load-indicator" aria-hidden="true"></span><div><strong>正在读取回收站</strong></div></div>';
+  try {
+    [trashList, deletedMemos] = await Promise.all([window.api.tasks.getDeleted(), window.api.memos.getDeleted()]);
+  } catch (error) {
+    list.innerHTML = loadErrorHtml('trash');
     $('#trash-empty').classList.add('hidden');
+    list.setAttribute('aria-busy', 'false');
+    return;
+  }
+  renderNavBadges();
+  if (!trashList.length && !deletedMemos.length) {
+    list.innerHTML = '<div class="empty compact"><div class="big">⌫</div><div class="empty-title">回收站是空的</div><p class="empty-hint">删除的任务和备忘录会显示在这里。</p></div>';
+    $('#trash-empty').classList.add('hidden');
+    list.setAttribute('aria-busy', 'false');
     return;
   }
   $('#trash-empty').classList.remove('hidden');
-  list.innerHTML = trashList.map((t) => `
+  const taskRows = trashList.map((t) => `
     <div class="trash-row" data-id="${t.id}">
       <span class="trash-title">${esc(t.title)}</span>
+      <span class="trash-kind">任务</span>
       <span class="trash-time">${t.due ? esc(t.due) : '无截止'}</span>
-      <button class="btn mini" data-restore="${t.id}">恢复</button>
+      <button type="button" class="btn mini" data-restore-task="${t.id}">恢复</button>
     </div>`).join('');
+  const memoRows = deletedMemos.map((memo) => `
+    <div class="trash-row" data-id="${memo.id}">
+      <span class="trash-title">${esc(memo.title)}</span>
+      <span class="trash-kind">备忘录</span>
+      <span class="trash-time">${esc(memoTime(memo.deletedAt))}</span>
+      <button type="button" class="btn mini" data-restore-memo="${memo.id}">恢复</button>
+    </div>`).join('');
+  list.innerHTML = taskRows + memoRows;
   // 绑定恢复按钮
-  $$('#trash-list [data-restore]').forEach((b) => {
+  $$('#trash-list [data-restore-task]').forEach((b) => {
     b.addEventListener('click', async () => {
-      const id = parseInt(b.dataset.restore, 10);
-      await window.api.tasks.restore(id);
-      toast('已恢复任务');
-      await loadTrash();
-      await refreshTasks();
+      const id = parseInt(b.dataset.restoreTask, 10);
+      b.disabled = true;
+      b.setAttribute('aria-busy', 'true');
+      b.textContent = '恢复中…';
+      try {
+        await window.api.tasks.restore(id);
+        toast('已恢复任务', 2500, null, 'ok');
+        await refreshTasksAfterMutation('任务已恢复，但列表刷新失败');
+        await loadTrash();
+      } catch (error) {
+        toast('任务恢复失败，请重试', 3500, null, 'err');
+        b.disabled = false;
+        b.setAttribute('aria-busy', 'false');
+        b.textContent = '恢复';
+      }
     });
   });
+  $$('#trash-list [data-restore-memo]').forEach((b) => {
+    b.addEventListener('click', async () => {
+      const id = parseInt(b.dataset.restoreMemo, 10);
+      b.disabled = true;
+      b.setAttribute('aria-busy', 'true');
+      b.textContent = '恢复中…';
+      try {
+        await window.api.memos.restore(id);
+        toast('已恢复备忘录', 2500, null, 'ok');
+        await refreshMemosAfterMutation('备忘录已恢复，但列表刷新失败');
+        await loadTrash();
+      } catch (error) {
+        toast('备忘录恢复失败，请重试', 3500, null, 'err');
+        b.disabled = false;
+        b.setAttribute('aria-busy', 'false');
+        b.textContent = '恢复';
+      }
+    });
+  });
+  list.setAttribute('aria-busy', 'false');
 }
 
 async function onTaskClick(e) {
@@ -2260,7 +2931,7 @@ async function onTaskClick(e) {
     const nextPri = t.pri >= 4 ? 1 : t.pri + 1;
     await window.api.tasks.update(t.id, { pri: nextPri });
     toast(`「${t.title}」已设为${PRI_NAME[nextPri]}优先级`);
-    await refreshTasks();
+    await refreshTasksAfterMutation('优先级已更新，但列表刷新失败');
     return;
   }
   if (e.target.classList.contains('statectl')) {
@@ -2288,7 +2959,7 @@ async function duplicateTask(t) {
     children: t.children
   });
   toast(`已复制为「${copy.title}」`);
-  await refreshTasks();
+  await refreshTasksAfterMutation('任务已复制，但列表刷新失败');
 }
 
 /* 归档/恢复/删除（带撤销） */
@@ -2298,17 +2969,17 @@ async function archiveTaskById(id, title) {
     label: '撤销',
     run: async () => {
       await window.api.tasks.unarchive(id);
-      await refreshTasks();
       toast('已恢复');
+      await refreshTasksAfterMutation('任务已恢复，但列表刷新失败');
     }
   }]);
-  await refreshTasks();
+  await refreshTasksAfterMutation('任务已归档，但列表刷新失败');
 }
 
 async function unarchiveTaskById(id) {
   await window.api.tasks.unarchive(id);
   toast('已恢复为待办');
-  await refreshTasks();
+  await refreshTasksAfterMutation('任务已恢复，但列表刷新失败');
 }
 
 async function deleteTaskById(id, title) {
@@ -2317,11 +2988,11 @@ async function deleteTaskById(id, title) {
     label: '撤销',
     run: async () => {
       await window.api.tasks.restore(id);
-      await refreshTasks();
       toast('已恢复');
+      await refreshTasksAfterMutation('任务已恢复，但列表刷新失败');
     }
   }]);
-  await refreshTasks();
+  await refreshTasksAfterMutation('任务已删除，但列表刷新失败');
 }
 
 async function toggleChild(parentId, childId) {
@@ -2335,7 +3006,7 @@ async function toggleChild(parentId, childId) {
     return c;
   });
   await window.api.tasks.update(parentId, { children });
-  await refreshTasks();
+  await refreshTasksAfterMutation('子任务已更新，但列表刷新失败');
 }
 
 function toggleSelect(id) {
@@ -2350,7 +3021,7 @@ async function toggleDone(t) {
   if (t.status === 'done') {
     await window.api.tasks.update(t.id, { status: 'todo' });
     toast(`已重新打开「${t.title}」`);
-    await refreshTasks();
+    await refreshTasksAfterMutation('任务已重新打开，但列表刷新失败');
     return;
   }
   // 使用 completeTask：重复任务自动生成下一次
@@ -2366,7 +3037,7 @@ async function toggleDone(t) {
     row.classList.add('just-done');
     setTimeout(() => row.classList.remove('just-done'), 600);
   }
-  await refreshTasks();
+  await refreshTasksAfterMutation('任务已完成，但列表刷新失败');
 }
 
 async function postponeTask(id, days) {
@@ -2374,7 +3045,7 @@ async function postponeTask(id, days) {
   if (!t) return;
   await window.api.tasks.postpone(id, days);
   toast(`「${t.title}」已顺延${days === 1 ? '到明天' : '一周'}`);
-  await refreshTasks();
+  await refreshTasksAfterMutation('任务已顺延，但列表刷新失败');
 }
 
 async function cycleState(t) {
@@ -2382,7 +3053,7 @@ async function cycleState(t) {
   if (next === 'done') await toggleDone(t);
   else {
     await window.api.tasks.update(t.id, { status: next });
-    await refreshTasks();
+    await refreshTasksAfterMutation('任务状态已更新，但列表刷新失败');
   }
 }
 
@@ -2415,19 +3086,66 @@ function onCalClick(e) {
 
 /* ---------- 初始化 ---------- */
 async function init() {
-  settings = await window.api.settings.get();
-  applyTheme();
-  tasks = await window.api.tasks.getAll();
-  const dir = await window.api.data.getDir();
-  settings.dataDir = dir;
-  bindEvents();
-  renderAll();
-  updateAiBadge();
-  await loadChatHistory();
-  // 无历史时显示欢迎消息
-  const chat = $('#ai-chat');
-  if (!chat.children.length) {
-    addMsg('ai', '想记点什么？直接说就行，例如：\n· 明天下午3点 交周报 #工作\n· 今天我要做什么\n· 完成 交周报');
+  document.body.setAttribute('aria-busy', 'true');
+  $('#ai-chat').setAttribute('aria-busy', 'true');
+  try {
+    const [settingsResult, tasksResult, memosResult, taskTrashResult, memoTrashResult, dirResult] = await Promise.allSettled([
+      window.api.settings.get(),
+      window.api.tasks.getAll(),
+      window.api.memos.getAll(),
+      window.api.tasks.getDeleted(),
+      window.api.memos.getDeleted(),
+      window.api.data.getDir()
+    ]);
+
+    settings = settingsResult.status === 'fulfilled'
+      ? (settingsResult.value || {})
+      : { theme: 'auto', aiStage: 'local', shortcuts: {} };
+    tasks = tasksResult.status === 'fulfilled' ? tasksResult.value : [];
+    memos = memosResult.status === 'fulfilled' ? memosResult.value : [];
+    trashList = taskTrashResult.status === 'fulfilled' ? taskTrashResult.value : [];
+    deletedMemos = memoTrashResult.status === 'fulfilled' ? memoTrashResult.value : [];
+    settings.dataDir = dirResult.status === 'fulfilled' ? dirResult.value : '暂时无法读取';
+    dataLoadErrors.tasks = tasksResult.status === 'rejected' ? tasksResult.reason : null;
+    dataLoadErrors.memos = memosResult.status === 'rejected' ? memosResult.reason : null;
+
+    applyTheme();
+    if (!eventsBound) {
+      bindEvents();
+      eventsBound = true;
+    }
+    renderAll();
+    updateAiBadge();
+    await loadChatHistory();
+
+    const chat = $('#ai-chat');
+    if (!chat.children.length) {
+      let summary;
+      if (dataLoadErrors.tasks) {
+        summary = '任务数据暂时无法读取，恢复后我会同步最新工作状态。';
+      } else {
+        const active = tasks.filter((task) => !task._deleted && task.status !== 'done' && task.status !== 'archived');
+        const byDue = (a, b) => String(a.due || '').localeCompare(String(b.due || ''));
+        const overdue = active.filter((task) => isOverdue(task.due, task.status)).sort(byDue);
+        const dueToday = active.filter((task) => isToday(task.due)).sort(byDue);
+        summary = overdue.length
+          ? `当前有 ${overdue.length} 项逾期任务，建议先处理「${overdue[0].title}」。`
+          : dueToday.length
+            ? `今天还有 ${dueToday.length} 项任务，下一项是「${dueToday[0].title}」。`
+            : active.length
+              ? `当前有 ${active.length} 项待办，今天没有到期任务。`
+              : '当前没有待办任务。';
+      }
+      addMsg('ai', summary);
+    }
+    if (settingsResult.status === 'rejected') {
+      toast('偏好设置暂时无法读取，已使用默认外观', 4000, null, 'warn');
+    }
+  } catch (error) {
+    renderStartupError(error);
+  } finally {
+    document.body.setAttribute('aria-busy', 'false');
+    $('#ai-chat').setAttribute('aria-busy', 'false');
   }
 }
 

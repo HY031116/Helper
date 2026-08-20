@@ -2,7 +2,7 @@
 
 /**
  * 数据存储层 - 纯本地 JSON 文件存储
- * 数据主权第一原则：所有任务、设置、AI 会话记录全部存于本机
+ * 数据主权第一原则：所有任务、备忘录、设置、AI 会话记录全部存于本机
  */
 
 const fs = require('fs');
@@ -18,8 +18,10 @@ function getDataDir() {
 
 const DATA_DIR = getDataDir();
 const TASKS_FILE = path.join(DATA_DIR, 'tasks.json');
+const MEMOS_FILE = path.join(DATA_DIR, 'memos.json');
 const SETTINGS_FILE = path.join(DATA_DIR, 'settings.json');
 const CHAT_FILE = path.join(DATA_DIR, 'chat.json');
+const AGENT_STATE_FILE = path.join(DATA_DIR, 'agent-state.json');
 const BACKUP_DIR = path.join(DATA_DIR, 'backups');
 
 /* ---------- 工具 ---------- */
@@ -69,9 +71,12 @@ function seedTasks() {
 
 /* ---------- 状态 ---------- */
 let tasks = [];
+let memos = [];
 let settings = {};
 let chatLog = [];
+let agentState = {};
 let seq = 100;
+let memoSeq = 1000;
 
 /* ---------- 初始化 ---------- */
 function init() {
@@ -86,8 +91,15 @@ function init() {
   // 计算最大 id
   tasks.forEach((t) => { if (t.id > seq) seq = t.id; });
 
+  memos = readJson(MEMOS_FILE, []);
+  if (!Array.isArray(memos)) memos = [];
+  memoSeq = 1000;
+  memos = memos.map(normalizeMemo);
+  memos.forEach((memo) => { if (memo.id > memoSeq) memoSeq = memo.id; });
+
   settings = Object.assign({}, getDefaultSettings(), readJson(SETTINGS_FILE, {}));
   chatLog = readJson(CHAT_FILE, []);
+  agentState = normalizeAgentState(readJson(AGENT_STATE_FILE, {}));
 }
 
 function getDefaultSettings() {
@@ -119,6 +131,97 @@ function getTask(id) {
 
 function nextId() {
   return ++seq;
+}
+
+/* ---------- 备忘录 CRUD ---------- */
+function normalizeMemo(data) {
+  const now = Date.now();
+  return {
+    id: Number(data && data.id) || ++memoSeq,
+    title: String(data && data.title || '').trim() || '无标题备忘录',
+    content: String(data && data.content || ''),
+    tags: Array.isArray(data && data.tags)
+      ? data.tags.map((tag) => String(tag).trim()).filter(Boolean).slice(0, 5)
+      : [],
+    pinned: !!(data && data.pinned),
+    createdAt: Number(data && data.createdAt) || now,
+    updatedAt: Number(data && data.updatedAt) || now,
+    ...(data && data._deleted ? { _deleted: true, deletedAt: Number(data.deletedAt) || now } : {})
+  };
+}
+
+function getAllMemos() {
+  return memos
+    .filter((memo) => !memo._deleted)
+    .slice()
+    .sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.updatedAt - a.updatedAt);
+}
+
+function getMemo(id) {
+  return memos.find((memo) => memo.id === Number(id) && !memo._deleted) || null;
+}
+
+function createMemo(data) {
+  const memo = normalizeMemo(Object.assign({}, data, { id: ++memoSeq }));
+  memos.push(memo);
+  saveMemos();
+  return memo;
+}
+
+function updateMemo(id, patch) {
+  const memo = getMemo(id);
+  if (!memo) throw new Error('备忘录不存在');
+  if (patch.title !== undefined) memo.title = String(patch.title).trim() || '无标题备忘录';
+  if (patch.content !== undefined) memo.content = String(patch.content);
+  if (patch.tags !== undefined) {
+    memo.tags = Array.isArray(patch.tags)
+      ? patch.tags.map((tag) => String(tag).trim()).filter(Boolean).slice(0, 5)
+      : [];
+  }
+  if (patch.pinned !== undefined) memo.pinned = !!patch.pinned;
+  memo.updatedAt = Date.now();
+  saveMemos();
+  return memo;
+}
+
+function deleteMemo(id) {
+  const memo = getMemo(id);
+  if (!memo) throw new Error('备忘录不存在');
+  memo._deleted = true;
+  memo.deletedAt = Date.now();
+  saveMemos();
+  return { ok: true, id: memo.id };
+}
+
+function getDeletedMemos() {
+  return memos.filter((memo) => memo._deleted).slice().sort((a, b) => b.deletedAt - a.deletedAt);
+}
+
+function restoreMemo(id) {
+  const memo = memos.find((item) => item.id === Number(id));
+  if (!memo) throw new Error('备忘录不存在');
+  delete memo._deleted;
+  delete memo.deletedAt;
+  memo.updatedAt = Date.now();
+  saveMemos();
+  return memo;
+}
+
+function emptyMemoTrash() {
+  memos = memos.filter((memo) => !memo._deleted);
+  saveMemos();
+  return { ok: true };
+}
+
+function importMemos(list) {
+  if (!Array.isArray(list)) throw new Error('备忘录导入格式不正确');
+  const imported = list.filter((item) => item && (item.title || item.content)).map((item) => {
+    const memo = normalizeMemo(Object.assign({}, item, { id: ++memoSeq, _deleted: false }));
+    memos.push(memo);
+    return memo;
+  });
+  saveMemos();
+  return imported;
 }
 
 function createTaskRecord(data) {
@@ -183,6 +286,8 @@ function applyTaskPatch(t, patch) {
   }
   if (patch.completedAt !== undefined) t.completedAt = patch.completedAt || null;
   if (patch.repeat !== undefined && ['', 'daily', 'weekly', 'monthly'].includes(patch.repeat)) t.repeat = patch.repeat;
+  if (patch.repeatSourceId !== undefined) t.repeatSourceId = patch.repeatSourceId == null ? null : Number(patch.repeatSourceId);
+  if (patch.repeatNextId !== undefined) t.repeatNextId = patch.repeatNextId == null ? null : Number(patch.repeatNextId);
   if (patch.remind !== undefined && [0, 10, 30, 60].includes(Number(patch.remind))) t.remind = Number(patch.remind);
   if (patch.children !== undefined) t.children = normalizeChildren(patch.children);
   if (patch.order !== undefined) t.order = Number(patch.order);
@@ -472,15 +577,62 @@ function appendChat(entry) {
 function clearChat() {
   chatLog = [];
   writeJson(CHAT_FILE, []);
+  clearAgentState();
   return chatLog;
 }
 
+/* ---------- Agent 会话状态 ---------- */
+function normalizeAgentState(value) {
+  const state = value && typeof value === 'object' ? value : {};
+  const lastEntity = state.lastEntity && typeof state.lastEntity === 'object'
+    ? {
+        type: state.lastEntity.type === 'memo' ? 'memo' : 'task',
+        id: Number(state.lastEntity.id) || null,
+        title: String(state.lastEntity.title || ''),
+        ts: Number(state.lastEntity.ts) || Date.now()
+      }
+    : null;
+  const pending = state.pending && typeof state.pending === 'object'
+    ? JSON.parse(JSON.stringify(state.pending))
+    : null;
+  const lastCollection = state.lastCollection && typeof state.lastCollection === 'object'
+    ? {
+        type: state.lastCollection.type === 'memo' ? 'memo' : 'task',
+        ids: Array.isArray(state.lastCollection.ids)
+          ? state.lastCollection.ids.map(Number).filter(Boolean).slice(0, 20)
+          : [],
+        ts: Number(state.lastCollection.ts) || Date.now()
+      }
+    : null;
+  return { lastEntity, lastCollection, pending };
+}
+
+function getAgentState() {
+  return JSON.parse(JSON.stringify(agentState));
+}
+
+function updateAgentState(patch) {
+  agentState = normalizeAgentState(Object.assign({}, agentState, patch));
+  writeJson(AGENT_STATE_FILE, agentState);
+  return getAgentState();
+}
+
+function clearAgentState() {
+  agentState = normalizeAgentState({});
+  writeJson(AGENT_STATE_FILE, agentState);
+  return getAgentState();
+}
+
 /* ---------- 备份 ---------- */
+function getBackupPayload() {
+  return { version: 3, tasks, memos, agentState };
+}
+
 function backup() {
   ensureDir(BACKUP_DIR);
   const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
   const file = path.join(BACKUP_DIR, `tasks-${stamp}.json`);
-  fs.copyFileSync(TASKS_FILE, file);
+  writeJson(file, getBackupPayload());
   // 只保留最近 14 份
   const files = fs.readdirSync(BACKUP_DIR).filter((f) => f.startsWith('tasks-')).sort();
   while (files.length > 14) {
@@ -520,7 +672,19 @@ function restoreFromBackup(filePath) {
   seq = 100;
   tasks.forEach((t) => { if (t.id > seq) seq = t.id; });
   saveTasks();
-  return { ok: true, count: tasks.length };
+  if (!Array.isArray(data) && Array.isArray(data.memos)) {
+    memoSeq = 1000;
+    memos = data.memos.map(normalizeMemo);
+    memos.forEach((memo) => { if (memo.id > memoSeq) memoSeq = memo.id; });
+    saveMemos();
+  }
+  if (!Array.isArray(data) && data.agentState) {
+    agentState = normalizeAgentState(data.agentState);
+    writeJson(AGENT_STATE_FILE, agentState);
+  } else {
+    clearAgentState();
+  }
+  return { ok: true, count: tasks.length, memoCount: getAllMemos().length };
 }
 
 /* 一键备份到外部指定文件夹（防止数据目录丢失） */
@@ -529,13 +693,13 @@ function backupToDir(dir) {
   ensureDir(dir);
   const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
   const file = path.join(dir, `work-helper-backup-${stamp}.json`);
-  fs.copyFileSync(TASKS_FILE, file);
+  writeJson(file, getBackupPayload());
   return file;
 }
 
 /* ---------- 导出 ---------- */
 function exportJSON() {
-  return JSON.stringify(getAllTasks(), null, 2);
+  return JSON.stringify({ version: 2, tasks: getAllTasks(), memos: getAllMemos() }, null, 2);
 }
 
 function exportCSV() {
@@ -552,6 +716,10 @@ function exportCSV() {
 /* ---------- 保存 ---------- */
 function saveTasks() {
   writeJson(TASKS_FILE, tasks);
+}
+
+function saveMemos() {
+  writeJson(MEMOS_FILE, memos);
 }
 
 /* ---------- 周报生成 ---------- */
@@ -732,11 +900,23 @@ module.exports = {
   clearAllTasks,
   importTasks,
   resetTasks,
+  getAllMemos,
+  getMemo,
+  createMemo,
+  updateMemo,
+  deleteMemo,
+  getDeletedMemos,
+  restoreMemo,
+  emptyMemoTrash,
+  importMemos,
   getSettings,
   updateSettings,
   getChatLog,
   appendChat,
   clearChat,
+  getAgentState,
+  updateAgentState,
+  clearAgentState,
   backup,
   listBackups,
   restoreFromBackup,

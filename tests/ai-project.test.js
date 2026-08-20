@@ -31,6 +31,7 @@ after(() => {
 /* ---------- 工具 ---------- */
 function reset() {
   store.resetTasks();
+  store.clearAgentState();
 }
 
 /* ============ 1. 创建意图 ============ */
@@ -127,8 +128,11 @@ test('开始：开始 写季度方案', () => {
 /* ============ 5. 删除意图 ============ */
 test('删除：删除 整理报销单据', () => {
   reset();
-  const r = ai.handle('删除 整理报销单据');
-  assert.strictEqual(r.intent, 'delete');
+  const ask = ai.handle('删除 整理报销单据');
+  assert.strictEqual(ask.intent, 'delete');
+  assert.strictEqual(ask.type, 'confirm');
+  assert.ok(store.getAllTasks().some((x) => x.title === '整理报销单据'), '确认前不得删除');
+  const r = ai.handle('确认执行');
   assert.strictEqual(r.type, 'delete');
   assert.ok(r.undoable);
   // 软删除
@@ -190,17 +194,22 @@ test('兜底：空输入 → 提示', () => {
   assert.strictEqual(r.intent, 'unknown');
 });
 
-test('兜底：参数缺失 → 按默认值执行并明示', () => {
+test('缺少任务内容时追问并在下一轮补全', () => {
   reset();
-  const r = ai.handle('创建 一个任务');
+  const ask = ai.handle('创建 一个任务');
+  assert.strictEqual(ask.type, 'clarify');
+  assert.strictEqual(store.getAllTasks().length, 8, '补全前不得创建空任务');
+  const r = ai.handle('明天下午3点 交材料 #工作');
   assert.strictEqual(r.type, 'create');
+  assert.strictEqual(r.task.title, '交材料');
   assert.strictEqual(r.task.pri, 2);
 });
 
 /* ============ 11. 撤销链路 ============ */
 test('撤销：删除后可恢复', () => {
   reset();
-  const r = ai.handle('删除 整理报销单据');
+  ai.handle('删除 整理报销单据');
+  const r = ai.handle('确认执行');
   assert.ok(r.undo && r.undo.action === 'restore');
   const restored = store.restoreTask(r.undo.id);
   assert.strictEqual(restored.title, '整理报销单据');
@@ -209,9 +218,76 @@ test('撤销：删除后可恢复', () => {
 test('撤销：归档后可恢复', () => {
   reset();
   const r = ai.handle('归档 写季度方案');
-  assert.ok(r.undo && r.undo.action === 'unarchive');
-  const restored = store.unarchiveTask(r.undo.id);
-  assert.strictEqual(restored.status, 'todo');
+  assert.ok(r.undo && r.undo.action === 'update');
+  const restored = ai.undoAction(r.undo);
+  assert.strictEqual(restored.ok, true);
+  assert.strictEqual(restored.task.status, 'todo');
+});
+
+test('撤销：开始、完成和拆分会恢复真实字段', () => {
+  reset();
+  const task = store.createTask({ title: '撤销链路', children: [{ title: '原步骤', done: false }] });
+  const originalChildren = JSON.parse(JSON.stringify(task.children));
+
+  const started = ai.handle('开始 撤销链路');
+  assert.strictEqual(store.getTask(task.id).status, 'doing');
+  assert.strictEqual(ai.undoAction(started.undo).task.status, 'todo');
+
+  const completed = ai.handle('完成 撤销链路');
+  assert.strictEqual(store.getTask(task.id).children[0].done, true);
+  assert.strictEqual(ai.undoAction(completed.undo).ok, true);
+  assert.deepStrictEqual(store.getTask(task.id).children, originalChildren);
+  assert.strictEqual(store.getTask(task.id).status, 'todo');
+
+  const split = ai.handle('把 撤销链路 拆成三步');
+  assert.strictEqual(store.getTask(task.id).children.length, 3);
+  assert.strictEqual(ai.undoAction(split.undo).ok, true);
+  assert.deepStrictEqual(store.getTask(task.id).children, originalChildren);
+});
+
+test('撤销：完成重复任务会移除本次自动生成的下一次任务', () => {
+  reset();
+  const task = store.createTask({ title: '每日同步撤销', repeat: 'daily', due: '2026-08-18 09:00' });
+  const completed = ai.handle('完成 每日同步撤销');
+  const successorId = completed.undo.removeCreated.id;
+  assert.ok(store.getTask(successorId));
+
+  const undone = ai.undoAction(completed.undo);
+  assert.strictEqual(undone.ok, true);
+  assert.strictEqual(store.getTask(task.id).status, 'todo');
+  assert.strictEqual(store.getTask(task.id).completedAt, null);
+  assert.strictEqual(store.getTask(task.id).repeatNextId, null);
+  assert.strictEqual(store.getTask(successorId), null);
+});
+
+test('撤销：后续任务已修改时拒绝部分回滚', () => {
+  reset();
+  const task = store.createTask({ title: '每日检查撤销冲突', repeat: 'daily', due: '2026-08-18 09:00' });
+  const completed = ai.handle('完成 每日检查撤销冲突');
+  const successorId = completed.undo.removeCreated.id;
+  store.updateTask(successorId, { desc: '用户后来补充的内容' });
+
+  const undone = ai.undoAction(completed.undo);
+  assert.strictEqual(undone.ok, false);
+  assert.strictEqual(undone.reason, 'conflict');
+  assert.strictEqual(store.getTask(task.id).status, 'done', '冲突时原任务也不能被部分还原');
+  assert.ok(store.getTask(successorId));
+});
+
+test('撤销：完成旧版重复任务只还原补写关联，不删除既有任务', () => {
+  reset();
+  const task = store.createTask({ title: '兼容周报撤销', repeat: 'weekly', due: '2026-08-18 18:00' });
+  const successor = store.createTask({ title: '兼容周报撤销', repeat: 'weekly', due: '2026-08-25 18:00' });
+  const completed = ai.handle('完成 兼容周报撤销');
+  assert.strictEqual(completed.type, 'ask');
+  const selected = ai.resolve('complete', completed.params, task.id);
+  assert.strictEqual(store.getTask(successor.id).repeatSourceId, task.id);
+
+  const undone = ai.undoAction(selected.undo);
+  assert.strictEqual(undone.ok, true);
+  assert.strictEqual(store.getTask(task.id).repeatNextId, null);
+  assert.strictEqual(store.getTask(successor.id).repeatSourceId, null);
+  assert.ok(store.getTask(successor.id), '既有的下一次任务必须保留');
 });
 
 /* ============ 12. 子任务完成进度 ============ */
@@ -750,8 +826,11 @@ test('闲聊：不执行任何任务操作', () => {
 test('批量：清除所有任务', () => {
   reset();
   const before = store.getAllTasks().length;
-  const r = ai.handle('清除所有任务');
-  assert.strictEqual(r.intent, 'batch');
+  const ask = ai.handle('清除所有任务');
+  assert.strictEqual(ask.intent, 'batch');
+  assert.strictEqual(ask.type, 'confirm');
+  assert.strictEqual(store.getAllTasks().length, before);
+  const r = ai.handle('确认执行');
   assert.strictEqual(r.type, 'batch');
   assert.ok(r.message.includes('清除'));
   assert.strictEqual(store.getAllTasks().length, 0);
@@ -761,8 +840,10 @@ test('批量：全部完成', () => {
   reset();
   const originalPending = store.getAllTasks().filter((t) => t.status !== 'done' && t.status !== 'archived');
   const recurring = originalPending.find((t) => t.repeat && t.due);
-  const r = ai.handle('全部任务都完成');
-  assert.strictEqual(r.intent, 'batch');
+  const ask = ai.handle('全部任务都完成');
+  assert.strictEqual(ask.intent, 'batch');
+  assert.strictEqual(ask.type, 'confirm');
+  const r = ai.handle('确认执行');
   assert.strictEqual(r.type, 'batch');
   originalPending.forEach((task) => {
     assert.strictEqual(store.getTask(task.id).status, 'done', `原任务「${task.title}」应已完成`);
@@ -778,8 +859,10 @@ test('批量：按优先级删除紧急任务', () => {
   reset();
   store.createTask({ title: '紧急A', pri: 4 });
   store.createTask({ title: '普通B', pri: 2 });
-  const r = ai.handle('把紧急任务都删掉');
-  assert.strictEqual(r.intent, 'batch');
+  const ask = ai.handle('把紧急任务都删掉');
+  assert.strictEqual(ask.intent, 'batch');
+  assert.strictEqual(ask.type, 'confirm');
+  const r = ai.handle('确认执行');
   assert.strictEqual(r.type, 'batch');
   const urgent = store.getAllTasks().filter((t) => t.pri === 4);
   assert.strictEqual(urgent.length, 0, '紧急任务应被删除');
@@ -790,8 +873,10 @@ test('批量：按标签删除', () => {
   reset();
   store.createTask({ title: '工作项', tags: ['工作'] });
   store.createTask({ title: '生活项', tags: ['生活'] });
-  const r = ai.handle('把所有工作标签的任务删掉');
-  assert.strictEqual(r.intent, 'batch');
+  const ask = ai.handle('把所有工作标签的任务删掉');
+  assert.strictEqual(ask.intent, 'batch');
+  assert.strictEqual(ask.type, 'confirm');
+  const r = ai.handle('确认执行');
   assert.strictEqual(r.type, 'batch');
   assert.ok(!store.getAllTasks().some((t) => t.title === '工作项'), '工作标签任务应删除');
   assert.ok(store.getAllTasks().some((t) => t.title === '生活项'), '生活标签任务应保留');
@@ -801,8 +886,10 @@ test('批量：清空回收站', () => {
   reset();
   const t = store.createTask({ title: '待删任务' });
   store.deleteTask(t.id);
-  const r = ai.handle('清空回收站');
-  assert.strictEqual(r.intent, 'batch');
+  const ask = ai.handle('清空回收站');
+  assert.strictEqual(ask.intent, 'batch');
+  assert.strictEqual(ask.type, 'confirm');
+  const r = ai.handle('确认执行');
   assert.strictEqual(r.type, 'batch');
   assert.strictEqual(store.getDeletedTasks().length, 0, '回收站应清空');
 });
@@ -970,8 +1057,10 @@ test('真实模型：解析时携带最近对话并保留精细操作参数', as
 
 test('真实模型：通用对话使用有限历史和任务上下文', async () => {
   reset();
+  resetMemos();
   store.clearChat();
   store.createTask({ title: '准备季度复盘' });
+  store.createMemo({ title: '复盘访谈记录', content: '客户希望先看留存数据', pinned: true });
   for (let i = 0; i < 8; i++) {
     store.appendChat({ role: 'user', text: `历史问题 ${i}`, ts: Date.now() + i * 2 });
     store.appendChat({ role: 'ai', text: `历史回答 ${i}`, ts: Date.now() + i * 2 + 1 });
@@ -1003,6 +1092,8 @@ test('真实模型：通用对话使用有限历史和任务上下文', async ()
     assert.strictEqual(chatMessages[1].content, '历史问题 2');
     assert.deepStrictEqual(chatMessages.at(-1), { role: 'user', content: '那你觉得下一步呢？' });
     assert.match(chatMessages[0].content, /准备季度复盘/);
+    assert.match(chatMessages[0].content, /复盘访谈记录/);
+    assert.match(chatMessages[0].content, /客户希望先看留存数据/);
     assert.doesNotMatch(chatMessages[0].content, /3-5 句/);
   } finally {
     global.fetch = originalFetch;
@@ -1055,6 +1146,177 @@ test('真实模型：缺少内联回复时回退到对话请求', async () => {
   }
 });
 
+test('真实模型：备忘录操作只由模型解析，修改仍走本地规则', async () => {
+  reset();
+  resetMemos();
+  const memo = store.createMemo({ title: '客户决策记录', content: '先做 A 方案' });
+  const previous = store.getSettings();
+  store.updateSettings({
+    aiStage: 'llm',
+    aiProvider: 'custom',
+    aiBaseUrl: 'https://example.invalid/v1',
+    aiApiKey: 'test-key',
+    aiModel: 'test-model'
+  });
+  const originalFetch = global.fetch;
+  let requestCount = 0;
+  global.fetch = async () => {
+    requestCount += 1;
+    return {
+      ok: true,
+      json: async () => ({ choices: [{ message: { content: JSON.stringify({
+        intent: 'memo_pin',
+        target: '客户决策记录',
+        pinned: true
+      }) } }] })
+    };
+  };
+  try {
+    const result = await ai.handleAuto('把刚才那份客户决定放到最上面');
+    assert.strictEqual(result.engine, 'llm');
+    assert.strictEqual(result.type, 'memo_pin');
+    assert.strictEqual(result.memo.id, memo.id);
+    assert.strictEqual(store.getMemo(memo.id).pinned, true);
+    assert.strictEqual(requestCount, 1);
+  } finally {
+    global.fetch = originalFetch;
+    store.updateSettings({
+      aiStage: previous.aiStage,
+      aiProvider: previous.aiProvider,
+      aiBaseUrl: previous.aiBaseUrl,
+      aiApiKey: previous.aiApiKey,
+      aiModel: previous.aiModel
+    });
+  }
+});
+
+test('真实模型：备忘录拆分使用模型给出的具体步骤并等待确认', async () => {
+  reset();
+  resetMemos();
+  const memo = store.createMemo({ title: '游戏构筑与地图优化备忘', content: '平衡构筑并优化地图节奏' });
+  ai.handle('查看我的备忘录');
+  const previous = store.getSettings();
+  store.updateSettings({
+    aiStage: 'llm',
+    aiProvider: 'custom',
+    aiBaseUrl: 'https://example.invalid/v1',
+    aiApiKey: 'test-key',
+    aiModel: 'test-model'
+  });
+  const originalFetch = global.fetch;
+  let requestCount = 0;
+  global.fetch = async () => {
+    requestCount += 1;
+    return {
+      ok: true,
+      json: async () => ({ choices: [{ message: { content: JSON.stringify({
+        intent: 'memo_split',
+        target: '游戏构筑与地图优化备忘',
+        steps: ['盘点现有构筑流派', '调整地图奖励节奏', '验证新路线数据']
+      }) } }] })
+    };
+  };
+  try {
+    const preview = await ai.handleAuto('就拆构筑那个吧');
+    assert.strictEqual(preview.engine, 'llm');
+    assert.strictEqual(preview.type, 'confirm');
+    assert.match(preview.message, /盘点现有构筑流派/);
+    assert.strictEqual(preview.params.memoId, undefined, '稳定 ID 应由本地执行层绑定并保存在确认状态中');
+
+    const created = await ai.handleAuto('确认执行');
+    assert.strictEqual(created.type, 'memo_split');
+    assert.deepStrictEqual(created.tasks.map((task) => task.title), ['盘点现有构筑流派', '调整地图奖励节奏', '验证新路线数据']);
+    assert.strictEqual(requestCount, 1, '确认阶段不应再次请求模型');
+    assert.ok(store.getMemo(memo.id));
+  } finally {
+    global.fetch = originalFetch;
+    store.updateSettings({
+      aiStage: previous.aiStage,
+      aiProvider: previous.aiProvider,
+      aiBaseUrl: previous.aiBaseUrl,
+      aiApiKey: previous.aiApiKey,
+      aiModel: previous.aiModel
+    });
+  }
+});
+
+test('真实模型：服务超时后本地降级仍能理解最近备忘录指代', async () => {
+  reset();
+  resetMemos();
+  const memo = store.createMemo({ title: '游戏构筑与地图优化备忘', content: '构筑平衡\n地图节奏' });
+  ai.handle('查看我的备忘录');
+  const previous = store.getSettings();
+  store.updateSettings({
+    aiStage: 'llm',
+    aiProvider: 'custom',
+    aiBaseUrl: 'https://example.invalid/v1',
+    aiApiKey: 'test-key',
+    aiModel: 'test-model'
+  });
+  const originalFetch = global.fetch;
+  global.fetch = async () => {
+    const error = new Error('The operation was aborted');
+    error.name = 'AbortError';
+    throw error;
+  };
+  try {
+    const result = await ai.handleAuto('就拆构筑那个吧');
+    assert.strictEqual(result.degraded, true);
+    assert.strictEqual(result.type, 'confirm');
+    assert.strictEqual(store.getAgentState().pending.params.memoId, memo.id);
+    assert.strictEqual(result.degradeNotice, '模型响应超时，本轮已由本地助手继续处理');
+  } finally {
+    global.fetch = originalFetch;
+    store.updateSettings({
+      aiStage: previous.aiStage,
+      aiProvider: previous.aiProvider,
+      aiBaseUrl: previous.aiBaseUrl,
+      aiApiKey: previous.aiApiKey,
+      aiModel: previous.aiModel
+    });
+  }
+});
+
+test('真实模型：危险操作确认阶段不再次请求模型', async () => {
+  reset();
+  const task = store.createTask({ title: '废弃草稿' });
+  const previous = store.getSettings();
+  store.updateSettings({
+    aiStage: 'llm',
+    aiProvider: 'custom',
+    aiBaseUrl: 'https://example.invalid/v1',
+    aiApiKey: 'test-key',
+    aiModel: 'test-model'
+  });
+  const originalFetch = global.fetch;
+  let requestCount = 0;
+  global.fetch = async () => {
+    requestCount += 1;
+    return {
+      ok: true,
+      json: async () => ({ choices: [{ message: { content: JSON.stringify({ intent: 'delete', target: '废弃草稿' }) } }] })
+    };
+  };
+  try {
+    const ask = await ai.handleAuto('这份已经不要了');
+    assert.strictEqual(ask.type, 'confirm');
+    assert.ok(store.getTask(task.id), '确认前不能删除');
+    const result = await ai.handleAuto('确认执行');
+    assert.strictEqual(result.type, 'delete');
+    assert.strictEqual(store.getTask(task.id), null);
+    assert.strictEqual(requestCount, 1, '确认阶段必须使用已保存的结构化操作');
+  } finally {
+    global.fetch = originalFetch;
+    store.updateSettings({
+      aiStage: previous.aiStage,
+      aiProvider: previous.aiProvider,
+      aiBaseUrl: previous.aiBaseUrl,
+      aiApiKey: previous.aiApiKey,
+      aiModel: previous.aiModel
+    });
+  }
+});
+
 test('助手体验：完成任务后推荐真实的下一项', () => {
   store.clearAllTasks();
   store.createTask({ title: '已经处理的事项', pri: 2 });
@@ -1065,6 +1327,49 @@ test('助手体验：完成任务后推荐真实的下一项', () => {
     { label: '开始下一项', prompt: '开始 下一项紧急工作' },
     { label: '重新安排', prompt: '怎么安排今天的优先级' }
   ]);
+});
+
+test('助手体验：「接下来呢」给出单一焦点、理由和有限顺序', () => {
+  store.clearAllTasks();
+  resetMemos();
+  const focus = store.createTask({ title: '客户回访', status: 'doing', pri: 2, tags: ['客户'] });
+  store.createTask({ title: '补交报销', pri: 4, due: '2020-01-01 09:00' });
+  store.createTask({ title: '整理周报', pri: 3 });
+  store.createTask({ title: '购买耗材', pri: 1 });
+  store.createMemo({ title: '客户回访要点', content: '先确认预算', tags: ['客户'], pinned: true });
+
+  const result = ai.handle('接下来呢');
+  assert.strictEqual(result.intent, 'suggest');
+  assert.strictEqual(result.task.id, focus.id);
+  assert.match(result.message, /建议先处理「客户回访」/);
+  assert.match(result.message, /已经在进行/);
+  assert.match(result.message, /置顶备忘录「客户回访要点」/);
+  assert.doesNotMatch(result.message, /^4\./m, '建议列表最多展示三项');
+  assert.deepStrictEqual(result.followUps[0], { label: '继续第一项', prompt: '开始 客户回访' });
+});
+
+test('助手体验：问候会反映当前工作状态而不是展示命令说明', () => {
+  store.clearAllTasks();
+  store.createTask({ title: '整理发布说明', status: 'doing' });
+  store.createTask({ title: '处理旧工单', due: '2020-01-01 09:00' });
+  const result = ai.handle('你好');
+  assert.match(result.message, /1 项进行中/);
+  assert.match(result.message, /1 项已逾期/);
+  assert.match(result.message, /整理发布说明/);
+  assert.doesNotMatch(result.message, /比如|API Key/);
+  assert.strictEqual(result.followUps[0].label, '继续处理');
+});
+
+test('助手体验：标题有小错时给出候选并沿用原操作', () => {
+  store.clearAllTasks();
+  const task = store.createTask({ title: '提交季度方案' });
+  const ask = ai.handle('完成 提交季度方按');
+  assert.strictEqual(ask.type, 'ask');
+  assert.strictEqual(ask.candidates[0].id, task.id);
+  assert.match(ask.message, /没有精确找到/);
+  const completed = ai.handle('第一个');
+  assert.strictEqual(completed.type, 'complete');
+  assert.strictEqual(completed.task.id, task.id);
 });
 
 test('助手体验：今日新任务和清空待办给出不同下一步', () => {
@@ -1207,4 +1512,329 @@ test('恢复：从回收站恢复', () => {
   const r = ai.handle('恢复 待恢复任务');
   assert.strictEqual(r.intent, 'restore');
   assert.ok(store.getAllTasks().some((x) => x.title === '待恢复任务'), '任务应恢复');
+});
+
+/* ============ 备忘录 ============ */
+function resetMemos() {
+  store.getAllMemos().forEach((memo) => store.deleteMemo(memo.id));
+  store.emptyMemoTrash();
+}
+
+test('备忘录：创建、编辑和置顶排序', () => {
+  resetMemos();
+  const first = store.createMemo({ title: '会议记录', content: '确认下周目标', tags: ['工作'] });
+  const second = store.createMemo({ title: '灵感', content: '做一个更轻量的入口' });
+  const updated = store.updateMemo(first.id, { content: '确认下周目标和负责人', pinned: true });
+  assert.strictEqual(updated.content, '确认下周目标和负责人');
+  assert.strictEqual(store.getAllMemos()[0].id, first.id, '置顶备忘录应排在最前');
+  assert.ok(store.getAllMemos().some((memo) => memo.id === second.id));
+});
+
+test('备忘录：删除后可从回收站恢复', () => {
+  resetMemos();
+  const memo = store.createMemo({ title: '待恢复备忘录', content: '不能丢' });
+  store.deleteMemo(memo.id);
+  assert.strictEqual(store.getAllMemos().length, 0);
+  assert.strictEqual(store.getDeletedMemos()[0].id, memo.id);
+  const restored = store.restoreMemo(memo.id);
+  assert.strictEqual(restored.title, '待恢复备忘录');
+  assert.strictEqual(store.getDeletedMemos().length, 0);
+});
+
+test('备忘录：JSON 导出与备份恢复包含备忘录', () => {
+  resetMemos();
+  const memo = store.createMemo({ title: '备份校验', content: '跟随完整备份' });
+  const exported = JSON.parse(store.exportJSON());
+  assert.ok(Array.isArray(exported.tasks));
+  assert.ok(exported.memos.some((item) => item.id === memo.id));
+
+  const file = store.backup();
+  store.deleteMemo(memo.id);
+  store.emptyMemoTrash();
+  assert.strictEqual(store.getAllMemos().length, 0);
+  const result = store.restoreFromBackup(file);
+  assert.ok(result.memoCount >= 1);
+  assert.ok(store.getAllMemos().some((item) => item.title === '备份校验'));
+});
+
+test('助手：明确的备忘请求不会创建任务', () => {
+  reset();
+  resetMemos();
+  const before = store.getAllTasks().length;
+  const result = ai.handle('记到备忘录：客户更喜欢 A 方案，周五再确认');
+  assert.strictEqual(result.intent, 'memo_create');
+  assert.strictEqual(result.type, 'memo_create');
+  assert.strictEqual(store.getAllTasks().length, before);
+  assert.strictEqual(store.getAllMemos().length, 1);
+  assert.match(store.getAllMemos()[0].content, /客户更喜欢 A 方案/);
+});
+
+test('Agent 备忘录上下文：查看后可用指代置顶并转为任务', () => {
+  reset();
+  resetMemos();
+  const memo = store.createMemo({ title: '客户回访要点', content: '确认预算和上线时间', tags: ['客户'] });
+
+  const viewed = ai.handle('查看备忘录 客户回访');
+  assert.strictEqual(viewed.type, 'memo_query');
+  assert.strictEqual(viewed.memo.id, memo.id);
+
+  const pinned = ai.handle('置顶这条备忘录');
+  assert.strictEqual(pinned.type, 'memo_pin');
+  assert.strictEqual(pinned.memo.id, memo.id);
+  assert.strictEqual(store.getMemo(memo.id).pinned, true);
+
+  const converted = ai.handle('把这条备忘录转为任务');
+  assert.strictEqual(converted.type, 'memo_to_task');
+  assert.strictEqual(converted.task.title, memo.title);
+  assert.strictEqual(converted.task.desc, memo.content);
+});
+
+test('Agent 备忘录上下文：记住最近列表并正确拆分“构筑那个”', () => {
+  reset();
+  resetMemos();
+  store.createMemo({ title: '玩家闲置动作备忘', content: '补充等待动作' });
+  const buildMemo = store.createMemo({
+    title: '游戏构筑与地图优化备忘',
+    content: '梳理构筑流派\n调整地图奖励节奏\n验证新路线的完成率',
+    tags: ['游戏']
+  });
+  store.createMemo({ title: '新手教程与操作反馈问题', content: '整理新手反馈' });
+
+  const list = ai.handle('看一下我的备忘录');
+  assert.strictEqual(list.type, 'memo_query');
+  assert.strictEqual(store.getAgentState().lastCollection.type, 'memo');
+  assert.strictEqual(store.getAgentState().lastCollection.ids.length, 3);
+
+  const ask = ai.handle('你觉得可以拆分吗');
+  assert.strictEqual(ask.intent, 'memo_split');
+  assert.strictEqual(ask.type, 'ask');
+  assert.ok(ask.candidates.every((candidate) => candidate.entityType === 'memo'));
+
+  const preview = ai.handle('就拆构筑那个吧');
+  assert.strictEqual(preview.intent, 'memo_split');
+  assert.strictEqual(preview.type, 'confirm');
+  assert.match(preview.message, /游戏构筑与地图优化备忘/);
+  assert.match(preview.message, /梳理构筑流派/);
+  assert.strictEqual(store.getAllTasks().some((task) => task.desc.includes(buildMemo.title)), false);
+
+  const created = ai.handle('确认执行');
+  assert.strictEqual(created.type, 'memo_split');
+  assert.strictEqual(created.tasks.length, 3);
+  assert.ok(created.tasks.every((task) => task.desc.includes(buildMemo.title)));
+  assert.ok(store.getMemo(buildMemo.id), '拆分后应保留原备忘录');
+});
+
+test('Agent 备忘录拆分：直接说标题关键词也不会误搜任务', () => {
+  reset();
+  resetMemos();
+  const memo = store.createMemo({ title: '游戏构筑与地图优化备忘', content: '构筑平衡\n地图节奏' });
+  ai.handle('查看我的备忘录');
+
+  const result = ai.handle('就拆构筑那个吧');
+  assert.strictEqual(result.intent, 'memo_split');
+  assert.strictEqual(result.type, 'confirm');
+  assert.strictEqual(store.getAgentState().pending.params.memoId, memo.id);
+});
+
+test('Agent 备忘录上下文：过期列表不会把任务拆分误判成备忘录', () => {
+  reset();
+  resetMemos();
+  const memo = store.createMemo({ title: '旧备忘录', content: '已经过期的上下文' });
+  store.updateAgentState({
+    lastEntity: { type: 'memo', id: memo.id, title: memo.title, ts: Date.now() - 31 * 60 * 1000 },
+    lastCollection: { type: 'memo', ids: [memo.id], ts: Date.now() - 31 * 60 * 1000 }
+  });
+
+  const result = ai.handle('把 写季度方案 拆成三步');
+  assert.strictEqual(result.intent, 'split');
+  assert.strictEqual(result.type, 'split');
+});
+
+test('Agent 备忘录上下文：明确任务标题优先于仍有效的备忘录上下文', () => {
+  reset();
+  resetMemos();
+  store.createMemo({ title: '客户记录', content: '稍后处理' });
+  ai.handle('查看备忘录 客户记录');
+
+  const result = ai.handle('把 写季度方案 拆成三步');
+  assert.strictEqual(result.intent, 'split');
+  assert.strictEqual(result.type, 'split');
+  assert.strictEqual(result.task.title, '写季度方案');
+});
+
+test('Agent 备忘录上下文：列出多条后不沿用之前的单条指代', () => {
+  reset();
+  resetMemos();
+  const first = store.createMemo({ title: '客户记录 A', content: 'A' });
+  const second = store.createMemo({ title: '客户记录 B', content: 'B' });
+  ai.handle('查看备忘录 客户记录 A');
+  const list = ai.handle('查看我的备忘录');
+  assert.strictEqual(list.memoIds.length, 2);
+  assert.strictEqual(store.getAgentState().lastEntity, null);
+
+  const ask = ai.handle('置顶这条备忘录');
+  assert.strictEqual(ask.type, 'ask');
+  assert.strictEqual(ask.candidates.length, 2);
+  assert.strictEqual(store.getMemo(first.id).pinned, false);
+  assert.strictEqual(store.getMemo(second.id).pinned, false);
+
+  const pinned = ai.handle('第二条');
+  assert.strictEqual(pinned.type, 'memo_pin');
+  assert.strictEqual(pinned.memo.id, ask.candidates[1].id);
+});
+
+test('Agent 备忘录拆分：模型重复步骤会回退到至少两个有效步骤', () => {
+  reset();
+  resetMemos();
+  const memo = store.createMemo({ title: '构筑优化', content: '盘点现有流派\n验证地图奖励节奏' });
+  const preview = ai.resolve('memo_split', { steps: ['重复步骤', '重复步骤'] }, memo.id);
+
+  assert.strictEqual(preview.type, 'confirm');
+  assert.deepStrictEqual(preview.confirmation.params.steps, ['盘点现有流派', '验证地图奖励节奏']);
+});
+
+test('Agent 备忘录消歧：可按序号选择后确认删除', () => {
+  reset();
+  resetMemos();
+  const first = store.createMemo({ title: '产品方案 A', content: '保守版本' });
+  const second = store.createMemo({ title: '产品方案 B', content: '激进版本' });
+
+  const ask = ai.handle('删除产品方案备忘录');
+  assert.strictEqual(ask.type, 'ask');
+  assert.strictEqual(ask.candidates.length, 2);
+  assert.ok(ask.candidates.every((candidate) => candidate.entityType === 'memo'));
+  const chosen = ask.candidates[1];
+
+  const confirm = ai.handle('第二个');
+  assert.strictEqual(confirm.type, 'confirm');
+  assert.match(confirm.message, new RegExp(chosen.title));
+  const deleted = ai.handle('确认执行');
+  assert.strictEqual(deleted.type, 'memo_delete');
+  assert.strictEqual(store.getMemo(chosen.id), null);
+  const remainingId = chosen.id === first.id ? second.id : first.id;
+  assert.ok(store.getMemo(remainingId));
+});
+
+test('Agent 备忘录安全：删除可取消，置顶可撤销', () => {
+  reset();
+  resetMemos();
+  const memo = store.createMemo({ title: '临时决策', content: '稍后复核' });
+
+  const ask = ai.handle('删除备忘录 临时决策');
+  assert.strictEqual(ask.type, 'confirm');
+  assert.strictEqual(ai.handle('取消').type, 'info');
+  assert.ok(store.getMemo(memo.id));
+
+  const pinned = ai.handle('置顶备忘录 临时决策');
+  assert.strictEqual(store.getMemo(memo.id).pinned, true);
+  const undone = ai.undoAction(pinned.undo);
+  assert.strictEqual(undone.ok, true);
+  assert.strictEqual(undone.memo.pinned, false);
+  assert.strictEqual(store.getMemo(memo.id).pinned, false);
+});
+
+test('助手：清空回收站同时清理任务和备忘录', () => {
+  reset();
+  resetMemos();
+  const task = store.createTask({ title: '待清理任务' });
+  const memo = store.createMemo({ title: '待清理备忘录' });
+  store.deleteTask(task.id);
+  store.deleteMemo(memo.id);
+  const ask = ai.handle('清空回收站');
+  assert.strictEqual(ask.type, 'confirm');
+  const result = ai.handle('确认执行');
+  assert.strictEqual(result.type, 'batch');
+  assert.strictEqual(store.getDeletedTasks().length, 0);
+  assert.strictEqual(store.getDeletedMemos().length, 0);
+});
+
+test('Agent 多轮：缺少目标时追问，下一轮只回答标题即可继续', () => {
+  reset();
+  const ask = ai.handle('完成');
+  assert.strictEqual(ask.type, 'clarify');
+  assert.match(ask.message, /哪一项/);
+  const result = ai.handle('写季度方案');
+  assert.strictEqual(result.type, 'complete');
+  assert.strictEqual(result.task.title, '写季度方案');
+});
+
+test('Agent 多轮：修改追问支持只回答“紧急”或“明天”', () => {
+  reset();
+  const priorityAsk = ai.handle('把 写季度方案 改成');
+  assert.strictEqual(priorityAsk.type, 'clarify');
+  const priorityResult = ai.handle('紧急');
+  assert.strictEqual(priorityResult.type, 'update');
+  assert.strictEqual(priorityResult.task.pri, 4);
+
+  const dueAsk = ai.handle('把 整理报销单据 改到');
+  assert.strictEqual(dueAsk.type, 'clarify');
+  const dueResult = ai.handle('明天');
+  assert.strictEqual(dueResult.type, 'update');
+  assert.ok(dueResult.task.due && dueResult.task.due.startsWith(dueResult.params.due.slice(0, 10)));
+  assert.ok(!store.getAllTasks().some((task) => task.title === '明天'), '补充截止时间不能误创建任务');
+});
+
+test('Agent 多轮：歧义候选支持直接回答序号', () => {
+  reset();
+  const first = store.createTask({ title: '产品方案 A', pri: 2 });
+  const second = store.createTask({ title: '产品方案 B', pri: 2 });
+  const ask = ai.handle('把 产品方案 改成紧急');
+  assert.strictEqual(ask.type, 'ask');
+  const result = ai.handle('第二个');
+  assert.strictEqual(result.type, 'update');
+  assert.strictEqual(store.getTask(first.id).pri, 2);
+  assert.strictEqual(store.getTask(second.id).pri, 4);
+});
+
+test('Agent 安全：取消删除不会改动任务', () => {
+  reset();
+  const ask = ai.handle('删除 整理报销单据');
+  assert.strictEqual(ask.type, 'confirm');
+  const result = ai.handle('取消');
+  assert.strictEqual(result.type, 'info');
+  assert.ok(store.getAllTasks().some((task) => task.title === '整理报销单据'));
+  assert.strictEqual(store.getAgentState().pending, null);
+});
+
+test('Agent 恢复：重启后仍可继续待确认操作', () => {
+  reset();
+  const task = store.createTask({ title: '重启后删除' });
+  const ask = ai.handle('删除 重启后删除');
+  assert.strictEqual(ask.type, 'confirm');
+  store.init();
+  const result = ai.handle('确认执行');
+  assert.strictEqual(result.type, 'delete');
+  assert.strictEqual(store.getTask(task.id), null);
+});
+
+test('Agent 多轮：新命令会打断旧追问', () => {
+  reset();
+  const ask = ai.handle('创建任务');
+  assert.strictEqual(ask.type, 'clarify');
+  const result = ai.handle('今天我要做什么');
+  assert.strictEqual(result.intent, 'query');
+  assert.strictEqual(result.type, 'query');
+  assert.ok(!store.getAllTasks().some((task) => task.title === '今天我要做什么'));
+});
+
+test('Agent 上下文：最近任务通过稳定 ID 跨重新初始化保留', () => {
+  reset();
+  const started = ai.handle('开始 写季度方案');
+  const id = started.task.id;
+  store.updateTask(id, { title: '季度方案最终稿' });
+  store.init();
+  const result = ai.handle('完成它');
+  assert.strictEqual(result.type, 'complete');
+  assert.strictEqual(result.task.id, id);
+  assert.strictEqual(result.task.title, '季度方案最终稿');
+});
+
+test('Agent 上下文：清空对话同时清除待处理状态和最近指代', () => {
+  reset();
+  ai.handle('开始 写季度方案');
+  ai.handle('删除 整理报销单据');
+  store.clearChat();
+  assert.deepStrictEqual(store.getAgentState(), { lastEntity: null, lastCollection: null, pending: null });
+  const result = ai.handle('完成它');
+  assert.strictEqual(result.type, 'clarify');
 });

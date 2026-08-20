@@ -19,6 +19,20 @@ let idleTimer = null;
 let currentMood = 'normal'; // normal | happy | surprised | sad
 let wasDragging = false; // 标记最近一次是否发生了拖拽（用于区分点击）
 let statusSnapshot = { todo: 0, overdue: 0, next: null };
+let themePreference = 'auto';
+const systemTheme = typeof window.matchMedia === 'function'
+  ? window.matchMedia('(prefers-color-scheme: dark)')
+  : { matches: false, addEventListener() {} };
+
+function applyTheme(theme) {
+  themePreference = ['light', 'dark', 'auto'].includes(theme) ? theme : 'auto';
+  const dark = themePreference === 'dark' || (themePreference === 'auto' && systemTheme.matches);
+  document.body.classList.toggle('dark', dark);
+}
+
+systemTheme.addEventListener('change', () => {
+  if (themePreference === 'auto') applyTheme('auto');
+});
 
 /* ---------- 精灵图动作表（Petdex deepseek酱，192x208/帧，8x9 网格） ---------- */
 const SPRITE_STATES = {
@@ -99,7 +113,7 @@ function remind(data) {
   void petEl.offsetWidth; // 重启动画
   petEl.classList.add('alert');
   setMood('surprised');
-  showBubble(`⏰ ${data.title}${data.due ? ' · ' + data.due : ''}`, true, 6000);
+  showBubble(`提醒 · ${data.title}${data.due ? ' · ' + data.due : ''}`, true, 6000);
   // 3 秒后恢复
   setTimeout(() => setMood('normal'), 3000);
 }
@@ -280,10 +294,17 @@ async function refreshStatus(announce) {
 /* ---------- 主进程事件 ---------- */
 if (window.api && typeof window.api.on === 'function') {
   window.api.on('pet:remind', remind);
+  window.api.on('pet:theme', applyTheme);
 }
 
 /* ---------- 初始化 ---------- */
 (async function init() {
+  try {
+    const petSettings = await window.api.settings.get();
+    applyTheme(petSettings && petSettings.theme);
+  } catch (e) {
+    applyTheme('auto');
+  }
   playSprite('idle');
   startIdle();
   await refreshStatus(true);

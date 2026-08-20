@@ -260,12 +260,25 @@ function registerIpc() {
   ipcMain.handle('tasks:getDeleted', () => store.getDeletedTasks());
   ipcMain.handle('tasks:emptyTrash', () => store.emptyTrash());
 
+  // 备忘录
+  ipcMain.handle('memos:getAll', () => store.getAllMemos());
+  ipcMain.handle('memos:create', (e, data) => store.createMemo(data));
+  ipcMain.handle('memos:update', (e, id, patch) => store.updateMemo(id, patch));
+  ipcMain.handle('memos:delete', (e, id) => store.deleteMemo(id));
+  ipcMain.handle('memos:getDeleted', () => store.getDeletedMemos());
+  ipcMain.handle('memos:restore', (e, id) => store.restoreMemo(id));
+  ipcMain.handle('memos:emptyTrash', () => store.emptyMemoTrash());
+  ipcMain.handle('memos:import', (e, list) => store.importMemos(list));
+
   // 设置
   ipcMain.handle('settings:get', () => store.getSettings());
   ipcMain.handle('settings:update', (e, patch) => {
     const s = store.updateSettings(patch);
     if (patch.shortcuts) registerShortcuts();
     if (patch.autoStart !== undefined) applyAutoStart();
+    if (patch.theme !== undefined && petWindow && !petWindow.isDestroyed()) {
+      petWindow.webContents.send('pet:theme', s.theme);
+    }
     if (patch.petEnabled !== undefined && petWindow) {
       if (patch.petEnabled) petWindow.show();
       else petWindow.hide();

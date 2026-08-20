@@ -6,32 +6,36 @@
   <title>工作台助手</title>
   <link rel="stylesheet" href="css/app.css">
 </head>
-<body>
+<body aria-busy="true">
   <!-- 自定义标题栏 -->
   <header class="titlebar">
     <div class="tb-left">
-      <span class="tb-logo">◐</span>
+      <span class="tb-logo" aria-hidden="true">◐</span>
       <span class="tb-title" id="tb-title">工作台助手</span>
-      <span class="tb-badge" id="tb-ai-stage">本地助手</span>
+      <span class="tb-badge stage-local" id="tb-ai-stage">本地助手</span>
     </div>
     <div class="tb-right">
-      <button class="tb-btn" id="tb-min" title="最小化">─</button>
-      <button class="tb-btn" id="tb-max" title="最大化">□</button>
-      <button class="tb-btn tb-close" id="tb-quit" title="关闭到托盘">✕</button>
+      <button type="button" class="tb-btn" id="tb-min" title="最小化" aria-label="最小化窗口">─</button>
+      <button type="button" class="tb-btn" id="tb-max" title="最大化" aria-label="最大化窗口">□</button>
+      <button type="button" class="tb-btn tb-close" id="tb-quit" title="关闭到托盘" aria-label="关闭到托盘">✕</button>
     </div>
   </header>
 
   <div class="layout">
     <!-- 侧边导航 -->
     <nav class="sidebar" aria-label="主导航">
-      <button type="button" class="nav-item active" data-view="today" aria-current="page"><span class="nav-ico">◐</span>今天<span class="nav-badge" style="display:none"></span></button>
-      <button type="button" class="nav-item" data-view="tasks"><span class="nav-ico">☰</span>所有任务<span class="nav-badge" style="display:none"></span></button>
-      <button type="button" class="nav-item" data-view="board"><span class="nav-ico">▤</span>看板</button>
-      <button type="button" class="nav-item" data-view="cal"><span class="nav-ico">▦</span>日历</button>
-      <button type="button" class="nav-item" data-view="stat"><span class="nav-ico">◫</span>统计</button>
-      <button type="button" class="nav-item" data-view="trash"><span class="nav-ico">⌫</span>回收站<span class="nav-badge" style="display:none"></span></button>
+      <button type="button" class="sidebar-create" id="sidebar-new"><span aria-hidden="true">＋</span><span class="nav-label">新建任务</span></button>
+      <div class="nav-section-label">工作</div>
+      <button type="button" class="nav-item active" data-view="today" title="今天" aria-current="page"><span class="nav-ico">◐</span><span class="nav-label">今天</span><span class="nav-badge hidden"></span></button>
+      <button type="button" class="nav-item" data-view="tasks" title="所有任务"><span class="nav-ico">☰</span><span class="nav-label">所有任务</span><span class="nav-badge hidden"></span></button>
+      <button type="button" class="nav-item" data-view="memos" title="备忘录"><span class="nav-ico">✎</span><span class="nav-label">备忘录</span><span class="nav-badge hidden"></span></button>
+      <div class="nav-section-label">视图</div>
+      <button type="button" class="nav-item" data-view="board" title="看板"><span class="nav-ico">▤</span><span class="nav-label">看板</span></button>
+      <button type="button" class="nav-item" data-view="cal" title="日历"><span class="nav-ico">▦</span><span class="nav-label">日历</span></button>
+      <button type="button" class="nav-item" data-view="stat" title="统计"><span class="nav-ico">◫</span><span class="nav-label">统计</span></button>
+      <button type="button" class="nav-item" data-view="trash" title="回收站"><span class="nav-ico">⌫</span><span class="nav-label">回收站</span><span class="nav-badge hidden"></span></button>
       <div class="nav-spacer"></div>
-      <button type="button" class="nav-item" data-view="settings"><span class="nav-ico">⚙</span>设置</button>
+      <button type="button" class="nav-item" data-view="settings" title="设置"><span class="nav-ico">⚙</span><span class="nav-label">设置</span></button>
     </nav>
 
     <!-- 主内容区 -->
@@ -42,7 +46,12 @@
           <h2>今天 <span class="today-date" id="today-date"></span></h2>
           <span class="view-sub" id="today-sub"></span>
         </div>
-        <div class="view-body" id="today-list"></div>
+        <div class="view-body" id="today-list">
+          <div class="load-state" role="status" aria-live="polite">
+            <span class="load-indicator" aria-hidden="true"></span>
+            <div><strong>正在读取今日任务</strong><span>稍候即可开始工作</span></div>
+          </div>
+        </div>
       </section>
 
       <!-- 所有任务 -->
@@ -84,6 +93,50 @@
         <div class="view-body" id="tasks-list"></div>
       </section>
 
+      <!-- 备忘录 -->
+      <section class="view memo-view" id="view-memos" style="display:none">
+        <div class="view-head">
+          <h2>备忘录</h2>
+          <span class="view-sub" id="memos-sub"></span>
+        </div>
+        <div class="memo-workspace">
+          <div class="memo-sidebar">
+            <div class="memo-search-row">
+              <input id="memo-search" type="search" aria-label="搜索备忘录" placeholder="搜索标题、正文或标签">
+              <button type="button" class="icon-btn memo-new" id="memo-new" title="新建备忘录" aria-label="新建备忘录">＋</button>
+            </div>
+            <div class="memo-list" id="memo-list" role="listbox" aria-label="备忘录列表"></div>
+          </div>
+          <div class="memo-pane">
+            <div class="memo-load-error hidden" id="memo-load-error"></div>
+            <div class="memo-empty" id="memo-empty">
+              <span class="memo-empty-mark">✎</span>
+              <strong>还没有备忘录</strong>
+              <button type="button" class="btn mini" id="memo-empty-new">新建一条</button>
+            </div>
+            <div class="memo-editor hidden" id="memo-editor">
+              <div class="memo-editor-head">
+                <input id="memo-title" class="memo-title" maxlength="100" aria-label="备忘录标题" placeholder="无标题备忘录">
+                <div class="memo-actions" role="group" aria-label="备忘录操作">
+                  <div class="memo-action-group">
+                    <button type="button" class="memo-tool" id="memo-pin" data-tooltip="置顶" aria-label="置顶备忘录" aria-pressed="false"><span aria-hidden="true">⌁</span></button>
+                    <button type="button" class="memo-tool" id="memo-copy" data-tooltip="复制" aria-label="复制备忘录"><span aria-hidden="true">⧉</span></button>
+                  </div>
+                  <button type="button" class="memo-task-action" id="memo-to-task"><span aria-hidden="true">↗</span><span>转为任务</span></button>
+                  <button type="button" class="memo-tool memo-delete-tool" id="memo-delete" data-tooltip="删除" aria-label="删除备忘录"><span aria-hidden="true">⌫</span></button>
+                </div>
+              </div>
+              <input id="memo-tags" class="memo-tags" maxlength="120" aria-label="备忘录标签" placeholder="添加标签，用空格或逗号分隔">
+              <textarea id="memo-content" class="memo-content" aria-label="备忘录正文" placeholder="写下需要记住的内容…"></textarea>
+              <div class="memo-editor-foot">
+                <span id="memo-save-state" role="status" aria-live="polite">已保存</span>
+                <span id="memo-updated"></span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
       <!-- 看板 -->
       <section class="view" id="view-board" style="display:none">
         <div class="view-head">
@@ -115,10 +168,10 @@
       <section class="view" id="view-trash" style="display:none">
         <div class="view-head">
           <h2>回收站</h2>
-          <span class="view-sub">已删除的任务可在此恢复</span>
+          <span class="view-sub">已删除的任务和备忘录可在此恢复</span>
         </div>
-        <div class="toolbar" style="display:flex;gap:8px;justify-content:flex-end">
-          <button class="btn mini danger hidden" id="trash-empty">清空回收站</button>
+        <div class="toolbar view-actions">
+          <button type="button" class="btn mini danger hidden" id="trash-empty">清空回收站</button>
         </div>
         <div class="view-body" id="trash-list"></div>
       </section>
@@ -139,9 +192,9 @@
         <span class="ai-avatar">助</span>
         <div>
           <div class="ai-name">工作台助手</div>
-          <div class="ai-stage">本地规则引擎</div>
+          <div class="ai-stage stage-local">本地规则引擎</div>
         </div>
-        <button class="ai-collapse" id="ai-collapse" title="收起">»</button>
+        <button type="button" class="ai-collapse" id="ai-collapse" title="收起助手" aria-label="收起助手" aria-expanded="true">»</button>
       </div>
       <div class="ai-chips" id="ai-chips">
         <button type="button" class="chip" data-prompt="明天下午3点 交周报 #工作 紧急">创建任务</button>
@@ -149,7 +202,12 @@
         <button type="button" class="chip" data-prompt="把 写季度方案 拆成三步">拆分任务</button>
         <button type="button" class="chip" data-prompt="怎么安排今天的优先级">安排建议</button>
       </div>
-      <div class="ai-chat" id="ai-chat" role="log" aria-live="polite" aria-relevant="additions" aria-busy="false"></div>
+      <div class="ai-chat" id="ai-chat" role="log" aria-live="polite" aria-relevant="additions" aria-busy="true">
+        <div class="load-state compact" role="status">
+          <span class="load-indicator" aria-hidden="true"></span>
+          <div><strong>正在同步工作状态</strong></div>
+        </div>
+      </div>
       <form class="ai-input-row" id="ai-form">
         <textarea id="ai-input" rows="1" maxlength="1000" aria-label="给工作台助手发消息，Enter 发送，Shift+Enter 换行" placeholder="描述任务，或继续补充…"></textarea>
         <button type="submit" class="btn" id="ai-send">发送</button>
@@ -160,7 +218,10 @@
   <!-- 任务编辑弹窗 -->
   <div class="modal-mask hidden" id="modal-mask" aria-hidden="true">
     <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
-      <h5 id="modal-title">新建任务</h5>
+      <div class="modal-head">
+        <h5 id="modal-title">新建任务</h5>
+        <button type="button" class="modal-close" id="m-close" title="关闭" aria-label="关闭任务编辑">✕</button>
+      </div>
       <form id="task-form" novalidate>
         <label for="m-title">标题 *</label>
         <input id="m-title" maxlength="100" required aria-describedby="m-title-error">

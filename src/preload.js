@@ -29,6 +29,17 @@ contextBridge.exposeInMainWorld('api', {
     getDeleted: () => ipcRenderer.invoke('tasks:getDeleted'),
     emptyTrash: () => ipcRenderer.invoke('tasks:emptyTrash')
   },
+  /* 备忘录 */
+  memos: {
+    getAll: () => ipcRenderer.invoke('memos:getAll'),
+    create: (data) => ipcRenderer.invoke('memos:create', data),
+    update: (id, patch) => ipcRenderer.invoke('memos:update', id, patch),
+    remove: (id) => ipcRenderer.invoke('memos:delete', id),
+    getDeleted: () => ipcRenderer.invoke('memos:getDeleted'),
+    restore: (id) => ipcRenderer.invoke('memos:restore', id),
+    emptyTrash: () => ipcRenderer.invoke('memos:emptyTrash'),
+    import: (list) => ipcRenderer.invoke('memos:import', list)
+  },
   /* 设置 */
   settings: {
     get: () => ipcRenderer.invoke('settings:get'),
@@ -78,7 +89,7 @@ contextBridge.exposeInMainWorld('api', {
   },
   /* 事件订阅 */
   on: (channel, cb) => {
-    const valid = ['app:new-task', 'app:focus-ai', 'app:reminder', 'app:switch-view', 'window:maximized', 'pet:remind'];
+    const valid = ['app:new-task', 'app:focus-ai', 'app:reminder', 'app:switch-view', 'window:maximized', 'pet:remind', 'pet:theme'];
     if (!valid.includes(channel)) return;
     const listener = (_e, data) => cb(data);
     ipcRenderer.on(channel, listener);

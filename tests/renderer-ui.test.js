@@ -49,6 +49,7 @@ function loadRendererRuntime(elements) {
     document: {
       querySelector: (selector) => elements[selector] || null,
       querySelectorAll: () => [],
+      getElementById: (id) => elements['#' + id] || elements[id] || null,
       createElement: (tag) => elements.__createElement ? elements.__createElement(tag) : null,
       addEventListener: () => {}
     },
@@ -106,11 +107,13 @@ function loadPetRuntime(elements, tasks) {
     setInterval: () => 1,
     clearInterval: () => {},
     document: {
+      body: fakePetElement(),
       getElementById: (id) => elements[id],
       addEventListener: (name, listener) => { documentListeners[name] = listener; }
     },
     window: {
       api: {
+        settings: { get: async () => ({ theme: 'auto' }) },
         tasks: { getAll: async () => tasks || [] },
         pet: {
           setPosition: async () => ({ ok: true }),
@@ -144,6 +147,8 @@ test('高频任务操作和设置开关暴露键盘与状态语义', () => {
   assert.match(app, /role="switch" aria-checked=/);
   assert.match(html, /<button type="button" class="chip" data-prompt=/);
   assert.match(app, /<button type="button" class="fchip [^`]+aria-pressed=/);
+  assert.match(app, /<button type="button" class="bc-card"[^>]+aria-label=/);
+  assert.match(app, /<button type="button" class="\$\{cls\}" data-day=[^>]+aria-pressed=/);
 });
 
 test('快速添加同时支持按钮和回车，并防止重复提交', () => {
@@ -151,8 +156,22 @@ test('快速添加同时支持按钮和回车，并防止重复提交', () => {
   assert.match(app, /if \(!raw \|\| button\.disabled\) return/);
   assert.match(app, /#btn-quick-add'\)\.addEventListener\('click', createQuickTask\)/);
   assert.match(app, /if \(e\.key !== 'Enter'\) return;\s*e\.preventDefault\(\);\s*createQuickTask\(\)/);
-  assert.match(app, /toast\(`已创建「\$\{esc\(p\.title\)\}」/);
-  assert.match(app, /toast\(`已创建「\$\{esc\(raw\)\}」`\)/);
+  assert.match(app, /toast\(`已创建「\$\{esc\(createdTitle\)\}」/);
+  assert.match(app, /await refreshTasksAfterMutation\('任务已创建，但列表刷新失败'\)/);
+});
+
+test('任务写入成功与列表刷新失败使用独立反馈', () => {
+  assert.match(app, /async function refreshTasksAfterMutation\(message\)[\s\S]*toast\(`\$\{message\}：\$\{esc\(error\.message\)\}`, 5000, null, 'warn'\)/);
+
+  const quickFlow = app.match(/async function createQuickTask\(\) \{([\s\S]*?)\n  \}\n  \$\('#quick-input'\)/)[1];
+  assert.ok(quickFlow.indexOf('toast(`已创建') < quickFlow.indexOf("await refreshTasksAfterMutation('任务已创建，但列表刷新失败')"));
+  assert.match(quickFlow, /catch \(err\) \{\s*toast\('创建失败：'/);
+
+  const modalFlow = app.slice(app.indexOf('async function saveModal(event)'), app.indexOf('async function deleteEditingTask'));
+  assert.ok(modalFlow.indexOf("toast(`${wasEditing ? '已保存' : '已创建'}") < modalFlow.indexOf('await refreshTasksAfterMutation'));
+
+  const memoFlow = app.slice(app.indexOf("$('#memo-to-task').addEventListener"), app.indexOf("$('#memo-delete').addEventListener"));
+  assert.ok(memoFlow.indexOf('toast(`已创建任务') < memoFlow.indexOf('await refreshTasksAfterMutation'));
 });
 
 test('快速添加预览展示解析结果并明确普通任务兜底', () => {
@@ -207,6 +226,28 @@ test('确认框遵循安全的原生键盘行为', () => {
   assert.match(html, /role="alertdialog" aria-modal="true" aria-labelledby="confirm-title" aria-describedby="confirm-text"/);
   assert.match(app, /if \(e\.key === 'Tab'\) trapFocus\(mask, e\)/);
   assert.doesNotMatch(app, /if \(e\.key === 'Enter'\) \{ onOkClick\(\); \}/);
+  assert.match(app, /const onOkClick = async \(\) => \{/);
+  assert.match(app, /title\.textContent = `确认\$\{actionText\}`/);
+  assert.match(app, /okBtn\.setAttribute\('aria-busy', 'true'\)/);
+  assert.match(app, /await onOk\(\);\s*cleanup\(\)/);
+  assert.match(app, /toast\(`操作失败：\$\{esc\(error\.message\)\}`/);
+});
+
+test('通知中的撤销操作可聚焦并防止重复执行', () => {
+  assert.match(app, /el\.setAttribute\('role', type === 'err' \? 'alert' : 'status'\)/);
+  assert.match(app, /el\.setAttribute\('aria-atomic', 'true'\)/);
+  assert.match(app, /const b = document\.createElement\('button'\);\s*b\.type = 'button';\s*b\.className = 't-undo'/);
+  assert.match(app, /if \(b\.disabled\) return;\s*b\.disabled = true;/);
+  assert.match(app, /await a\.run\(\);\s*el\.remove\(\)/);
+  assert.match(css, /\.toast \.t-undo:focus-visible/);
+  assert.match(css, /max-width: calc\(100vw - 32px\)/);
+  assert.match(css, /\.toast > span:not\(\.t-ico\).*overflow-wrap: anywhere/);
+});
+
+test('无独立错误面板的异步操作不会静默失败', () => {
+  assert.match(app, /window\.addEventListener\('unhandledrejection'/);
+  assert.match(app, /event\.preventDefault\(\)/);
+  assert.match(app, /toast\(`操作未完成：\$\{esc\(message\)\}`, 4500, null, 'err'\)/);
 });
 
 test('所有界面完成入口复用重复任务完成语义', () => {
@@ -274,7 +315,7 @@ test('真实模型设置明确数据范围并校验自定义服务地址', () =>
 });
 
 test('助手输入支持多行、提交中状态和失败重试', () => {
-  assert.match(html, /id="ai-chat" role="log"[^>]+aria-live="polite"[^>]+aria-busy="false"/);
+  assert.match(html, /id="ai-chat" role="log"[^>]+aria-live="polite"[^>]+aria-busy="true"/);
   assert.match(html, /<form class="ai-input-row" id="ai-form">\s*<textarea id="ai-input" rows="1" maxlength="1000"/);
   assert.match(app, /#ai-form'\)\.addEventListener\('submit'/);
   assert.match(app, /e\.key !== 'Enter' \|\| e\.shiftKey \|\| e\.isComposing/);
@@ -283,7 +324,10 @@ test('助手输入支持多行、提交中状态和失败重试', () => {
   assert.match(app, /function retryAction\(retry\)/);
   assert.match(app, /actions\.remove\(\);\s*retry\(\)/);
   assert.match(app, /操作已完成，但任务列表刷新失败/);
+  assert.match(app, /result\.degradeNotice \|\| '模型服务短暂异常，本轮已由本地助手继续处理'/);
+  assert.match(app, /memo_split: '已拆成任务'/);
   assert.match(css, /\.ai-input-row textarea \{/);
+  assert.match(app, /#ai-chat'\)\.setAttribute\('aria-busy', 'false'\)/);
 
   const attrs = {};
   const send = { disabled: false, textContent: '' };
@@ -297,6 +341,15 @@ test('助手输入支持多行、提交中状态和失败重试', () => {
   assert.strictEqual(send.textContent, '处理中');
   run('setAiBusy(false)');
   assert.strictEqual(send.textContent, '发送');
+});
+
+test('助手面板宽度在窄窗口受限并支持键盘调节', () => {
+  assert.match(app, /handle\.setAttribute\('role', 'separator'\)/);
+  assert.match(app, /handle\.setAttribute\('aria-label', '调整助手面板宽度'\)/);
+  assert.match(app, /window\.innerWidth - 540/);
+  assert.match(app, /e\.key === 'ArrowLeft' \? 16 : -16/);
+  assert.match(app, /window\.addEventListener\('resize'/);
+  assert.match(css, /\.ai-resize:focus-visible/);
 });
 
 test('助手刷新失败不重新执行命令，重试操作触发后立即消费', async () => {
@@ -379,6 +432,22 @@ test('助手歧义选择走结构化解析，并提供上下文下一步', () =>
     run(`candidateLabel({ title: '季度方案', project: 'Q3', due: '2026-08-20 18:00', status: 'doing' })`),
     '季度方案 · ◈ Q3 · 2026-08-20 18:00 · 进行中'
   );
+  assert.strictEqual(
+    run(`candidateLabel({ title: '客户记录', entityType: 'memo', pinned: true, preview: '等待确认预算' })`),
+    '客户记录 · 置顶 · 等待确认预算'
+  );
+  assert.match(app, /memo_delete: '已删除备忘录'/);
+  assert.match(app, /memo_to_task: '已转为任务'/);
+  assert.match(app, /Promise\.all\(\[refreshTasks\(\), refreshMemos\(\)\]\)/);
+  assert.match(app, /String\(result\.type\)\.startsWith\('memo_'\)/);
+});
+
+test('助手确认与澄清状态提供明确的继续操作', () => {
+  assert.match(app, /result\.type === 'confirm'/);
+  assert.match(app, /label: '确认执行', run: \(\) => sendPrompt\('确认执行'\)/);
+  assert.match(app, /label: '取消', run: \(\) => sendPrompt\('取消'\)/);
+  assert.match(app, /result\.type === 'clarify'/);
+  assert.match(app, /继续补充刚才缺少的信息/);
 });
 
 test('对话消息支持选择、按钮复制和原生右键复制', async () => {
@@ -455,6 +524,15 @@ test('主题和 AI 引擎分段控件暴露并同步选中状态', () => {
   assert.ok((app.match(/role="radio" aria-checked=/g) || []).length >= 5);
   assert.ok((app.match(/setAttribute\('aria-checked', 'false'\)/g) || []).length >= 2);
   assert.ok((app.match(/setAttribute\('aria-checked', 'true'\)/g) || []).length >= 2);
+  assert.match(html, /id="ai-collapse"[^>]+aria-expanded="true"/);
+  assert.match(app, /control\.setAttribute\('aria-expanded', String\(!collapsed\)\)/);
+  assert.match(app, /systemTheme\.addEventListener\('change'/);
+});
+
+test('无历史对话时助手直接汇报工作状态', () => {
+  assert.match(app, /const overdue = active\.filter/);
+  assert.match(app, /当前有 \$\{overdue\.length\} 项逾期任务/);
+  assert.doesNotMatch(app, /想记点什么？直接说就行，例如/);
 });
 
 test('界面样式包含窄容器和低动态偏好支持', () => {
@@ -462,6 +540,76 @@ test('界面样式包含窄容器和低动态偏好支持', () => {
   assert.match(css, /@media \(prefers-reduced-motion: reduce\)/);
   assert.match(css, /\.task-row:focus-within \.row-actions/);
   assert.doesNotMatch(css, /(?:linear|radial)-gradient\(/);
+  assert.match(css, /\.board-cols \{[^}]*overflow-x: auto;/);
+  assert.match(css, /\.trash-row \{ align-items: flex-start; flex-wrap: wrap; \}/);
+});
+
+test('窗口控件和任务弹窗提供明确语义与小窗布局', () => {
+  assert.match(html, /id="tb-min"[^>]+aria-label="最小化窗口"/);
+  assert.match(html, /id="tb-max"[^>]+aria-label="最大化窗口"/);
+  assert.match(html, /id="m-close"[^>]+aria-label="关闭任务编辑"/);
+  assert.match(app, /#m-close'\)\.addEventListener\('click', closeModal\)/);
+  assert.match(app, /setAttribute\('aria-label', maximized \? '还原窗口' : '最大化窗口'\)/);
+  assert.match(css, /@media \(max-width: 560px\)[\s\S]*?\.m-row \{ flex-direction: column; gap: 0; \}/);
+  assert.match(css, /\.modal > h5 \{ margin-bottom: 14px; \}/);
+  assert.match(css, /\.task-detail \{[\s\S]*?background: transparent;[\s\S]*?border-left: 2px solid/);
+});
+
+test('界面颜色与间距由统一设计令牌驱动', () => {
+  assert.match(css, /--accent-hover: #AC4938/);
+  assert.match(css, /--muted-rgb: 102, 113, 127/);
+  assert.match(css, /--control-md: 36px/);
+  assert.doesNotMatch(css, /rgba\((?:196, 69, 59|199, 138, 43|62, 142, 90|122, 111, 96|240, 140, 80)/);
+  assert.doesNotMatch(css, /#E8743B/i);
+  assert.doesNotMatch(app, /badge\.style\.(?:background|color|borderColor)/);
+  assert.match(app, /const stateClass = stage === 'llm'/);
+});
+
+test('启动和异步数据读取提供加载、降级与重试状态', () => {
+  assert.match(html, /<body aria-busy="true">/);
+  assert.match(html, /id="today-list">[\s\S]*?class="load-state" role="status"/);
+  assert.match(html, /id="memo-load-error"/);
+  assert.match(app, /Promise\.allSettled\(\[/);
+  assert.match(app, /dataLoadErrors\.tasks = tasksResult\.status === 'rejected'/);
+  assert.match(app, /dataLoadErrors\.memos = memosResult\.status === 'rejected'/);
+  assert.match(app, /function loadErrorHtml\(source, compact\)/);
+  assert.match(app, /function applyDataLoadStates\(\)/);
+  assert.match(app, /retryDataSource\(retry\.dataset\.retrySource, retry\)/);
+  assert.match(app, /if \(view === 'trash'\) loadTrash\(\);\s*applyDataLoadStates\(\)/);
+  assert.match(app, /list\.innerHTML = loadErrorHtml\('trash'\)/);
+  assert.match(css, /\.load-state\.error \{/);
+  assert.match(css, /@keyframes loadSpin/);
+});
+
+test('设置操作失败时恢复原状态并结束忙碌反馈', () => {
+  assert.match(app, /设置保存失败，已恢复原状态/);
+  assert.match(app, /sw\.classList\.toggle\('on', previous\)/);
+  assert.match(app, /AI 引擎切换失败，已恢复原设置/);
+  assert.match(app, /主题保存失败，已恢复原设置/);
+  assert.match(app, /测试失败，请检查配置或网络/);
+  assert.match(app, /box\.setAttribute\('aria-busy', 'true'\)/);
+  assert.match(app, /box\.setAttribute\('aria-busy', 'false'\)/);
+});
+
+test('数据导入区分解析、部分写入与刷新结果', () => {
+  assert.match(app, /importButton\.setAttribute\('aria-busy', 'true'\)/);
+  assert.match(app, /无法读取导入文件/);
+  assert.match(app, /任务导入失败/);
+  assert.match(app, /已导入 \$\{imported\.length\} 条任务，但/);
+  assert.match(app, /refreshTasksAfterMutation\('任务已导入，但列表刷新失败'\)/);
+  assert.match(app, /refreshMemosAfterMutation\('备忘录已导入，但列表刷新失败'\)/);
+  assert.match(app, /importButton\.setAttribute\('aria-busy', 'false'\)/);
+  assert.doesNotMatch(app, /<button(?![^>]*type=)/);
+});
+
+test('备份恢复等待自动保存并独立处理界面重载', () => {
+  assert.match(app, /async function reloadRestoredWorkspace\(result, label\)/);
+  assert.match(app, /if \(memoSaveTimer\) clearTimeout\(memoSaveTimer\)/);
+  assert.match(app, /const \[taskResult, memoResult, taskTrashResult, memoTrashResult\] = await Promise\.allSettled/);
+  assert.match(app, /数据已经恢复，但界面未完整刷新/);
+  assert.match(app, /if \(\(await saveMemoNow\(\)\) === false\) return;\s*const result = await window\.api\.data\.restoreBackup/);
+  assert.match(app, /await reloadRestoredWorkspace\(result, '已恢复到备份点'\)/);
+  assert.match(app, /await reloadRestoredWorkspace\(result, '已从文件恢复'\)/);
 });
 
 test('暗色搜索聚焦保持深色背景，主操作色满足白字对比度', () => {
@@ -471,4 +619,64 @@ test('暗色搜索聚焦保持深色背景，主操作色满足白字对比度',
   const dark = css.match(/body\.dark\s*\{([\s\S]*?)\}/)[1];
   assert.ok(contrastRatio(cssVar(root, 'grad'), '#FFFFFF') >= 4.5);
   assert.ok(contrastRatio(cssVar(dark, 'grad'), '#FFFFFF') >= 4.5);
+});
+
+test('备忘录工作区具备可访问导航、编辑与完整 IPC', () => {
+  assert.match(html, /class="nav-item" data-view="memos"/);
+  assert.match(html, /id="view-memos"/);
+  assert.match(html, /id="memo-list" role="listbox"/);
+  assert.match(html, /id="memo-content"[^>]+aria-label="备忘录正文"/);
+  assert.match(html, /id="memo-pin"[^>]+aria-pressed="false"/);
+  assert.match(main, /ipcMain\.handle\('memos:create'/);
+  assert.match(main, /ipcMain\.handle\('memos:emptyTrash'/);
+  assert.match(preload, /memos:\s*\{/);
+  assert.match(preload, /update: \(id, patch\) => ipcRenderer\.invoke\('memos:update', id, patch\)/);
+});
+
+test('备忘录操作栏使用统一工具按钮并提供即时状态反馈', () => {
+  assert.match(html, /class="memo-actions" role="group" aria-label="备忘录操作"/);
+  assert.match(html, /class="memo-action-group"/);
+  assert.match(html, /id="memo-copy" data-tooltip="复制" aria-label="复制备忘录"/);
+  assert.match(html, /class="memo-tool memo-delete-tool" id="memo-delete" data-tooltip="删除"/);
+  assert.match(html, /class="memo-task-action" id="memo-to-task"/);
+  assert.match(css, /\.memo-tool\[data-tooltip\]::after/);
+  assert.match(css, /\.memo-delete-tool:hover,[\s\S]*color: var\(--danger\)/);
+  assert.match(app, /button\.classList\.add\('copied'\)/);
+  assert.match(app, /label\.textContent = '创建中…'/);
+  assert.match(app, /button\.disabled = true;[\s\S]*window\.api\.memos\.update/);
+});
+
+test('桌宠跟随应用主题并保留自动主题响应', () => {
+  assert.match(main, /patch\.theme !== undefined && petWindow && !petWindow\.isDestroyed\(\)/);
+  assert.match(main, /webContents\.send\('pet:theme', s\.theme\)/);
+  assert.match(preload, /'pet:theme'/);
+  assert.match(petApp, /window\.api\.settings\.get\(\)/);
+  assert.match(petApp, /window\.api\.on\('pet:theme', applyTheme\)/);
+  assert.match(petApp, /themePreference === 'auto' && systemTheme\.matches/);
+  assert.match(petCss, /body\.dark\s*\{/);
+  assert.doesNotMatch(petCss, /@media \(prefers-color-scheme: dark\)/);
+});
+
+test('备忘录支持防串写自动保存、转任务与统一回收站', () => {
+  assert.match(app, /const id = selectedMemoId;[\s\S]*memoSaveChain = memoSaveChain\.then/);
+  assert.match(app, /if \(currentView === 'memos' && view !== 'memos'\) saveMemoNow\(\)/);
+  assert.match(app, /window\.api\.tasks\.create\(\{ title: memo\.title, desc: memo\.content, tags: memo\.tags/);
+  assert.match(app, /await window\.api\.memos\.emptyTrash\(\)/);
+  assert.match(css, /\.memo-list-item\.pinned::before/);
+  assert.match(css, /\.memo-content \{[\s\S]*user-select: text;/);
+});
+
+test('备忘录列表在运行时支持置顶排序展示和标签解析', () => {
+  const list = { innerHTML: '' };
+  const sub = { textContent: '' };
+  const run = loadRendererRuntime({ '#memo-list': list, '#memos-sub': sub });
+  const tags = JSON.parse(run(`JSON.stringify(parseMemoTags('工作， 灵感,产品  复盘'))`));
+  assert.deepStrictEqual(tags, ['工作', '灵感', '产品', '复盘']);
+  run(`memos = [
+    { id: 2, title: '普通记录', content: '稍后处理', tags: [], pinned: false, updatedAt: Date.now() - 1000 },
+    { id: 1, title: '重点记录', content: '优先查看', tags: ['工作'], pinned: true, updatedAt: Date.now() }
+  ]; selectedMemoId = 1; renderMemoList();`);
+  assert.match(sub.textContent, /2 条 · 含置顶/);
+  assert.ok(list.innerHTML.indexOf('重点记录') < list.innerHTML.indexOf('普通记录'));
+  assert.match(list.innerHTML, /memo-list-item active pinned/);
 });
