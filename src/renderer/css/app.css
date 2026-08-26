@@ -1,43 +1,44 @@
 /* ============ 基础 ============ */
-/* 设计方向「安静执行台」：中性工作区承载高密度信息，珊瑚色只标记主操作与 AI。 */
+/* 设计方向「墨案 Ink Desk」：一张安静的文人书桌。宣纸暖灰承载信息，
+   黛青做工作色，朱砂只出现在完成印章与 AI 身份上——稀有才有力。 */
 :root {
   /* 颜色 */
-  --bg: #F3F5F7;
-  --bg2: #FFFFFF;
-  --bg3: #F8F9FA;
-  --ink: #17202B;
-  --ink-rgb: 23, 32, 43;
-  --ink2: #354150;
-  --muted: #66717F;
-  --muted-rgb: 102, 113, 127;
-  --rule: #DCE1E7;
-  --rule2: rgba(193, 82, 62, 0.14);
-  --accent: #C1523E;
-  --accent-hover: #AC4938;
-  --accent-rgb: 193, 82, 62;
-  --accent-weak: rgba(193, 82, 62, 0.09);
-  --accent2: #4C6A92;
-  --accent2-rgb: 76, 106, 146;
-  --ok: #2F7D5B;
-  --ok-rgb: 47, 125, 91;
-  --warn: #B7791F;
-  --warn-rgb: 183, 121, 31;
-  --danger: #C2413A;
-  --danger-rgb: 194, 65, 58;
-  --neutral: #87919D;
-  --solid-accent: #C1523E;
-  --solid-info: #4C6A92;
-  --solid-ok: #2F7D5B;
-  --solid-warn: #8A5A14;
-  --solid-danger: #C2413A;
-  --solid-neutral: #5F6B78;
-  --surface-rgb: 255, 255, 255;
-  --inverse: #202B36;
-  --grad: #C1523E;
-  --toast-ok: #1F4A33;
-  --toast-error: #5A2A26;
-  --toast-warning: #57401E;
-  --toast-action: #F5B06A;
+  --bg: #EFEDE8;
+  --bg2: #F7F6F2;
+  --bg3: #E9E7E1;
+  --ink: #26282B;
+  --ink-rgb: 38, 40, 43;
+  --ink2: #3E4147;
+  --muted: #8A8D93;
+  --muted-rgb: 138, 141, 147;
+  --rule: #DDDAD2;
+  --rule2: rgba(61, 90, 128, 0.16);
+  --accent: #B4533A;
+  --accent-hover: #9E4832;
+  --accent-rgb: 180, 83, 58;
+  --accent-weak: rgba(180, 83, 58, 0.08);
+  --accent2: #3D5A80;
+  --accent2-rgb: 61, 90, 128;
+  --ok: #4A7A5E;
+  --ok-rgb: 74, 122, 94;
+  --warn: #A67C2E;
+  --warn-rgb: 166, 124, 46;
+  --danger: #B4533A;
+  --danger-rgb: 180, 83, 58;
+  --neutral: #8A8D93;
+  --solid-accent: #B4533A;
+  --solid-info: #3D5A80;
+  --solid-ok: #4A7A5E;
+  --solid-warn: #8A6520;
+  --solid-danger: #B4533A;
+  --solid-neutral: #6E7176;
+  --surface-rgb: 247, 246, 242;
+  --inverse: #F7F6F2;
+  --grad: #B4533A;
+  --toast-ok: #2C4636;
+  --toast-error: #54302A;
+  --toast-warning: #4E3D20;
+  --toast-action: #E8B04B;
 
   /* 间距与控件 */
   --space-1: 4px;
@@ -50,21 +51,22 @@
   --control-md: 36px;
   --control-lg: 40px;
 
-  /* 字体 */
+  /* 字体：衬线标题制造文书感，正文系统黑体，数字等宽 */
+  --font-display: Georgia, 'Times New Roman', 'Source Han Serif SC', 'Noto Serif SC', 'SimSun', serif;
   --font-ui: 'Segoe UI Variable Text', 'Segoe UI', 'HarmonyOS Sans SC', 'MiSans', 'PingFang SC', 'Microsoft YaHei UI', 'Microsoft YaHei', sans-serif;
-  --font-num: 'Segoe UI Variable Text', 'Cascadia Code', Consolas, 'JetBrains Mono', monospace;
+  --font-num: 'Cascadia Code', Consolas, 'JetBrains Mono', 'Segoe UI Variable Text', monospace;
   --font-size: 14px;
 
-  /* 圆角 */
-  --radius: 8px;
-  --radius-sm: 8px;
-  --radius-lg: 8px;
+  /* 圆角：卡片 10 / 控件 6，去掉假分层 */
+  --radius: 6px;
+  --radius-sm: 6px;
+  --radius-lg: 10px;
 
-  /* 阴影层级（暖色调阴影） */
-  --shadow-sm: 0 1px 2px rgba(var(--ink-rgb), 0.06);
-  --shadow: 0 4px 14px rgba(var(--ink-rgb), 0.09);
-  --shadow-md: 0 8px 24px rgba(var(--ink-rgb), 0.13);
-  --shadow-lg: 0 18px 48px rgba(var(--ink-rgb), 0.2);
+  /* 阴影：去浮夸投影，靠描边与背景色差分层 */
+  --shadow-sm: 0 1px 2px rgba(var(--ink-rgb), 0.04);
+  --shadow: 0 1px 3px rgba(var(--ink-rgb), 0.06);
+  --shadow-md: 0 2px 8px rgba(var(--ink-rgb), 0.08);
+  --shadow-lg: 0 8px 28px rgba(var(--ink-rgb), 0.14);
 
   /* 界面层级：局部控件 < 粘性工具栏 < 弹出菜单 < 模态框 < 全局反馈 */
   --layer-control: 10;
@@ -174,16 +176,16 @@ html, body {
   align-items: center;
   justify-content: center;
   gap: 8px;
-  border: 1px solid var(--solid-accent);
+  border: 1px solid var(--accent2);
   border-radius: var(--radius);
-  background: var(--solid-accent);
-  color: #fff;
+  background: var(--accent2);
+  color: #F7F6F2;
   font: 650 12.5px/1 var(--font-ui);
   cursor: pointer;
-  box-shadow: 0 2px 7px rgba(var(--accent-rgb), 0.2);
-  transition: background var(--motion-base) var(--ease-standard), box-shadow var(--motion-base) var(--ease-standard), transform var(--motion-base) var(--ease-standard);
+  box-shadow: none;
+  transition: background var(--motion-base) var(--ease-standard), transform var(--motion-base) var(--ease-standard);
 }
-.sidebar-create:hover { background: var(--accent-hover); box-shadow: 0 4px 12px rgba(var(--accent-rgb), 0.25); }
+.sidebar-create:hover { background: #324E70; box-shadow: none; }
 .sidebar-create:active { transform: translateY(1px); }
 .sidebar-create .ui-icon { width: 14px; height: 14px; }
 .nav-section-label {
@@ -201,15 +203,16 @@ html, body {
   transition: color var(--motion-fast) var(--ease-standard), background-color var(--motion-fast) var(--ease-standard);
   position: relative; background: transparent; font-family: inherit; text-align: left;
 }
-.nav-item:hover { background: var(--accent-weak); color: var(--ink); }
+.nav-item:hover { background: rgba(var(--ink-rgb), 0.05); color: var(--ink); }
 .nav-item.active {
-  background: var(--accent-weak);
-  color: var(--accent); font-weight: 600;
+  background: transparent;
+  color: var(--ink); font-weight: 600;
 }
+/* 签名元素：朱砂书签线——全应用唯一用红做导航的地方 */
 .nav-item.active::before {
   content: ''; position: absolute; left: -10px; top: 20%; bottom: 20%;
   width: 3px; border-radius: 0 3px 3px 0;
-  background: var(--grad);
+  background: var(--accent);
 }
 .nav-ico { width: 20px; display: grid; place-items: center; opacity: 0.85; }
 .nav-ico .ui-icon { width: 15px; height: 15px; }
@@ -230,12 +233,13 @@ html, body {
 .view { width: 100%; max-width: 920px; margin: 0 auto; }
 .view-head { display: flex; align-items: baseline; gap: 12px; margin-bottom: 18px; }
 .view-head h2 {
-  font-size: 22px; font-weight: 750; letter-spacing: 0;
+  font-family: var(--font-display);
+  font-size: 23px; font-weight: 600; letter-spacing: 0.01em;
   display: flex; align-items: center; gap: 10px;
 }
+/* 墨案：标题不用色块装饰，靠衬线字体本身立住 */
 .view-head h2::before {
-  content: ''; width: 4px; height: 20px; border-radius: 2px;
-  background: var(--grad);
+  content: none;
 }
 .view-sub { font-size: 12.5px; color: var(--muted); }
 .view-body { min-height: 200px; }
@@ -562,24 +566,25 @@ html, body {
 .task-row.done .tname { text-decoration: line-through; color: var(--muted); }
 .task-check {
   width: 19px; height: 19px; border-radius: 50%;
-  border: 2px solid rgba(var(--accent-rgb), 0.45);
+  border: 2px solid rgba(var(--ink-rgb), 0.28);
   cursor: pointer; flex: 0 0 auto;
   display: flex; align-items: center; justify-content: center;
-  color: #fff;
+  color: #F7F6F2;
   transition: border-color var(--motion-fast) var(--ease-standard),
     background-color var(--motion-fast) var(--ease-standard),
     transform var(--motion-instant) var(--ease-standard);
   background: transparent; font-family: inherit; padding: 0;
 }
 .task-check:hover { border-color: var(--accent); background: rgba(var(--accent-rgb), 0.1); transform: scale(1.06); }
+/* 签名元素：完成即盖朱砂印——全应用唯一的红 */
 .task-row.done .task-check {
-  background: var(--solid-ok); border-color: var(--solid-ok);
-  animation: checkPop var(--motion-slow) var(--ease-enter);
+  background: var(--solid-accent); border-color: var(--solid-accent);
+  animation: sealStamp var(--motion-slow) var(--ease-enter);
 }
-@keyframes checkPop {
-  0% { transform: scale(0.6); }
-  60% { transform: scale(1.2); }
-  100% { transform: scale(1); }
+@keyframes sealStamp {
+  0% { transform: scale(0.7) rotate(-8deg); }
+  55% { transform: scale(1.18) rotate(2deg); }
+  100% { transform: scale(1) rotate(0deg); }
 }
 .task-main { flex: 1; min-width: 0; }
 .tname { font-size: 14px; font-weight: 600; letter-spacing: 0; }
@@ -2283,13 +2288,13 @@ body.resizing { cursor: col-resize; user-select: none; }
 
 /* ============ 深色主题 ============ */
 body.dark {
-  --bg: #12171D; --bg2: #1B222A; --bg3: #161C23; --ink: #EEF2F5; --ink-rgb: 238, 242, 245; --ink2: #CDD5DD; --muted: #98A3AF; --muted-rgb: 152, 163, 175;
-  --rule: #303A45; --rule2: rgba(232, 112, 88, 0.2);
-  --accent: #E87058; --accent-hover: #C95C46; --accent-rgb: 232, 112, 88; --accent2: #7F9BC2; --accent2-rgb: 127, 155, 194;
-  --accent-weak: rgba(232, 112, 88, 0.14);
-  --ok: #62A982; --ok-rgb: 98, 169, 130; --warn: #D4A14A; --warn-rgb: 212, 161, 74; --danger: #DE7068; --danger-rgb: 222, 112, 104;
-  --neutral: #8B96A2; --surface-rgb: 27, 34, 42; --inverse: #0D1217; --grad: #B54A38;
-  --toast-ok: #1F4A33; --toast-error: #5A2A26; --toast-warning: #57401E; --toast-action: #F5B06A;
+  --bg: #16181D; --bg2: #1E2127; --bg3: #191C21; --ink: #E8EAED; --ink-rgb: 232, 234, 237; --ink2: #C6C9CE; --muted: #8B8F98; --muted-rgb: 139, 143, 152;
+  --rule: #2C3038; --rule2: rgba(125, 162, 206, 0.2);
+  --accent: #D0705A; --accent-hover: #DE8470; --accent-rgb: 208, 112, 90; --accent2: #7DA2CE; --accent2-rgb: 125, 162, 206;
+  --accent-weak: rgba(208, 112, 90, 0.12);
+  --ok: #6FA98C; --ok-rgb: 111, 169, 140; --warn: #D4A95C; --warn-rgb: 212, 169, 92; --danger: #D0705A; --danger-rgb: 208, 112, 90;
+  --neutral: #8B8F98; --surface-rgb: 30, 33, 39; --inverse: #16181D; --grad: #B5543F;
+  --toast-ok: #24402F; --toast-error: #4A2C26; --toast-warning: #443620; --toast-action: #E8B04B;
   --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.3);
   --shadow: 0 4px 20px rgba(0, 0, 0, 0.35);
   --shadow-md: 0 8px 28px rgba(0, 0, 0, 0.45);

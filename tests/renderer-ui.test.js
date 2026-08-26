@@ -1890,8 +1890,8 @@ test('任务弹窗固定操作区并让字段区独立滚动', () => {
 });
 
 test('界面颜色与间距由统一设计令牌驱动', () => {
-  assert.match(css, /--accent-hover: #AC4938/);
-  assert.match(css, /--muted-rgb: 102, 113, 127/);
+  assert.match(css, /--accent-hover: #9E4832/);
+  assert.match(css, /--muted-rgb: 138, 141, 147/);
   assert.match(css, /--control-md: 36px/);
   assert.doesNotMatch(css, /rgba\((?:196, 69, 59|199, 138, 43|62, 142, 90|122, 111, 96|240, 140, 80)/);
   assert.doesNotMatch(css, /#E8743B/i);

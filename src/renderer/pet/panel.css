@@ -1,14 +1,15 @@
 :root {
-  --panel-surface: #FFFFFF;
-  --panel-subtle: #F5F7F9;
-  --panel-ink: #17202B;
-  --panel-muted: #687583;
-  --panel-rule: #DCE2E8;
-  --panel-accent: #C1523E;
-  --panel-accent-soft: #F8ECE9;
-  --panel-info: #4C6A92;
-  --panel-danger: #B94339;
-  --panel-shadow: 0 18px 48px rgba(23, 32, 43, 0.24);
+  /* 墨案 Ink Desk：与主窗口同一张书桌 */
+  --panel-surface: #F7F6F2;
+  --panel-subtle: #EFEDE8;
+  --panel-ink: #26282B;
+  --panel-muted: #8A8D93;
+  --panel-rule: #DDDAD2;
+  --panel-accent: #B4533A;
+  --panel-accent-soft: rgba(180, 83, 58, 0.08);
+  --panel-info: #3D5A80;
+  --panel-danger: #B4533A;
+  --panel-shadow: 0 12px 36px rgba(38, 40, 43, 0.18);
   --motion-fast: 140ms;
   --motion-base: 220ms;
   --ease: cubic-bezier(0.2, 0, 0, 1);
@@ -104,15 +105,15 @@ button:focus-visible { outline: 2px solid var(--panel-info); outline-offset: 1px
 button:active { transform: scale(.98); }
 
 body.dark {
-  --panel-surface: #1B222A;
-  --panel-subtle: #151B22;
-  --panel-ink: #EEF2F5;
-  --panel-muted: #9AA6B2;
-  --panel-rule: #303A45;
-  --panel-accent: #E87058;
-  --panel-accent-soft: #342320;
-  --panel-info: #86A3CA;
-  --panel-danger: #E47B72;
+  --panel-surface: #1E2127;
+  --panel-subtle: #191C21;
+  --panel-ink: #E8EAED;
+  --panel-muted: #8B8F98;
+  --panel-rule: #2C3038;
+  --panel-accent: #D0705A;
+  --panel-accent-soft: rgba(208, 112, 90, 0.12);
+  --panel-info: #7DA2CE;
+  --panel-danger: #D0705A;
   --panel-shadow: 0 18px 48px rgba(0, 0, 0, .46);
 }
 
