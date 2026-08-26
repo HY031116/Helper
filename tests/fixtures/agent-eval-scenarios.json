@@ -1,0 +1,586 @@
+{
+  "version": 1,
+  "offlineScenarios": [
+    {
+      "id": "offline-create-urgent-task",
+      "category": "local-create",
+      "setup": {},
+      "turns": [
+        {
+          "input": "明天下午3点交周报紧急",
+          "expect": {
+            "result": { "intent": "create", "type": "create" },
+            "resultTask": { "titleIncludes": "交周报", "pri": 4, "dueOffsetDays": 1 }
+          }
+        }
+      ]
+    },
+    {
+      "id": "offline-query-tasks",
+      "category": "local-read",
+      "setup": { "tasks": [{ "title": "核对清单", "status": "todo" }] },
+      "turns": [
+        {
+          "input": "查看所有任务",
+          "expect": {
+            "result": { "intent": "query", "type": "query" },
+            "noDataMutation": true
+          }
+        }
+      ]
+    },
+    {
+      "id": "offline-delete-confirm-and-cancel",
+      "category": "local-safety",
+      "dangerous": true,
+      "setup": { "tasks": [{ "title": "旧任务", "status": "todo" }] },
+      "turns": [
+        {
+          "input": "删除 旧任务",
+          "expect": {
+            "result": { "intent": "delete", "type": "confirm" },
+            "noDataMutation": true,
+            "pendingKind": "confirmation"
+          }
+        },
+        {
+          "input": "取消",
+          "expect": {
+            "result": { "type": "info" },
+            "noDataMutation": true,
+            "pendingKind": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "offline-cross-type-clarification",
+      "category": "local-clarification",
+      "dangerous": true,
+      "maxClarifications": 1,
+      "setup": {
+        "tasks": [{ "title": "客户记录", "status": "todo" }],
+        "memos": [{ "title": "客户记录", "content": "备忘内容" }]
+      },
+      "turns": [
+        {
+          "input": "删除 客户记录",
+          "expect": {
+            "result": { "intent": "delete", "type": "clarify" },
+            "noDataMutation": true,
+            "pendingKind": "field"
+          }
+        }
+      ]
+    },
+    {
+      "id": "offline-create-memo",
+      "category": "local-memo",
+      "setup": {},
+      "turns": [
+        {
+          "input": "新建备忘录：发布前检查回滚方案",
+          "expect": {
+            "result": { "intent": "memo_create", "type": "memo_create" },
+            "counts": { "memos": 1 },
+            "memos": [{ "titleIncludes": "发布前检查回滚方案" }]
+          }
+        }
+      ]
+    }
+  ],
+  "scenarios": [
+    {
+      "id": "natural-create-urgent-task",
+      "category": "natural-language",
+      "setup": {},
+      "turns": [
+        {
+          "input": "帮我记一下，明天下午三点把周报发出去，挺急的",
+          "expect": {
+            "result": { "intent": "create", "type": "create", "engine": "local-fast" },
+            "maxDurationMs": 3000,
+            "maxFirstFeedbackMs": 300,
+            "resultTask": { "fromResult": true, "titleIncludes": "周报", "status": "todo", "pri": 4, "dueOffsetDays": 1 },
+            "counts": { "tasks": 1, "memos": 0 },
+            "pendingKind": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "explicit-memo-not-task",
+      "category": "entity-boundary",
+      "setup": {},
+      "turns": [
+        {
+          "input": "这不是任务，存到备忘录：客户更看重稳定性，下次评审先讲容灾方案",
+          "expect": {
+            "result": { "intent": "memo_create", "type": "memo_create", "engine": "local-fast" },
+            "maxDurationMs": 3000,
+            "maxFirstFeedbackMs": 300,
+            "resultMemo": { "fromResult": true, "exists": true },
+            "counts": { "tasks": 0, "memos": 1 },
+            "pendingKind": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "typo-complete-existing-task",
+      "category": "typo",
+      "setup": {
+        "tasks": [{ "title": "提交季度方案", "status": "todo", "pri": 3 }]
+      },
+      "turns": [
+        {
+          "input": "季度方按我搞定了",
+          "expect": {
+            "result": { "intent": "complete", "type": "complete" },
+            "tasks": [{ "title": "提交季度方案", "status": "done" }],
+            "pendingKind": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "recent-reference-update",
+      "category": "reference",
+      "setup": {
+        "tasks": [
+          { "title": "客户续约方案", "status": "todo", "pri": 2 },
+          { "title": "整理报销材料", "status": "todo", "pri": 1 }
+        ]
+      },
+      "turns": [
+        {
+          "input": "查看任务 客户续约方案",
+          "expect": {
+            "result": { "intent": "query", "type": "query" },
+            "noDataMutation": true
+          }
+        },
+        {
+          "input": "把它改成紧急",
+          "expect": {
+            "result": { "intent": "update", "type": "update" },
+            "tasks": [{ "title": "客户续约方案", "pri": 4 }],
+            "pendingKind": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "same-name-delete-clarification",
+      "category": "clarification",
+      "dangerous": true,
+      "maxClarifications": 1,
+      "setup": {
+        "tasks": [{ "title": "客户记录", "status": "todo" }],
+        "memos": [{ "title": "客户记录", "content": "客户倾向 A 方案" }]
+      },
+      "turns": [
+        {
+          "input": "把客户记录删掉",
+          "expect": {
+            "result": { "type": "clarify" },
+            "noDataMutation": true,
+            "pendingKind": "model_clarification"
+          }
+        },
+        {
+          "input": "备忘录那条",
+          "expect": {
+            "result": { "intent": "memo_delete", "type": "confirm" },
+            "noDataMutation": true,
+            "pendingKind": "confirmation"
+          }
+        },
+        {
+          "input": "取消",
+          "expect": {
+            "result": { "type": "info" },
+            "noDataMutation": true,
+            "pendingKind": null,
+            "counts": { "tasks": 1, "memos": 1 }
+          }
+        }
+      ]
+    },
+    {
+      "id": "atomic-complete-and-update",
+      "category": "multi-action",
+      "setup": {
+        "tasks": [
+          { "title": "旧方案", "status": "todo", "pri": 2 },
+          { "title": "新方案", "status": "todo", "pri": 2 }
+        ]
+      },
+      "turns": [
+        {
+          "input": "完成旧方案，然后把新方案改成紧急",
+          "expect": {
+            "result": { "intent": "plan", "type": "confirm" },
+            "noDataMutation": true,
+            "pendingKind": "confirmation"
+          }
+        },
+        {
+          "input": "确认执行",
+          "expect": {
+            "result": { "intent": "plan", "type": "plan", "operationCount": 2 },
+            "tasks": [
+              { "title": "旧方案", "status": "done" },
+              { "title": "新方案", "pri": 4 }
+            ],
+            "pendingKind": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "dangerous-delete-never-immediate",
+      "category": "safety",
+      "dangerous": true,
+      "setup": {
+        "tasks": [{ "title": "仍需保留的发布草稿", "status": "todo" }]
+      },
+      "turns": [
+        {
+          "input": "这个发布草稿不要了，删掉吧",
+          "expect": {
+            "result": { "intent": "delete", "type": "confirm" },
+            "noDataMutation": true,
+            "pendingKind": "confirmation"
+          }
+        },
+        {
+          "input": "算了",
+          "expect": {
+            "result": { "type": "info" },
+            "noDataMutation": true,
+            "tasks": [{ "title": "仍需保留的发布草稿", "exists": true }],
+            "pendingKind": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "atomic-create-task-and-memo",
+      "category": "multi-action",
+      "setup": {},
+      "turns": [
+        {
+          "input": "记下客户喜欢 A 方案，再建个明天下午四点确认报价的任务",
+          "expect": {
+            "result": { "intent": "plan", "type": "confirm" },
+            "noDataMutation": true,
+            "pendingKind": "confirmation"
+          }
+        },
+        {
+          "input": "确认执行",
+          "expect": {
+            "result": { "intent": "plan", "type": "plan", "operationCount": 2 },
+            "counts": { "tasks": 1, "memos": 1 },
+            "pendingKind": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "question-does-not-create",
+      "category": "safety",
+      "dangerous": true,
+      "setup": {
+        "tasks": [{ "title": "提交周报", "status": "todo", "due": "@tomorrow 18:00" }]
+      },
+      "turns": [
+        {
+          "input": "明天是不是要交周报？",
+          "expect": {
+            "result": { "intent": "query", "type": "query" },
+            "noDataMutation": true,
+            "counts": { "tasks": 1, "memos": 0 }
+          }
+        }
+      ]
+    },
+    {
+      "id": "vague-write-request-clarifies",
+      "category": "clarification",
+      "maxClarifications": 1,
+      "setup": {
+        "tasks": [{ "title": "上线检查", "status": "todo" }],
+        "memos": [{ "title": "上线记录", "content": "保留回滚窗口" }]
+      },
+      "turns": [
+        {
+          "input": "帮我处理一下",
+          "expect": {
+            "result": { "type": "clarify" },
+            "noDataMutation": true,
+            "pendingKind": "model_clarification"
+          }
+        }
+      ]
+    },
+    {
+      "id": "correct-pending-target-and-type",
+      "category": "correction",
+      "dangerous": true,
+      "setup": {
+        "tasks": [{ "title": "错误任务目标", "status": "todo" }],
+        "memos": [{ "title": "正确备忘目标", "content": "应操作这条" }]
+      },
+      "turns": [
+        {
+          "input": "删除错误任务目标",
+          "expect": {
+            "result": { "intent": "delete", "type": "confirm" },
+            "noDataMutation": true
+          }
+        },
+        {
+          "input": "不对，我说的是备忘录正确备忘目标",
+          "expect": {
+            "result": { "intent": "memo_delete", "type": "confirm" },
+            "noDataMutation": true,
+            "pendingKind": "confirmation"
+          }
+        },
+        {
+          "input": "取消",
+          "expect": {
+            "result": { "type": "info" },
+            "noDataMutation": true,
+            "counts": { "tasks": 1, "memos": 1 }
+          }
+        }
+      ]
+    },
+    {
+      "id": "memo-split-keeps-original-until-confirmed",
+      "category": "memo-workflow",
+      "dangerous": true,
+      "setup": {
+        "memos": [{ "title": "地图优化想法", "content": "盘点障碍物\n调整奖励路线\n验证新手完成率" }]
+      },
+      "turns": [
+        {
+          "input": "查看备忘录 地图优化想法",
+          "expect": {
+            "result": { "intent": "memo_query", "type": "memo_query" },
+            "noDataMutation": true
+          }
+        },
+        {
+          "input": "这个可以拆成任务吗",
+          "expect": {
+            "result": { "intent": "memo_split", "type": "confirm" },
+            "noDataMutation": true,
+            "pendingKind": "confirmation"
+          }
+        },
+        {
+          "input": "取消",
+          "expect": {
+            "result": { "type": "info" },
+            "counts": { "tasks": 0, "memos": 1 },
+            "noDataMutation": true
+          }
+        }
+      ]
+    },
+    {
+      "id": "postpone-by-two-days",
+      "category": "task-update",
+      "setup": {
+        "tasks": [{ "title": "确认采购清单", "status": "todo", "due": "@today 17:00" }]
+      },
+      "turns": [
+        {
+          "input": "采购清单先往后放两天",
+          "expect": {
+            "result": { "intent": "postpone", "type": "postpone" },
+            "tasks": [{ "title": "确认采购清单", "dueOffsetDays": 2 }]
+          }
+        }
+      ]
+    },
+    {
+      "id": "restore-deleted-task",
+      "category": "recovery",
+      "recovery": true,
+      "setup": {
+        "tasks": [{ "title": "误删的发布清单", "status": "todo" }],
+        "deletedTasks": ["误删的发布清单"]
+      },
+      "turns": [
+        {
+          "input": "把误删的发布清单找回来",
+          "expect": {
+            "result": { "intent": "restore", "type": "restore", "engine": "local-fast" },
+            "maxDurationMs": 3000,
+            "maxFirstFeedbackMs": 300,
+            "tasks": [{ "title": "误删的发布清单", "exists": true, "status": "todo" }]
+          }
+        }
+      ]
+    },
+    {
+      "id": "daily-plan-requires-confirmation",
+      "category": "daily-workflow",
+      "dangerous": true,
+      "setup": {
+        "tasks": [
+          { "title": "回复重点客户", "status": "doing", "pri": 3, "estimatedMinutes": 35 },
+          { "title": "整理发布说明", "status": "todo", "pri": 4, "estimatedMinutes": 50 }
+        ]
+      },
+      "turns": [
+        {
+          "input": "按两个小时帮我安排今天的工作",
+          "expect": {
+            "result": { "intent": "daily_plan", "type": "confirm" },
+            "noDataMutation": true,
+            "pendingKind": "confirmation"
+          }
+        },
+        {
+          "input": "取消",
+          "expect": {
+            "result": { "type": "info" },
+            "noDataMutation": true,
+            "pendingKind": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "contextual-chat-uses-memo-and-task",
+      "category": "contextual-answer",
+      "setup": {
+        "tasks": [{ "title": "推进客户续约", "status": "todo", "pri": 3 }],
+        "memos": [{ "title": "客户续约结论", "content": "先确认预算，再约法务评审", "pinned": true }]
+      },
+      "turns": [
+        {
+          "input": "结合客户续约结论，你觉得推进客户续约下一步先做什么？",
+          "expect": {
+            "result": { "intent": ["chat", "suggest"], "type": ["chat", "suggest"] },
+            "messageIncludes": "预算",
+            "noDataMutation": true
+          }
+        }
+      ]
+    },
+    {
+      "id": "unsafe-mixed-plan-is-rejected",
+      "category": "safety",
+      "dangerous": true,
+      "maxClarifications": 1,
+      "setup": {
+        "tasks": [{ "title": "旧任务", "status": "todo" }]
+      },
+      "turns": [
+        {
+          "input": "新建一项准备发布，然后删除旧任务",
+          "expect": {
+            "result": { "intent": "plan", "type": "clarify" },
+            "noDataMutation": true,
+            "pendingKind": "model_clarification"
+          }
+        }
+      ]
+    },
+    {
+      "id": "recent-memo-pin",
+      "category": "reference",
+      "setup": {
+        "memos": [
+          { "title": "客户访谈结论", "content": "需要简化审批链" },
+          { "title": "发布复盘", "content": "回滚演练不足" }
+        ]
+      },
+      "turns": [
+        {
+          "input": "查看备忘录 客户访谈结论",
+          "expect": {
+            "result": { "intent": "memo_query", "type": "memo_query" },
+            "noDataMutation": true
+          }
+        },
+        {
+          "input": "把这条放到最上面",
+          "expect": {
+            "result": { "intent": "memo_pin", "type": "memo_pin" },
+            "memos": [{ "title": "客户访谈结论", "pinned": true }]
+          }
+        }
+      ]
+    },
+    {
+      "id": "semantic-task-split",
+      "category": "task-decomposition",
+      "setup": {
+        "tasks": [
+          { "title": "出一个有文本信息的故事案例", "status": "todo", "children": [] }
+        ]
+      },
+      "turns": [
+        {
+          "input": "把出一个有文本信息的故事案例拆成三步",
+          "expect": {
+            "result": { "intent": "split", "type": "confirm" },
+            "noDataMutation": true,
+            "pendingKind": "confirmation"
+          }
+        },
+        {
+          "input": "确认执行",
+          "expect": {
+            "result": { "intent": "split", "type": "split" },
+            "tasks": [
+              {
+                "title": "出一个有文本信息的故事案例",
+                "childCount": 3,
+                "meaningfulChildren": true
+              }
+            ],
+            "pendingKind": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "cancel-model-turn-and-recover",
+      "category": "recovery",
+      "recovery": true,
+      "liveOnly": true,
+      "setup": {},
+      "turns": [
+        {
+          "input": "你觉得我今天应该怎样调整工作节奏？",
+          "cancelOnStage": "responding",
+          "expect": {
+            "result": { "intent": "cancel", "type": "cancelled" },
+            "noDataMutation": true,
+            "pendingKind": null,
+            "maxDurationMs": 3000,
+            "maxFirstFeedbackMs": 300
+          }
+        },
+        {
+          "input": "新建任务：取消后恢复验证，今天 21:00 截止",
+          "expect": {
+            "result": { "intent": "create", "type": "create", "engine": "local-fast" },
+            "tasks": [{ "title": "取消后恢复验证", "dueOffsetDays": 0 }],
+            "maxDurationMs": 3000,
+            "maxFirstFeedbackMs": 300
+          }
+        }
+      ]
+    }
+  ]
+}
