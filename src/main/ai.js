@@ -1127,20 +1127,25 @@ function doBatch(params) {
   }
 
   // 批量改截止时间：如「把今天剩下的所有任务时间都改到七点」
-  const isReschedule = /(时间|截止).*(改|调|挪|移|设)/.test(raw) && !isDelete && !isComplete;
+  // 优先使用模型解析的结构化字段（rescheduleTime/rescheduleScope/onlyRemaining），本地正则作回退
+  const isReschedule = params.rescheduleTime || ((/(时间|截止).*(改|调|挪|移|设)/.test(raw)) && !isDelete && !isComplete);
   if (isReschedule) {
-    const time = parseTime(raw);
-    if (!time) {
-      return { type: 'error', message: '没听清要改到几点，试试「把今天剩下的任务都改到 19:00」' };
+    let hhmm = params.rescheduleTime;
+    let scopeTomorrow = params.rescheduleScope === 'tomorrow';
+    let onlyRemaining = params.onlyRemaining === true;
+    if (!hhmm) {
+      const time = parseTime(raw);
+      if (!time) {
+        return { type: 'error', message: '没听清要改到几点，试试「把今天剩下的任务都改到 19:00」' };
+      }
+      hhmm = `${String(time.h).padStart(2, '0')}:${String(time.m).padStart(2, '0')}`;
+      scopeTomorrow = /明天|明日/.test(raw);
+      onlyRemaining = /剩下|剩余|还没|没完成/.test(raw);
     }
-    const hhmm = `${String(time.h).padStart(2, '0')}:${String(time.m).padStart(2, '0')}`;
-    // 范围：今天/明天，默认今天；「剩下的」排除已完成
-    const scopeTomorrow = /明天|明日/.test(raw);
     const pad = (n) => (n < 10 ? '0' + n : '' + n);
     const now = new Date();
     if (scopeTomorrow) now.setDate(now.getDate() + 1);
     const dayKey = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
-    const onlyRemaining = /剩下|剩余|还没|没完成/.test(raw);
     targets = targets.filter((t) => t.due && String(t.due).startsWith(dayKey));
     if (onlyRemaining) targets = targets.filter((t) => t.status !== 'done');
     if (!targets.length) {
@@ -2809,6 +2814,13 @@ function parse(text) {
   // 批量操作：保留原文 + 抽取筛选条件
   if (intent === 'batch') {
     params.text = raw;
+    // 批量改时间：解析目标时刻与范围（本地快路径）
+    if (/(时间|截止).*(改|调|挪|移|设)/.test(raw)) {
+      const t = parseTime(raw);
+      if (t) params.rescheduleTime = `${String(t.h).padStart(2, '0')}:${String(t.m).padStart(2, '0')}`;
+      if (/明天|明日/.test(raw)) params.rescheduleScope = 'tomorrow';
+      if (/剩下|剩余|还没|没完成/.test(raw)) params.onlyRemaining = true;
+    }
     // 优先级筛选
     if (/紧急|加急|立刻|马上/.test(raw)) params.pri = 4;
     else if (/高优先级|重要|优先/.test(raw)) params.pri = 3;
@@ -3371,6 +3383,11 @@ actions 包含 2 到 5 项，可使用 create、memo_create、memo_pin、complet
 - 「把所有工作标签的任务删掉」→ intent=batch, tags=["工作"]
 - 「全部完成」→ intent=batch（无筛选，完成所有未完成任务）
 - 「把进行中的任务都完成」→ intent=batch, status="doing"
+- 批量改截止时间：如「把今天剩下的所有任务时间都改到七点」「把明天的任务都改到 9 点半」，使用 intent=batch 并填写：
+  - rescheduleTime: "HH:mm"（口语数字转 24 小时制，「七点」→ "07:00"，「晚上八点」→ "20:00"，「九点半」→ "09:30"）
+  - rescheduleScope: "today" 或 "tomorrow"（默认 today）
+  - onlyRemaining: 用户说「剩下的/剩余/没完成的」时为 true，否则省略
+  - 可与 pri/tags/status/project 筛选条件组合，如「把今天剩下的紧急任务都改到 20:00」
 
 精细修改（update）时，target 必须精确匹配任务列表中的标题，并提取要修改的字段：
 - 「把 交周报 改成紧急」→ intent=update, target="交周报", pri=4

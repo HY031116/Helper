@@ -97,6 +97,14 @@ function normalizeAction(parsed, allowedIntents) {
   if (due && !/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/.test(due)) {
     fail('MODEL_OUTPUT_INVALID_FIELD', '模型字段 due 必须使用 YYYY-MM-DD HH:mm 格式');
   }
+  const usesReschedule = parsed.intent === 'batch';
+  const rescheduleTime = usesReschedule ? optionalString(parsed.rescheduleTime, 'rescheduleTime', 5) : '';
+  if (rescheduleTime && !/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(rescheduleTime)) {
+    fail('MODEL_OUTPUT_INVALID_FIELD', '模型字段 rescheduleTime 必须使用 HH:mm 格式');
+  }
+  const rescheduleScope = usesReschedule
+    ? optionalEnum(parsed.rescheduleScope, 'rescheduleScope', ['today', 'tomorrow'], 'today') : undefined;
+  const onlyRemaining = usesReschedule ? optionalBoolean(parsed.onlyRemaining, 'onlyRemaining') : undefined;
   const usesDailyPlan = ['daily_plan', 'daily_replan'].includes(parsed.intent);
   const startTime = usesDailyPlan ? optionalString(parsed.startTime, 'startTime', 5) : '';
   if (startTime && !/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(startTime)) {
@@ -150,6 +158,9 @@ function normalizeAction(parsed, allowedIntents) {
       completeTask: parsed.intent === 'focus_finish' ? optionalBoolean(parsed.completeTask, 'completeTask') : undefined,
       status: ['query', 'stats', 'batch'].includes(parsed.intent)
         ? optionalEnum(parsed.status, 'status', ['todo', 'doing', 'done'], undefined) : undefined,
+      rescheduleTime: usesReschedule ? (rescheduleTime || undefined) : undefined,
+      rescheduleScope,
+      onlyRemaining,
       range: ['query', 'stats'].includes(parsed.intent)
         ? optionalEnum(parsed.range, 'range', ['today', 'tomorrow', 'week', 'yesterday', 'overdue', 'all'], 'all') : 'all'
     }
