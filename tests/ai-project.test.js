@@ -643,6 +643,24 @@ test('创建：周一下午2点 团队评审', () => {
   assert.ok(r.task.due && r.task.due.includes('14:00'));
 });
 
+test('工作时间：相对日期按设置的工作结束时间解析', () => {
+  reset();
+  store.updateSettings({ workHours: { start: '09:00', end: '17:30', days: [1, 2, 3, 4, 5] } });
+  const r = ai.handle('今天 提交日报');
+  assert.strictEqual(r.intent, 'create');
+  assert.ok(r.task.due && r.task.due.endsWith('17:30'), `due=${r.task.due}`);
+});
+
+test('工作时间：非法配置回退默认 18:00', () => {
+  reset();
+  store.updateSettings({ workHours: { start: '18:00', end: '09:00', days: [9] } });
+  const s = store.getSettings();
+  assert.strictEqual(s.workHours.end, '18:00');
+  assert.deepStrictEqual(s.workHours.days, [1, 2, 3, 4, 5]);
+  const r = ai.handle('今天 提交日报');
+  assert.ok(r.task.due && r.task.due.endsWith('18:00'), `due=${r.task.due}`);
+});
+
 /* ============ 2. 查询意图 ============ */
 test('查询：今天我要做什么', () => {
   reset();

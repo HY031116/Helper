@@ -164,8 +164,27 @@ function getDefaultSettings() {
     aiTemperature: 0.2,
     petPosition: null, // { x, y } 桌宠位置
     petEnabled: true, // 桌宠是否显示
+    workHours: {
+      start: '09:00',
+      end: '18:00',
+      days: [1, 2, 3, 4, 5] // 0=周日 … 6=周六
+    },
     shortcuts: { ai: 'CommandOrControl+J', newTask: 'CommandOrControl+N' }
   };
+}
+
+/* 归一化工作时间设置，防御非法输入 */
+function normalizeWorkHours(value) {
+  const source = value && typeof value === 'object' ? value : {};
+  const validTime = (v, fallback) => /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(String(v || '')) ? String(v) : fallback;
+  const start = validTime(source.start, '09:00');
+  let end = validTime(source.end, '18:00');
+  if (end <= start) end = '18:00';
+  const allDays = [0, 1, 2, 3, 4, 5, 6];
+  const days = Array.isArray(source.days)
+    ? [...new Set(source.days.map((d) => Number(d)).filter((d) => Number.isInteger(d) && d >= 0 && d <= 6))].sort()
+    : null;
+  return { start, end, days: days && days.length ? days : allDays.slice(1, 6) };
 }
 
 /* ---------- 任务 CRUD ---------- */
@@ -867,11 +886,13 @@ function resetTasks() {
 
 /* ---------- 设置 ---------- */
 function getSettings() {
-  return Object.assign({}, settings);
+  return Object.assign({}, settings, { workHours: normalizeWorkHours(settings.workHours) });
 }
 
 function updateSettings(patch) {
-  settings = Object.assign({}, settings, patch);
+  const next = Object.assign({}, settings, patch);
+  if (patch && patch.workHours) next.workHours = normalizeWorkHours(patch.workHours);
+  settings = next;
   saveSettings();
   return getSettings();
 }

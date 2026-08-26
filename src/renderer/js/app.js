@@ -1458,26 +1458,7 @@ function renderTasks() {
     );
   }
   if (currentFilter === 'today') list = list.filter((t) => isToday(t.due));
-  if (currentFilter === 'active') list = list.filter((t) => t.status !== 'done' && t.status !== 'archived');
-  if (currentFilter === 'done') list = list.filter((t) => t.status === 'done');
-  if (currentFilter === 'archived') list = list.filter((t) => t.status === 'archived');
-  // 智能列表
-  if (currentFilter === 'nodate') list = list.filter((t) => !t.due && t.status !== 'done' && t.status !== 'archived');
-  if (currentFilter === 'overdue') list = list.filter((t) => t.status !== 'done' && t.status !== 'archived' && isOverdue(t.due, t.status));
-  if (currentFilter === 'week') {
-    const now = new Date();
-    const weekAgo = new Date(now.getTime() - 7 * 86400000);
-    list = list.filter((t) => t.createdAt >= weekAgo.getTime() && t.status !== 'archived');
-  }
-  // 项目/标签筛选
-  if (currentFilter.startsWith('proj:')) {
-    const proj = currentFilter.slice(5);
-    list = list.filter((t) => (t.project || '') === proj);
-  }
-  if (currentFilter.startsWith('tag:')) {
-    const tag = currentFilter.slice(4);
-    list = list.filter((t) => (t.tags || []).includes(tag));
-  }
+  else if (currentFilter !== 'all') list = list.filter((t) => taskMatchesFilter(t));
   // 排序：手动 order 优先，其次按状态/优先级
   list.sort((a, b) => {
     if (a.status === 'archived' && b.status !== 'archived') return 1;
@@ -2340,6 +2321,24 @@ function renderSettings() {
     </div>
     <div class="backup-list" id="backup-list" role="region" aria-label="备份记录" aria-live="polite"></div>
     <div class="set-row">
+      <div><div class="sr-t">工作时间</div><div class="sr-d" id="work-hours-desc">AI 解析「今天完成」等表达时按此时间作为当天截止；非工作日按默认 18:00</div></div>
+      <div class="quiet-time-controls" aria-describedby="work-hours-desc">
+        <label><span>开始</span><input id="wh-start" type="time" value="${esc(s.workHours && s.workHours.start || '09:00')}" data-settings-scope="data"></label>
+        <label><span>结束</span><input id="wh-end" type="time" value="${esc(s.workHours && s.workHours.end || '18:00')}" data-settings-scope="data"></label>
+        <button type="button" class="btn mini ghost" id="btn-wh-save" data-settings-scope="data">保存</button>
+      </div>
+    </div>
+    <div class="set-row">
+      <div><div class="sr-t">工作日</div><div class="sr-d">勾选每周的工作日；非工作日创建的任务按默认 18:00 截止</div></div>
+      <div class="seg wh-days" id="wh-days" role="group" aria-label="工作日">
+        ${['日','一','二','三','四','五','六'].map((n, i) => {
+          const on = !s.workHours || !Array.isArray(s.workHours.days) || s.workHours.days.includes(i);
+          return `<button type="button" role="checkbox" aria-checked="${on}" aria-label="周${n}" class="seg-it ${on ? 'active' : ''}" data-day="${i}">${n}</button>`;
+        }).join('')}
+        <button type="button" class="btn mini ghost" id="btn-wh-days-save">保存</button>
+      </div>
+    </div>
+    <div class="set-row">
       <div><div class="sr-t">外观主题</div><div class="sr-d">浅色 / 深色 / 跟随系统</div></div>
       <div class="seg" id="theme-seg" role="radiogroup" aria-label="外观主题">
         <button type="button" role="radio" aria-checked="${s.theme === 'light'}" class="seg-it ${s.theme === 'light' ? 'active' : ''}" data-theme="light">浅色</button>
@@ -2599,6 +2598,44 @@ function bindSettingsEvents() {
       toast(`安静时段已设为 ${quietStart}-${quietEnd}`);
       return true;
     }, '安静时段保存失败，请检查时间', 'copilot');
+  });
+
+  // 工作时间保存
+  $('#btn-wh-save')?.addEventListener('click', () => {
+    const button = $('#btn-wh-save');
+    runSettingsAction(button, '保存中…', async () => {
+      const start = $('#wh-start').value;
+      const end = $('#wh-end').value;
+      if (!start || !end) throw new Error('请选择开始和结束时间');
+      if (end <= start) throw new Error('结束时间需要晚于开始时间');
+      const current = settings.workHours || {};
+      settings.workHours = await window.api.settings.update({
+        workHours: { start, end, days: Array.isArray(current.days) ? current.days : [1, 2, 3, 4, 5] }
+      }).then((s) => s.workHours);
+      toast(`工作时间已设为 ${start}-${end}`);
+      return true;
+    }, '工作时间保存失败，请检查时间', 'data');
+  });
+
+  // 工作日勾选与保存
+  $$('#wh-days .seg-it[data-day]').forEach((seg) => {
+    seg.addEventListener('click', () => {
+      const on = seg.classList.toggle('active');
+      seg.setAttribute('aria-checked', String(on));
+    });
+  });
+  $('#btn-wh-days-save')?.addEventListener('click', () => {
+    const button = $('#btn-wh-days-save');
+    runSettingsAction(button, '保存中…', async () => {
+      const days = $$('#wh-days .seg-it.active').map((el) => Number(el.dataset.day)).sort((a, b) => a - b);
+      if (!days.length) throw new Error('至少勾选一个工作日');
+      const current = settings.workHours || {};
+      settings.workHours = await window.api.settings.update({
+        workHours: { start: current.start || '09:00', end: current.end || '18:00', days }
+      }).then((s) => s.workHours);
+      toast(`工作日已更新（每周 ${days.length} 天）`);
+      return true;
+    }, '工作日保存失败，请稍后重试', 'data');
   });
 
   $$('#settings-body .switch[data-switch]').forEach((sw) => {
@@ -6055,10 +6092,36 @@ async function toggleDone(t) {
   }
 }
 
+function taskMatchesFilter(t) {
+  if (currentSearch) {
+    const q = currentSearch.toLowerCase();
+    const hit = (t.title || '').toLowerCase().includes(q) ||
+      (t.desc || '').toLowerCase().includes(q) ||
+      (t.tags || []).some((x) => x.toLowerCase().includes(q)) ||
+      (t.project || '').toLowerCase().includes(q);
+    if (!hit) return false;
+  }
+  if (currentFilter === 'today') return isToday(t.due);
+  if (currentFilter === 'active') return t.status !== 'done' && t.status !== 'archived';
+  if (currentFilter === 'done') return t.status === 'done';
+  if (currentFilter === 'archived') return t.status === 'archived';
+  if (currentFilter === 'nodate') return !t.due && t.status !== 'done' && t.status !== 'archived';
+  if (currentFilter === 'overdue') return t.status !== 'done' && t.status !== 'archived' && isOverdue(t.due, t.status);
+  if (currentFilter === 'week') {
+    const now = new Date();
+    return t.createdAt >= new Date(now.getTime() - 7 * 86400000).getTime() && t.status !== 'archived';
+  }
+  if (currentFilter.startsWith('proj:')) return (t.project || '') === currentFilter.slice(5);
+  if (currentFilter.startsWith('tag:')) return (t.tags || []).includes(currentFilter.slice(4));
+  return true;
+}
+
 function openCompletionOutcome(taskId) {
   const task = tasks.find((item) => item.id === Number(taskId) && !item._deleted);
   if (!task) throw new Error('已完成的任务暂时无法打开');
-  currentFilter = 'all';
+  // 保持上下文：刚完成的任务在「已完成」筛选下可见，避免跳到所有任务
+  const visibleNow = tasks.some((item) => item.id === Number(taskId) && !item._deleted && taskMatchesFilter(item));
+  if (!visibleNow) currentFilter = task.status === 'done' ? 'done' : 'all';
   currentSearch = '';
   const search = $('#search-input');
   if (search) search.value = '';

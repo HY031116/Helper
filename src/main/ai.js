@@ -371,20 +371,33 @@ function localDateKey(ts) {
 }
 
 /* ---------- 相对日期 ---------- */
+/* 工作结束时刻：优先用户设置的工作时间，否则默认 18:00 */
+function workEndTime(date) {
+  const wh = (store.getSettings().workHours) || {};
+  const days = Array.isArray(wh.days) ? wh.days : [1, 2, 3, 4, 5];
+  const isWorkday = !date || days.length === 0 || days.includes(date.getDay());
+  const end = /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(String(wh.end || '')) ? wh.end : '18:00';
+  const [hh, mm] = end.split(':').map(Number);
+  return { hh: isWorkday ? hh : 18, mm: isWorkday ? mm : 0 };
+}
+
 function parseRelativeDate(text) {
   const now = new Date();
   const pad = (n) => (n < 10 ? '0' + n : '' + n);
   const fmt = (d, hh, mm) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(hh)}:${pad(mm)}`;
+  const { hh, mm } = workEndTime(now);
 
   // 今天/明天/后天
-  if (/今天|今日|今晚/.test(text)) return fmt(now, 18, 0);
+  if (/今天|今日|今晚/.test(text)) return fmt(now, hh, mm);
   if (/明天|明日/.test(text)) {
     const d = new Date(now); d.setDate(d.getDate() + 1);
-    return fmt(d, 18, 0);
+    const e = workEndTime(d);
+    return fmt(d, e.hh, e.mm);
   }
   if (/后天/.test(text)) {
     const d = new Date(now); d.setDate(d.getDate() + 2);
-    return fmt(d, 18, 0);
+    const e = workEndTime(d);
+    return fmt(d, e.hh, e.mm);
   }
   // 周X
   const weekMatch = text.match(/周([一二三四五六日天])/);
@@ -394,7 +407,8 @@ function parseRelativeDate(text) {
     let diff = target - now.getDay();
     if (diff <= 0) diff += 7;
     const d = new Date(now); d.setDate(d.getDate() + diff);
-    return fmt(d, 18, 0);
+    const e = workEndTime(d);
+    return fmt(d, e.hh, e.mm);
   }
   // X月X日
   const mdMatch = text.match(/(\d{1,2})月(\d{1,2})日/);
