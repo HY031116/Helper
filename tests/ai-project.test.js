@@ -1570,6 +1570,28 @@ test('批量：按标签删除', () => {
   assert.ok(store.getAllTasks().some((t) => t.title === '生活项'), '生活标签任务应保留');
 });
 
+test('批量：把今天剩下的任务时间改到指定时刻', () => {
+  reset();
+  const pad = (n) => (n < 10 ? '0' + n : '' + n);
+  const now = new Date();
+  const dayKey = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+  store.createTask({ title: '上午的事', due: `${dayKey} 10:00` });
+  store.createTask({ title: '下午的事', due: `${dayKey} 16:00`, status: 'done' });
+  store.createTask({ title: '明天的事', due: `${dayKey.replace(/(\d+)$/, (m) => String(Number(m) + 1))} 09:00` });
+
+  const ask = ai.handle('把今天剩下的所有任务时间都改到七点');
+  assert.strictEqual(ask.intent, 'batch');
+  assert.strictEqual(ask.type, 'confirm', '批量改时间需要确认');
+  const r = ai.handle('确认执行');
+  assert.strictEqual(r.type, 'batch');
+  const morning = store.getAllTasks().find((t) => t.title === '上午的事');
+  assert.ok(morning.due.endsWith('07:00'), `due=${morning.due}`);
+  const afternoon = store.getAllTasks().find((t) => t.title === '下午的事');
+  assert.ok(afternoon.due.endsWith('16:00'), '已完成任务不应被修改');
+  const tomorrow = store.getAllTasks().find((t) => t.title === '明天的事');
+  assert.ok(tomorrow.due.endsWith('09:00'), '明天的任务不应被修改');
+});
+
 test('批量：清空回收站', () => {
   reset();
   const t = store.createTask({ title: '待删任务' });

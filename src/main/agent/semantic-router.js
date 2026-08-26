@@ -192,10 +192,12 @@ function routeSemanticInput(text, options) {
   }
   else if (/归档|收起来|移入归档/.test(intentText)) set('archive', 'archive', { entityType: 'task' });
   else if (/恢复|还原|找回|撤销删除/.test(intentText)) set('restore', 'restore', { entityType: 'task' });
+  else if (/(所有|全部|剩下的|剩余).*(任务|待办).*(时间|截止).*(改|调|挪|移|设)|把.*(所有|全部|剩下的|剩余).*(任务|待办).*(改|调|挪|移|设)/.test(intentText)) set('batch', 'batch_reschedule', { entityType: 'task' });
   else if (/(改成|改为|改到|改成紧急|改成高|改成中|改成低|改优先级|改截止|改时间|改项目|移到|移动到|加标签|加个标签|加备注|加个备注|改描述|改备注|设为紧急|设为高|设为中|设为低|优先级改成|截止改成|时间改成)/.test(intentText)) set('update', 'update', { entityType: 'task' });
   else if (/顺延|推迟|延后|延期/.test(intentText)) set('postpone', 'postpone', { entityType: 'task' });
   else if (/加子任务|添加子任务|加个步骤|加步骤|加一步|子任务.*(加|添加)/.test(intentText)) set('child', 'child', { entityType: 'task' });
   else if (/(清除|清空|清掉|删光|全删|全部.*删|所有.*删|全部.*完成|所有.*完成|批量|一键.*(删|完成|清)|把.*都(删|完成|清)|把.*全(删|完成|清))/.test(intentText)) set('batch', 'batch', { entityType: 'task' });
+  else if (/(所有|全部|剩下的|剩余).*(任务|待办).*(时间|截止).*(改|调|挪|移|设)|把.*(所有|全部|剩下的|剩余).*(任务|待办).*(改|调|挪|移|设)/.test(intentText)) set('batch', 'batch_reschedule', { entityType: 'task' });
   else if (/删除|去掉|不做了|取消这个|移除|删掉|划掉/.test(intentText)) set('delete', 'delete', { entityType: 'task' });
   else if (/完成|搞定|做完了|办完了|勾掉|结束了|弄完了|做好了/.test(intentText)) set('complete', 'complete', { entityType: 'task' });
   else if (/开始|动手做|着手|启动/.test(intentText)) set('start', 'start', { entityType: 'task' });

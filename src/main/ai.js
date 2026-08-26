@@ -1126,6 +1126,33 @@ function doBatch(params) {
     return { type: 'batch', message: `已完成 ${result.completed} 项任务${nextText} 🎉`, undoable: false };
   }
 
+  // 批量改截止时间：如「把今天剩下的所有任务时间都改到七点」
+  const isReschedule = /(时间|截止).*(改|调|挪|移|设)/.test(raw) && !isDelete && !isComplete;
+  if (isReschedule) {
+    const time = parseTime(raw);
+    if (!time) {
+      return { type: 'error', message: '没听清要改到几点，试试「把今天剩下的任务都改到 19:00」' };
+    }
+    const hhmm = `${String(time.h).padStart(2, '0')}:${String(time.m).padStart(2, '0')}`;
+    // 范围：今天/明天，默认今天；「剩下的」排除已完成
+    const scopeTomorrow = /明天|明日/.test(raw);
+    const pad = (n) => (n < 10 ? '0' + n : '' + n);
+    const now = new Date();
+    if (scopeTomorrow) now.setDate(now.getDate() + 1);
+    const dayKey = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+    const onlyRemaining = /剩下|剩余|还没|没完成/.test(raw);
+    targets = targets.filter((t) => t.due && String(t.due).startsWith(dayKey));
+    if (onlyRemaining) targets = targets.filter((t) => t.status !== 'done');
+    if (!targets.length) {
+      return { type: 'info', message: scopeTomorrow ? '明天没有带截止时间的任务' : '今天没有带截止时间的任务' };
+    }
+    if (!params.confirmed) {
+      return confirmation('batch', params, `将把 ${targets.length} 项任务的截止时间改到 ${dayKey} ${hhmm}。确认继续吗？`, `改 ${targets.length} 项任务时间`);
+    }
+    targets.forEach((t) => store.updateTask(t.id, { due: `${dayKey} ${hhmm}` }));
+    return { type: 'batch', message: `已把 ${targets.length} 项任务的截止时间改到 ${hhmm}`, undoable: false };
+  }
+
   // 删除操作：默认删除未完成任务（保留已完成）
   if (isDelete) {
     const toDelete = targets.filter((t) => t.status !== 'done');

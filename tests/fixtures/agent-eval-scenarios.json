@@ -87,6 +87,37 @@
           }
         }
       ]
+    },
+    {
+      "id": "offline-batch-reschedule-today",
+      "category": "local-batch",
+      "dangerous": true,
+      "setup": {
+        "tasks": [
+          { "title": "上午的事", "status": "todo", "due": "@today 10:00" },
+          { "title": "下午的事", "status": "done", "due": "@today 16:00" }
+        ]
+      },
+      "turns": [
+        {
+          "input": "把今天剩下的所有任务时间都改到七点",
+          "expect": {
+            "result": { "intent": "batch", "type": "confirm" },
+            "noDataMutation": true,
+            "pendingKind": "confirmation"
+          }
+        },
+        {
+          "input": "确认执行",
+          "expect": {
+            "result": { "intent": "batch", "type": "batch" },
+            "tasks": [
+              { "titleIncludes": "上午的事", "dueTime": "07:00" },
+              { "titleIncludes": "下午的事", "dueTime": "16:00" }
+            ]
+          }
+        }
+      ]
     }
   ],
   "scenarios": [

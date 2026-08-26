@@ -63,6 +63,12 @@ function assertEntity(label, entity, expectation, failures) {
   if (expectation.dueOffsetDays !== undefined && dateOffset(entity.due) !== expectation.dueOffsetDays) {
     failures.push(`${label}.due 不是今天偏移 ${expectation.dueOffsetDays} 天`);
   }
+  if (expectation.dueTime !== undefined) {
+    const actualTime = String(entity.due || '').split(' ')[1] || '';
+    if (actualTime !== expectation.dueTime) {
+      failures.push(`${label}.due 时间期望 ${expectation.dueTime}，实际 ${actualTime || '无'}`);
+    }
+  }
   if (expectation.childCount !== undefined) {
     const children = Array.isArray(entity.children) ? entity.children : [];
     if (children.length !== expectation.childCount) {
