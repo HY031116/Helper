@@ -1,0 +1,6 @@
+{
+  "name": "work-helper-icon-generator",
+  "version": "1.0.0",
+  "private": true,
+  "main": "../generate-app-icons.js"
+}

@@ -37,7 +37,7 @@ npm run dev
 完整测试：
 
 ```powershell
-node --test tests/ai-project.test.js tests/renderer-ui.test.js
+npm test
 ```
 
 提交前静态检查：

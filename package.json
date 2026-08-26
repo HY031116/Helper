@@ -1,11 +1,17 @@
 {
   "name": "work-helper",
+  "productName": "工作台助手",
   "version": "0.2.0",
   "description": "个人工作 AI 助手 - 常驻桌面的本地任务管理与 AI 助手（桌宠形态）",
   "main": "src/main.js",
   "scripts": {
+    "test": "node --test tests/ai-project.test.js tests/renderer-ui.test.js tests/agent-evaluator.test.js",
     "start": "electron .",
-    "dev": "electron . --dev"
+    "dev": "electron . --dev",
+    "build:win": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-win.ps1",
+    "visual:qa": "electron scripts/visual-qa.js",
+    "eval:agent": "electron scripts/agent-eval.js",
+    "eval:agent:offline": "electron scripts/agent-eval.js --offline"
   },
   "author": "",
   "license": "MIT",
