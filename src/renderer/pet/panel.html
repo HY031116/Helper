@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self'; script-src 'self'; img-src 'self' data:;">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>桌宠助手</title>
+  <link rel="stylesheet" href="../css/icons.css">
+  <link rel="stylesheet" href="panel.css">
+</head>
+<body>
+  <main class="pet-panel" id="pet-panel">
+    <header class="panel-head">
+      <div class="panel-identity">
+        <span class="panel-mark" aria-hidden="true">助</span>
+        <div><strong>桌宠助手</strong><span id="panel-model">本地工作状态</span></div>
+      </div>
+      <button type="button" class="icon-button" id="panel-close" aria-label="关闭桌宠助手" title="关闭">
+        <svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-i-x"></use></svg>
+      </button>
+    </header>
+
+    <div class="panel-tabs" role="tablist" aria-label="桌宠助手功能">
+      <button type="button" role="tab" id="panel-tab-overview" aria-controls="panel-overview" aria-selected="true" tabindex="0">今日概览</button>
+      <button type="button" role="tab" id="panel-tab-chat" aria-controls="panel-chat" aria-selected="false" tabindex="-1">与助手对话</button>
+    </div>
+
+    <section class="panel-page" id="panel-overview" role="tabpanel" aria-labelledby="panel-tab-overview">
+      <div class="overview-summary" aria-live="polite" aria-atomic="true">
+        <div><span>待办</span><strong id="overview-todo">-</strong></div>
+        <div><span>逾期</span><strong id="overview-overdue">-</strong></div>
+        <div><span>今日完成</span><strong id="overview-done">-</strong></div>
+      </div>
+      <button type="button" class="overview-next" id="overview-next" disabled>
+        <span>接下来</span>
+        <strong id="overview-next-title">正在读取工作状态</strong>
+        <small id="overview-next-meta"></small>
+      </button>
+      <div class="overview-focus hidden" id="overview-focus" aria-live="polite">
+        <div><span id="overview-focus-label">正在专注</span><strong id="overview-focus-title"></strong></div>
+        <time id="overview-focus-time">00:00</time>
+        <div class="overview-focus-actions">
+          <button type="button" id="overview-focus-toggle" aria-label="暂停专注" title="暂停专注"><svg class="ui-icon" aria-hidden="true"><use href="#ui-i-pause"></use></svg></button>
+          <button type="button" id="overview-focus-complete" class="primary" aria-label="完成任务" title="完成任务"><svg class="ui-icon" aria-hidden="true"><use href="#ui-i-check"></use></svg></button>
+        </div>
+      </div>
+      <div class="overview-primary">
+        <button type="button" class="command primary" data-open-view="new">
+          <svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-i-plus"></use></svg><span>新建任务</span>
+        </button>
+        <button type="button" class="command" id="overview-open-chat">
+          <svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-i-message"></use></svg><span>问助手</span>
+        </button>
+      </div>
+      <div class="overview-views" role="toolbar" aria-label="打开工作台视图">
+        <button type="button" data-open-view="today" tabindex="0"><svg class="ui-icon" aria-hidden="true"><use href="#ui-i-today"></use></svg><span>今天</span></button>
+        <button type="button" data-open-view="board" tabindex="-1"><svg class="ui-icon" aria-hidden="true"><use href="#ui-i-board"></use></svg><span>看板</span></button>
+        <button type="button" data-open-view="cal" tabindex="-1"><svg class="ui-icon" aria-hidden="true"><use href="#ui-i-calendar"></use></svg><span>日历</span></button>
+        <button type="button" data-open-view="stat" tabindex="-1"><svg class="ui-icon" aria-hidden="true"><use href="#ui-i-stat"></use></svg><span>统计</span></button>
+        <button type="button" data-open-view="memos" tabindex="-1"><svg class="ui-icon" aria-hidden="true"><use href="#ui-i-memos"></use></svg><span>备忘录</span></button>
+        <button type="button" data-open-view="settings" tabindex="-1"><svg class="ui-icon" aria-hidden="true"><use href="#ui-i-settings"></use></svg><span>设置</span></button>
+      </div>
+      <p class="panel-feedback hidden" id="overview-feedback" role="status" aria-live="polite"></p>
+    </section>
+
+    <section class="panel-page hidden chat-page" id="panel-chat" role="tabpanel" aria-labelledby="panel-tab-chat">
+      <div class="chat-log" id="pet-chat-log" role="log" aria-live="polite" aria-relevant="additions text"></div>
+      <button type="button" class="chat-latest hidden" id="pet-chat-latest">查看最新回复</button>
+      <form class="chat-composer" id="pet-chat-form">
+        <textarea id="pet-chat-input" rows="1" maxlength="1000" aria-label="给桌宠助手发消息，Enter 发送，Shift+Enter 换行" placeholder="描述任务，或继续补充…"></textarea>
+        <button type="submit" id="pet-chat-send">发送</button>
+      </form>
+      <div class="chat-foot">
+        <span id="pet-chat-state" role="status" aria-live="polite">与主工作台共享对话</span>
+        <button type="button" id="open-full-assistant">在工作台中打开</button>
+      </div>
+    </section>
+  </main>
+  <script src="../js/ui-icons.js"></script>
+  <script src="panel.js"></script>
+</body>
+</html>

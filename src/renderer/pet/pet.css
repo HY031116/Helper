@@ -12,6 +12,16 @@
   --pet-info: #4C6A92;
   --pet-danger: #C2413A;
   --pet-shadow: 0 12px 30px rgba(23, 32, 43, 0.24);
+  --pet-layer-character: 5;
+  --pet-layer-bubble: 10;
+  --pet-layer-panel: 20;
+  --pet-motion-fast: 140ms;
+  --pet-motion-base: 220ms;
+  --pet-motion-slow: 320ms;
+  --pet-motion-loop: 800ms;
+  --pet-ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  --pet-ease-enter: cubic-bezier(0.16, 1, 0.3, 1);
+  --pet-ease-exit: cubic-bezier(0.4, 0, 1, 1);
 }
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -42,7 +52,7 @@ html, body {
   flex-direction: column;
   align-items: center;
   cursor: grab;
-  z-index: 5;
+  z-index: var(--pet-layer-character);
 }
 .pet-wrap.dragging { cursor: grabbing; }
 
@@ -50,19 +60,20 @@ html, body {
   position: relative;
   width: 160px;
   height: 170px;
-  transition: transform 0.25s ease;
+  transition: transform var(--pet-motion-base) var(--pet-ease-standard);
 }
 .pet:hover { transform: translateY(-3px); }
+.pet:active { transform: translateY(-1px) scale(0.985); }
 .pet:focus-visible {
   outline: 2px solid var(--pet-accent);
   outline-offset: -8px;
   border-radius: 48%;
 }
-.pet.alert { animation: pet-bounce 0.6s ease 2; }
-@keyframes pet-bounce {
+.pet.alert { animation: pet-notice var(--pet-motion-slow) var(--pet-ease-enter) 1; }
+@keyframes pet-notice {
   0%, 100% { transform: translateY(0); }
-  35% { transform: translateY(-12px) rotate(-4deg); }
-  70% { transform: translateY(-5px) rotate(3deg); }
+  40% { transform: translateY(-6px) rotate(-1.5deg); }
+  72% { transform: translateY(-2px) rotate(1deg); }
 }
 
 /* ========== deepseek酱 鲸鱼娘 sprite 帧动画 ==========
@@ -123,7 +134,13 @@ html, body {
   white-space: normal;
   word-break: break-word;
   text-align: center;
-  z-index: 6;
+  max-height: 78px;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+  overflow: hidden;
+  z-index: var(--pet-layer-bubble);
+  animation: pet-layer-in var(--pet-motion-base) var(--pet-ease-enter) both;
 }
 .pet-bubble::after {
   content: ''; position: absolute; bottom: -7px; left: 50%; transform: translateX(-50%);
@@ -144,12 +161,21 @@ html, body {
   border-radius: 8px;
   background: var(--pet-surface);
   box-shadow: var(--pet-shadow);
-  z-index: 8;
-  animation: menu-in 0.18s ease both;
+  z-index: var(--pet-layer-panel);
+  animation: pet-layer-in var(--pet-motion-base) var(--pet-ease-enter) both;
 }
-@keyframes menu-in {
-  from { opacity: 0; transform: translateY(6px); }
+@keyframes pet-layer-in {
+  from { opacity: 0; transform: translateY(4px); }
   to { opacity: 1; transform: none; }
+}
+.pet-menu.is-leaving,
+.pet-bubble.is-leaving {
+  pointer-events: none;
+  animation: pet-layer-out var(--pet-motion-fast) var(--pet-ease-exit) forwards;
+}
+@keyframes pet-layer-out {
+  from { opacity: 1; transform: none; }
+  to { opacity: 0; transform: translateY(3px); }
 }
 .pm-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
 .pm-kicker { display: block; color: var(--pet-muted); font-size: 10px; line-height: 1.2; }
@@ -157,20 +183,57 @@ html, body {
 .pm-count { display: block; margin-top: 2px; color: var(--pet-ink); font-size: 14px; line-height: 1.25; }
 .pm-close {
   width: 24px; height: 24px; border: 0; border-radius: 6px; background: transparent;
-  color: var(--pet-muted); font: 17px/1 'Segoe UI', sans-serif; cursor: pointer;
+  color: var(--pet-muted); cursor: pointer;
+  display: grid; place-items: center;
 }
+.pm-close .ui-icon { width: 14px; height: 14px; }
 .pm-close:hover, .pm-close:focus-visible { background: rgba(var(--pet-accent-rgb), 0.09); color: var(--pet-accent); }
 .pm-next {
   min-height: 30px; margin-top: 7px; padding-left: 8px; border-left: 2px solid var(--pet-info); color: var(--pet-muted); font-size: 10.5px; line-height: 1.4;
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
 }
+.pm-next.is-feedback { border-left-color: var(--pet-accent); color: var(--pet-ink2); }
+.pm-next.is-error { border-left-color: var(--pet-danger); color: var(--pet-danger); }
+.pet-menu.has-reminder .pm-next { display: none; }
+.pm-reminder {
+  width: 100%; min-height: 34px; margin-top: 8px; padding: 6px 8px;
+  border: 1px solid rgba(var(--pet-accent-rgb), 0.28); border-radius: 6px;
+  background: rgba(var(--pet-accent-rgb), 0.08); color: var(--pet-accent);
+  display: flex; align-items: center; gap: 6px; text-align: left;
+  font-family: inherit; font-size: 10.5px; line-height: 1.25; cursor: pointer;
+  transition: background-color var(--pet-motion-fast) var(--pet-ease-standard),
+    border-color var(--pet-motion-fast) var(--pet-ease-standard),
+    opacity var(--pet-motion-fast) var(--pet-ease-standard);
+}
+.pm-reminder .ui-icon { width: 13px; height: 13px; flex: 0 0 13px; }
+.pm-reminder span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pm-reminder:hover, .pm-reminder:focus-visible { background: rgba(var(--pet-accent-rgb), 0.14); border-color: rgba(var(--pet-accent-rgb), 0.42); }
+.pm-reminder:focus-visible { outline: 2px solid var(--pet-info); outline-offset: 1px; }
+.pm-reminder:disabled { cursor: wait; opacity: 0.62; }
+.pm-focus { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px; margin: 8px 0; padding: 8px; border: 1px solid var(--pet-rule); background: var(--pet-surface-subtle); }
+.pm-focus[aria-busy="true"] { border-color: rgba(var(--pet-accent-rgb), 0.28); }
+.pm-focus.hidden { display: none; }
+.pm-focus strong, .pm-focus span { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pm-focus strong { color: var(--pet-ink); font-size: 10.5px; }
+.pm-focus span { margin-top: 2px; color: var(--pet-primary); font: 700 14px/1 ui-monospace, Consolas, monospace; letter-spacing: 0; }
+.pm-focus-actions { display: flex; gap: 4px; }
+.pm-focus-btn { width: 27px; height: 27px; padding: 0; border: 1px solid var(--pet-rule); background: transparent; color: var(--pet-ink); display: grid; place-items: center; }
+.pm-focus-btn .ui-icon { width: 13px; height: 13px; }
+.pm-focus-btn.primary { border-color: var(--pet-primary); background: var(--pet-primary); color: #fff; }
+.pm-focus-btn:focus-visible { outline: 2px solid var(--pet-primary); outline-offset: 1px; }
+.pm-focus-btn:active, .pm-main:active, .pet-menu .pm-it:active, .pm-reminder:active { transform: scale(0.97); }
+.pm-focus-btn.is-busy .ui-icon { animation: pet-control-busy var(--pet-motion-loop) var(--pet-ease-standard) infinite alternate; }
+@keyframes pet-control-busy { to { opacity: 0.38; transform: scale(0.84); } }
 .pet-menu.has-overdue .pm-next { border-left-color: var(--pet-danger); color: var(--pet-ink2); }
 .pm-primary { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 8px; }
 .pm-main {
   min-width: 0; min-height: 38px; border: 1px solid var(--pet-primary); border-radius: 6px;
-  background: var(--pet-primary); color: #fff; font-family: inherit; font-size: 11.5px; font-weight: 600; line-height: 1.2;
-  display: flex; align-items: center; justify-content: center; gap: 4px; cursor: pointer;
+  background: var(--pet-primary); color: #fff; font-family: inherit; font-size: 11px; font-weight: 600; line-height: 1.2;
+  display: flex; align-items: center; justify-content: center; gap: 3px; cursor: pointer;
+  white-space: nowrap;
+  transition: filter var(--pet-motion-fast) var(--pet-ease-standard), transform var(--pet-motion-fast) var(--pet-ease-standard);
 }
+.pm-main .ui-icon { width: 13px; height: 13px; }
 .pm-main.secondary { border-color: rgba(76, 106, 146, 0.35); background: rgba(76, 106, 146, 0.09); color: var(--pet-info); }
 .pm-main:hover, .pm-main:focus-visible { filter: brightness(0.94); }
 .pm-grid {
@@ -182,8 +245,16 @@ html, body {
   background: transparent; color: var(--pet-ink2); font-family: inherit; font-size: 10.5px; font-weight: 500; line-height: 1.15;
   display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
   cursor: pointer;
+  transition: background-color var(--pet-motion-fast) var(--pet-ease-standard),
+    color var(--pet-motion-fast) var(--pet-ease-standard),
+    transform var(--pet-motion-fast) var(--pet-ease-standard);
 }
+.pet-menu .pm-it .ui-icon { width: 14px; height: 14px; }
 .pet-menu .pm-it:hover, .pet-menu .pm-it:focus-visible { background: rgba(var(--pet-accent-rgb), 0.09); color: var(--pet-accent); }
+.pet-menu[aria-busy="true"] [data-pet] { cursor: progress; }
+.pet-menu [data-pet]:disabled { opacity: 0.52; cursor: wait; }
+.pet-menu [data-pet][aria-busy="true"] { opacity: 1; background: rgba(var(--pet-accent-rgb), 0.1); color: var(--pet-accent); }
+.pet-menu [data-pet][aria-busy="true"] .ui-icon { animation: pet-control-busy var(--pet-motion-loop) var(--pet-ease-standard) infinite alternate; }
 .pm-main:focus-visible, .pm-it:focus-visible, .pm-close:focus-visible { outline: 2px solid var(--pet-info); outline-offset: 1px; }
 
 .hidden { display: none !important; }
@@ -194,6 +265,19 @@ html, body {
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
   }
+  .pet-menu,
+  .pet-bubble,
+  .pet-menu.is-leaving,
+  .pet-bubble.is-leaving,
+  .pet-sprite {
+    animation: none !important;
+  }
+  .pet-sprite {
+    background-position: 0 var(--sprite-y);
+  }
+  .pet.alert,
+  .pm-focus-btn.is-busy .ui-icon,
+  .pet-menu [data-pet][aria-busy="true"] .ui-icon { animation: none !important; }
 }
 
 body.dark {

@@ -4,6 +4,7 @@
   <meta charset="UTF-8">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data:;">
   <title>桌宠</title>
+  <link rel="stylesheet" href="../css/icons.css">
   <link rel="stylesheet" href="pet.css">
 </head>
 <body>
@@ -17,20 +18,31 @@
           <span class="pm-kicker" id="pet-menu-title">工作台</span>
           <strong class="pm-count" id="pet-menu-count">正在读取</strong>
         </div>
-        <button type="button" class="pm-close" id="pet-menu-close" aria-label="关闭快捷操作" title="关闭">×</button>
+        <button type="button" class="pm-close" id="pet-menu-close" aria-label="关闭快捷操作" title="关闭"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-i-x"></use></svg></button>
       </div>
-      <p class="pm-next" id="pet-menu-next">正在同步下一项任务…</p>
+      <p class="pm-next" id="pet-menu-next" role="status" aria-live="polite" aria-atomic="true">正在同步下一项任务…</p>
+      <button type="button" class="pm-reminder hidden" id="pet-reminder" aria-label="查看提醒任务">
+        <svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-i-external"></use></svg>
+        <span id="pet-reminder-text">查看提醒任务</span>
+      </button>
+      <div class="pm-focus hidden" id="pet-focus">
+        <div><strong id="pet-focus-title">正在专注</strong><span id="pet-focus-time">00:00</span></div>
+        <div class="pm-focus-actions">
+          <button type="button" class="pm-focus-btn" id="pet-focus-toggle" data-pet-focus="toggle" aria-label="暂停专注" title="暂停专注"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-i-pause"></use></svg></button>
+          <button type="button" class="pm-focus-btn primary" data-pet-focus="complete" aria-label="完成任务" title="完成任务"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-i-check"></use></svg></button>
+        </div>
+      </div>
       <div class="pm-primary" role="group" aria-label="主要操作">
-        <button type="button" class="pm-main" data-pet="new"><span aria-hidden="true">＋</span><span>新建任务</span></button>
-        <button type="button" class="pm-main secondary" data-pet="ai"><span aria-hidden="true">✎</span><span>问助手</span></button>
+        <button type="button" class="pm-main" data-pet="new"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-i-plus"></use></svg><span>新建任务</span></button>
+        <button type="button" class="pm-main secondary" data-pet="ai"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-i-message"></use></svg><span>问助手</span></button>
       </div>
       <div class="pm-grid" role="toolbar" aria-label="打开视图" aria-orientation="horizontal">
-        <button type="button" class="pm-it" data-pet="today" tabindex="0"><span aria-hidden="true">◧</span><span>今天</span></button>
-        <button type="button" class="pm-it" data-pet="board" tabindex="-1"><span aria-hidden="true">▤</span><span>看板</span></button>
-        <button type="button" class="pm-it" data-pet="cal" tabindex="-1"><span aria-hidden="true">▦</span><span>日历</span></button>
-        <button type="button" class="pm-it" data-pet="stat" tabindex="-1"><span aria-hidden="true">◫</span><span>统计</span></button>
-        <button type="button" class="pm-it" data-pet="trash" tabindex="-1"><span aria-hidden="true">⌫</span><span>回收站</span></button>
-        <button type="button" class="pm-it" data-pet="settings" tabindex="-1"><span aria-hidden="true">⚙</span><span>设置</span></button>
+        <button type="button" class="pm-it" data-pet="today" tabindex="0"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-i-today"></use></svg><span>今天</span></button>
+        <button type="button" class="pm-it" data-pet="board" tabindex="-1"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-i-board"></use></svg><span>看板</span></button>
+        <button type="button" class="pm-it" data-pet="cal" tabindex="-1"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-i-calendar"></use></svg><span>日历</span></button>
+        <button type="button" class="pm-it" data-pet="stat" tabindex="-1"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-i-stat"></use></svg><span>统计</span></button>
+        <button type="button" class="pm-it" data-pet="trash" tabindex="-1"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-i-trash"></use></svg><span>回收站</span></button>
+        <button type="button" class="pm-it" data-pet="settings" tabindex="-1"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-i-settings"></use></svg><span>设置</span></button>
       </div>
     </section>
     <!-- 桌宠本体（deepseek酱 鲸鱼娘 sprite 帧动画） -->
@@ -42,6 +54,7 @@
       </div>
     </div>
   </div>
+  <script src="../js/ui-icons.js"></script>
   <script src="pet.js"></script>
 </body>
 </html>
