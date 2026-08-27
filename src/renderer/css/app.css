@@ -2314,6 +2314,9 @@ body.dark .board-col { background: #171E25; }
 body.dark .cal-cell { background: var(--bg2); }
 body.dark .cal-btn { background: var(--bg2); }
 body.dark .btn.ghost { background: rgba(var(--accent-rgb), 0.15); }
+/* 墨案：深色下黛青提暗一档，保住白字对比度（#7DA2CE 对白字仅约 2.5:1） */
+body.dark .btn, body.dark .sidebar-create { background: #46688F; }
+body.dark .btn:hover, body.dark .sidebar-create:hover { background: #4F719C; }
 body.dark .msg.ai { background: transparent; border-left-color: rgba(var(--accent2-rgb), 0.48); }
 body.dark .msg.ai::before { border-color: var(--bg2); }
 body.dark .op-card { background: transparent; }

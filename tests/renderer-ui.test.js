@@ -2558,7 +2558,7 @@ test('暗色搜索聚焦保持深色背景，主操作色满足白字对比度',
   const petDark = petCss.match(/body\.dark\s*\{([\s\S]*?)\}/)[1];
   assert.ok(contrastRatio(cssVar(petRoot, 'pet-primary'), '#FFFFFF') >= 4.5);
   assert.ok(contrastRatio(cssVar(petDark, 'pet-primary'), '#FFFFFF') >= 4.5);
-  assert.match(petCss, /\.pm-main \{[\s\S]*?background: var\(--pet-primary\); color: #fff;/);
+  assert.match(petCss, /\.pm-main \{[\s\S]*?background: var\(--pet-primary\); color: #F7F6F2;/);
 });
 
 test('备忘录工作区具备可访问导航、编辑与完整 IPC', () => {

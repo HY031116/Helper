@@ -1,17 +1,20 @@
 /* ============ 桌宠样式 ============ */
 :root {
-  --pet-surface: rgba(255, 255, 255, 0.97);
-  --pet-surface-subtle: #F6F8FA;
-  --pet-ink: #17202B;
-  --pet-ink2: #354150;
-  --pet-muted: #66717F;
-  --pet-rule: #DCE1E7;
-  --pet-accent: #C1523E;
-  --pet-accent-rgb: 193, 82, 62;
-  --pet-primary: #C1523E;
-  --pet-info: #4C6A92;
-  --pet-danger: #C2413A;
-  --pet-shadow: 0 12px 30px rgba(23, 32, 43, 0.24);
+  /* 墨案 Ink Desk：与主窗口、面板同一张书桌 */
+  --pet-surface: rgba(247, 246, 242, 0.97);
+  --pet-surface-subtle: #EFEDE8;
+  --pet-ink: #26282B;
+  --pet-ink-rgb: 38, 40, 43;
+  --pet-ink2: #3E4147;
+  --pet-muted: #8A8D93;
+  --pet-rule: #DDDAD2;
+  --pet-accent: #B4533A;
+  --pet-accent-rgb: 180, 83, 58;
+  --pet-primary: #3D5A80;
+  --pet-info: #3D5A80;
+  --pet-info-rgb: 61, 90, 128;
+  --pet-danger: #B4533A;
+  --pet-shadow: 0 12px 30px rgba(38, 40, 43, 0.24);
   --pet-layer-character: 5;
   --pet-layer-bubble: 10;
   --pet-layer-panel: 20;
@@ -65,7 +68,7 @@ html, body {
 .pet:hover { transform: translateY(-3px); }
 .pet:active { transform: translateY(-1px) scale(0.985); }
 .pet:focus-visible {
-  outline: 2px solid var(--pet-accent);
+  outline: 2px solid var(--pet-info);
   outline-offset: -8px;
   border-radius: 48%;
 }
@@ -147,8 +150,8 @@ html, body {
   border-left: 8px solid transparent; border-right: 8px solid transparent;
   border-top: 8px solid var(--pet-surface);
 }
-.pet-bubble.hot { background: #FFF4F2; border-color: rgba(194, 65, 58, 0.28); color: var(--pet-danger); }
-.pet-bubble.hot::after { border-top-color: #FFF4F2; }
+.pet-bubble.hot { background: #F8EDE8; border-color: rgba(180, 83, 58, 0.30); color: var(--pet-danger); }
+.pet-bubble.hot::after { border-top-color: #F8EDE8; }
 
 /* 快捷菜单 */
 .pet-menu {
@@ -187,18 +190,18 @@ html, body {
   display: grid; place-items: center;
 }
 .pm-close .ui-icon { width: 14px; height: 14px; }
-.pm-close:hover, .pm-close:focus-visible { background: rgba(var(--pet-accent-rgb), 0.09); color: var(--pet-accent); }
+.pm-close:hover, .pm-close:focus-visible { background: rgba(var(--pet-ink-rgb), 0.06); color: var(--pet-ink2); }
 .pm-next {
   min-height: 30px; margin-top: 7px; padding-left: 8px; border-left: 2px solid var(--pet-info); color: var(--pet-muted); font-size: 10.5px; line-height: 1.4;
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
 }
-.pm-next.is-feedback { border-left-color: var(--pet-accent); color: var(--pet-ink2); }
+.pm-next.is-feedback { border-left-color: rgba(var(--pet-ink-rgb), 0.35); color: var(--pet-ink2); }
 .pm-next.is-error { border-left-color: var(--pet-danger); color: var(--pet-danger); }
 .pet-menu.has-reminder .pm-next { display: none; }
 .pm-reminder {
   width: 100%; min-height: 34px; margin-top: 8px; padding: 6px 8px;
-  border: 1px solid rgba(var(--pet-accent-rgb), 0.28); border-radius: 6px;
-  background: rgba(var(--pet-accent-rgb), 0.08); color: var(--pet-accent);
+  border: 1px solid rgba(var(--pet-info-rgb), 0.30); border-radius: 6px;
+  background: rgba(var(--pet-info-rgb), 0.08); color: var(--pet-info);
   display: flex; align-items: center; gap: 6px; text-align: left;
   font-family: inherit; font-size: 10.5px; line-height: 1.25; cursor: pointer;
   transition: background-color var(--pet-motion-fast) var(--pet-ease-standard),
@@ -207,11 +210,11 @@ html, body {
 }
 .pm-reminder .ui-icon { width: 13px; height: 13px; flex: 0 0 13px; }
 .pm-reminder span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.pm-reminder:hover, .pm-reminder:focus-visible { background: rgba(var(--pet-accent-rgb), 0.14); border-color: rgba(var(--pet-accent-rgb), 0.42); }
+.pm-reminder:hover, .pm-reminder:focus-visible { background: rgba(var(--pet-info-rgb), 0.14); border-color: rgba(var(--pet-info-rgb), 0.42); }
 .pm-reminder:focus-visible { outline: 2px solid var(--pet-info); outline-offset: 1px; }
 .pm-reminder:disabled { cursor: wait; opacity: 0.62; }
 .pm-focus { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px; margin: 8px 0; padding: 8px; border: 1px solid var(--pet-rule); background: var(--pet-surface-subtle); }
-.pm-focus[aria-busy="true"] { border-color: rgba(var(--pet-accent-rgb), 0.28); }
+.pm-focus[aria-busy="true"] { border-color: rgba(var(--pet-info-rgb), 0.30); }
 .pm-focus.hidden { display: none; }
 .pm-focus strong, .pm-focus span { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pm-focus strong { color: var(--pet-ink); font-size: 10.5px; }
@@ -219,7 +222,7 @@ html, body {
 .pm-focus-actions { display: flex; gap: 4px; }
 .pm-focus-btn { width: 27px; height: 27px; padding: 0; border: 1px solid var(--pet-rule); background: transparent; color: var(--pet-ink); display: grid; place-items: center; }
 .pm-focus-btn .ui-icon { width: 13px; height: 13px; }
-.pm-focus-btn.primary { border-color: var(--pet-primary); background: var(--pet-primary); color: #fff; }
+.pm-focus-btn.primary { border-color: var(--pet-primary); background: var(--pet-primary); color: #F7F6F2; }
 .pm-focus-btn:focus-visible { outline: 2px solid var(--pet-primary); outline-offset: 1px; }
 .pm-focus-btn:active, .pm-main:active, .pet-menu .pm-it:active, .pm-reminder:active { transform: scale(0.97); }
 .pm-focus-btn.is-busy .ui-icon { animation: pet-control-busy var(--pet-motion-loop) var(--pet-ease-standard) infinite alternate; }
@@ -228,13 +231,13 @@ html, body {
 .pm-primary { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 8px; }
 .pm-main {
   min-width: 0; min-height: 38px; border: 1px solid var(--pet-primary); border-radius: 6px;
-  background: var(--pet-primary); color: #fff; font-family: inherit; font-size: 11px; font-weight: 600; line-height: 1.2;
+  background: var(--pet-primary); color: #F7F6F2; font-family: inherit; font-size: 11px; font-weight: 600; line-height: 1.2;
   display: flex; align-items: center; justify-content: center; gap: 3px; cursor: pointer;
   white-space: nowrap;
   transition: filter var(--pet-motion-fast) var(--pet-ease-standard), transform var(--pet-motion-fast) var(--pet-ease-standard);
 }
 .pm-main .ui-icon { width: 13px; height: 13px; }
-.pm-main.secondary { border-color: rgba(76, 106, 146, 0.35); background: rgba(76, 106, 146, 0.09); color: var(--pet-info); }
+.pm-main.secondary { border-color: rgba(var(--pet-info-rgb), 0.35); background: rgba(var(--pet-info-rgb), 0.09); color: var(--pet-info); }
 .pm-main:hover, .pm-main:focus-visible { filter: brightness(0.94); }
 .pm-grid {
   display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px;
@@ -250,10 +253,10 @@ html, body {
     transform var(--pet-motion-fast) var(--pet-ease-standard);
 }
 .pet-menu .pm-it .ui-icon { width: 14px; height: 14px; }
-.pet-menu .pm-it:hover, .pet-menu .pm-it:focus-visible { background: rgba(var(--pet-accent-rgb), 0.09); color: var(--pet-accent); }
+.pet-menu .pm-it:hover, .pet-menu .pm-it:focus-visible { background: rgba(var(--pet-info-rgb), 0.09); color: var(--pet-info); }
 .pet-menu[aria-busy="true"] [data-pet] { cursor: progress; }
 .pet-menu [data-pet]:disabled { opacity: 0.52; cursor: wait; }
-.pet-menu [data-pet][aria-busy="true"] { opacity: 1; background: rgba(var(--pet-accent-rgb), 0.1); color: var(--pet-accent); }
+.pet-menu [data-pet][aria-busy="true"] { opacity: 1; background: rgba(var(--pet-info-rgb), 0.1); color: var(--pet-info); }
 .pet-menu [data-pet][aria-busy="true"] .ui-icon { animation: pet-control-busy var(--pet-motion-loop) var(--pet-ease-standard) infinite alternate; }
 .pm-main:focus-visible, .pm-it:focus-visible, .pm-close:focus-visible { outline: 2px solid var(--pet-info); outline-offset: 1px; }
 
@@ -281,19 +284,20 @@ html, body {
 }
 
 body.dark {
-  --pet-surface: rgba(27, 34, 42, 0.98);
-  --pet-surface-subtle: #161C23;
-  --pet-ink: #EEF2F5;
-  --pet-ink2: #CDD5DD;
-  --pet-muted: #98A3AF;
-  --pet-rule: #303A45;
-  --pet-accent: #E87058;
-  --pet-accent-rgb: 232, 112, 88;
-  --pet-primary: #B54A38;
-  --pet-info: #7F9BC2;
-  --pet-danger: #DE7068;
+  --pet-surface: rgba(30, 33, 39, 0.98);
+  --pet-surface-subtle: #191C21;
+  --pet-ink: #E8EAED;
+  --pet-ink-rgb: 232, 234, 237;
+  --pet-ink2: #C6C9CE;
+  --pet-muted: #8B8F98;
+  --pet-rule: #2C3038;
+  --pet-accent: #D0705A;
+  --pet-accent-rgb: 208, 112, 90;
+  --pet-primary: #46688F;
+  --pet-info: #7DA2CE;
+  --pet-info-rgb: 125, 162, 206;
+  --pet-danger: #D0705A;
   --pet-shadow: 0 12px 30px rgba(0, 0, 0, 0.42);
 }
 body.dark .pet-bubble.hot { background: #352220; }
 body.dark .pet-bubble.hot::after { border-top-color: #352220; }
-body.dark .pm-main.secondary { border-color: rgba(127, 155, 194, 0.36); background: rgba(127, 155, 194, 0.12); }
