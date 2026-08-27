@@ -542,7 +542,7 @@ html, body {
   background: var(--rule);
   transition: background var(--motion-base) var(--ease-standard), top var(--motion-base) var(--ease-standard), bottom var(--motion-base) var(--ease-standard);
 }
-.task-row:has(.statectl.s-doing)::before { background: var(--accent); }
+.task-row:has(.statectl.s-doing)::before { background: var(--accent2); }
 .task-row.done::before { background: var(--ok); }
 .task-row.overdue-row::before { background: var(--danger); }
 .task-row:hover {
@@ -613,7 +613,7 @@ html, body {
   font-weight: 500; font-family: inherit;
 }
 .statectl.s-todo { color: var(--muted); }
-.statectl.s-doing { color: var(--accent); border-color: rgba(var(--accent-rgb), 0.3); background: rgba(var(--accent-rgb), 0.07); }
+.statectl.s-doing { color: var(--accent2); border-color: rgba(var(--accent2-rgb), 0.3); background: rgba(var(--accent2-rgb), 0.07); }
 .statectl.s-done { color: var(--ok); border-color: rgba(var(--ok-rgb), 0.35); background: rgba(var(--ok-rgb), 0.07); }
 .statectl:hover { opacity: 0.85; transform: scale(1.04); }
 .tag-chip {
@@ -933,15 +933,16 @@ html, body {
 .workflow-task strong { display: block; overflow-wrap: anywhere; font-size: 12px; }
 .workflow-task span { display: block; margin-top: 2px; color: var(--muted); font-size: 10.5px; }
 .workflow-item.done .workflow-task strong { color: var(--muted); text-decoration: line-through; }
-.workflow-item.active .workflow-task strong { color: var(--accent); }
+.workflow-item.active .workflow-task strong { color: var(--accent2); }
 .workflow-item-controls { display: flex; align-items: center; justify-content: flex-end; gap: 5px; }
 .workflow-minutes { width: 58px; height: 28px; padding: 0 6px; border: 1px solid var(--rule); background: var(--bg); color: var(--ink); }
 .workflow-order { display: inline-flex; }
 .workflow-icon-btn { width: 27px; height: 27px; display: grid; place-items: center; border: 0; background: transparent; color: var(--muted); }
-.workflow-icon-btn:hover, .workflow-icon-btn:focus-visible { color: var(--accent); background: var(--accent-weak); }
+.workflow-icon-btn:hover, .workflow-icon-btn:focus-visible { color: var(--accent2); background: rgba(var(--accent2-rgb), 0.08); }
 .workflow-icon-btn .ui-icon { width: 13px; height: 13px; }
 .workflow-focus { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 14px; }
-.workflow-clock { margin-top: 5px; font: 700 24px/1 ui-monospace, Consolas, monospace; color: var(--accent); letter-spacing: 0; }
+/* 专注计时：墨青工作色，不再抢红 */
+.workflow-clock { margin-top: 5px; font: 700 24px/1 ui-monospace, Consolas, monospace; color: var(--accent2); letter-spacing: 0; }
 .workflow-focus-meta { color: var(--muted); font-size: 10.5px; margin-top: 5px; }
 .workflow-interrupt { display: flex; gap: 6px; width: 100%; margin-top: 8px; }
 .workflow-interrupt input, .workflow-review textarea { border: 1px solid var(--rule); background: var(--bg); color: var(--ink); }
@@ -1106,21 +1107,22 @@ mark { background: rgba(var(--warn-rgb), 0.25); color: inherit; border-radius: 2
 .quick-preview.fallback .quick-preview-label { color: var(--warn); }
 
 /* ============ 按钮 ============ */
+/* 墨案：主操作按钮用黛青（工作色），朱砂只留给危险确认与 AI */
 .btn {
   border: none; border-radius: 8px; padding: 9px 18px;
   font-size: 13px; font-weight: 600; cursor: pointer;
-  font-family: inherit; background: var(--grad); color: #fff;
+  font-family: inherit; background: var(--accent2); color: #F7F6F2;
   transition: color var(--motion-fast) var(--ease-standard),
     background-color var(--motion-fast) var(--ease-standard),
     border-color var(--motion-fast) var(--ease-standard),
     box-shadow var(--motion-fast) var(--ease-standard),
     opacity var(--motion-fast) var(--ease-standard),
     transform var(--motion-instant) var(--ease-standard);
-  box-shadow: 0 2px 8px rgba(var(--accent-rgb), 0.2);
+  box-shadow: none;
   letter-spacing: 0;
 }
-.btn:hover { background: var(--accent-hover); box-shadow: 0 4px 14px rgba(var(--accent-rgb), 0.25); transform: translateY(-1px); }
-.btn:active { transform: translateY(0) scale(0.98); box-shadow: 0 1px 4px rgba(var(--accent-rgb), 0.18); }
+.btn:hover { background: #324E70; box-shadow: none; transform: translateY(-1px); }
+.btn:active { transform: translateY(0) scale(0.98); box-shadow: none; }
 .btn:disabled { opacity: 0.5; cursor: not-allowed; transform: none; box-shadow: none; }
 .btn[aria-busy="true"]:not(.is-stop) { display: inline-flex; align-items: center; justify-content: center; gap: 7px; }
 .btn[aria-busy="true"]:not(.is-stop)::before {
@@ -1129,8 +1131,8 @@ mark { background: rgba(var(--warn-rgb), 0.25); color: inherit; border-radius: 2
   animation: buttonBusySpin var(--motion-loop) linear infinite;
 }
 @keyframes buttonBusySpin { to { transform: rotate(360deg); } }
-.btn.ghost { background: rgba(var(--accent-rgb), 0.08); color: var(--accent); box-shadow: none; }
-.btn.ghost:hover { background: rgba(var(--accent-rgb), 0.14); }
+.btn.ghost { background: rgba(var(--ink-rgb), 0.05); color: var(--ink2); box-shadow: none; }
+.btn.ghost:hover { background: rgba(var(--ink-rgb), 0.09); color: var(--ink); }
 .btn.neutral { border: 1px solid var(--rule); background: var(--bg3); color: var(--ink2); box-shadow: none; }
 .btn.neutral:hover { border-color: var(--muted); background: var(--bg2); color: var(--ink); box-shadow: none; }
 .btn.danger { background: rgba(var(--danger-rgb), 0.1); color: var(--danger); box-shadow: none; }
