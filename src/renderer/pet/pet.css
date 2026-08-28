@@ -1,20 +1,20 @@
 /* ============ 桌宠样式 ============ */
 :root {
-  /* 墨案 Ink Desk：与主窗口、面板同一张书桌 */
-  --pet-surface: rgba(247, 246, 242, 0.97);
-  --pet-surface-subtle: #EFEDE8;
-  --pet-ink: #26282B;
-  --pet-ink-rgb: 38, 40, 43;
-  --pet-ink2: #3E4147;
-  --pet-muted: #8A8D93;
-  --pet-rule: #DDDAD2;
-  --pet-accent: #B4533A;
-  --pet-accent-rgb: 180, 83, 58;
-  --pet-primary: #3D5A80;
-  --pet-info: #3D5A80;
-  --pet-info-rgb: 61, 90, 128;
-  --pet-danger: #B4533A;
-  --pet-shadow: 0 12px 30px rgba(38, 40, 43, 0.24);
+  /* 图板 Drafting Board：与主窗口同一张绘图桌 */
+  --pet-surface: rgba(247, 248, 249, 0.97);
+  --pet-surface-subtle: #ECEEEF;
+  --pet-ink: #22272C;
+  --pet-ink-rgb: 34, 39, 44;
+  --pet-ink2: #3A4148;
+  --pet-muted: #737B83;
+  --pet-rule: #D8DCDA;
+  --pet-accent: #B4442E;
+  --pet-accent-rgb: 180, 68, 46;
+  --pet-primary: #2E6390;
+  --pet-info: #2E6390;
+  --pet-info-rgb: 46, 99, 144;
+  --pet-danger: #B4442E;
+  --pet-shadow: 0 12px 30px rgba(34, 39, 44, 0.24);
   --pet-layer-character: 5;
   --pet-layer-bubble: 10;
   --pet-layer-panel: 20;
@@ -150,8 +150,8 @@ html, body {
   border-left: 8px solid transparent; border-right: 8px solid transparent;
   border-top: 8px solid var(--pet-surface);
 }
-.pet-bubble.hot { background: #F8EDE8; border-color: rgba(180, 83, 58, 0.30); color: var(--pet-danger); }
-.pet-bubble.hot::after { border-top-color: #F8EDE8; }
+.pet-bubble.hot { background: #F6E9E5; border-color: rgba(180, 68, 46, 0.32); color: var(--pet-danger); }
+.pet-bubble.hot::after { border-top-color: #F6E9E5; }
 
 /* 快捷菜单 */
 .pet-menu {
@@ -200,7 +200,7 @@ html, body {
 .pet-menu.has-reminder .pm-next { display: none; }
 .pm-reminder {
   width: 100%; min-height: 34px; margin-top: 8px; padding: 6px 8px;
-  border: 1px solid rgba(var(--pet-info-rgb), 0.30); border-radius: 6px;
+  border: 1px solid rgba(var(--pet-info-rgb), 0.32); border-radius: 6px;
   background: rgba(var(--pet-info-rgb), 0.08); color: var(--pet-info);
   display: flex; align-items: center; gap: 6px; text-align: left;
   font-family: inherit; font-size: 10.5px; line-height: 1.25; cursor: pointer;
@@ -210,17 +210,17 @@ html, body {
 }
 .pm-reminder .ui-icon { width: 13px; height: 13px; flex: 0 0 13px; }
 .pm-reminder span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.pm-reminder:hover, .pm-reminder:focus-visible { background: rgba(var(--pet-info-rgb), 0.14); border-color: rgba(var(--pet-info-rgb), 0.42); }
+.pm-reminder:hover, .pm-reminder:focus-visible { background: rgba(var(--pet-info-rgb), 0.14); border-color: rgba(var(--pet-info-rgb), 0.44); }
 .pm-reminder:focus-visible { outline: 2px solid var(--pet-info); outline-offset: 1px; }
 .pm-reminder:disabled { cursor: wait; opacity: 0.62; }
 .pm-focus { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px; margin: 8px 0; padding: 8px; border: 1px solid var(--pet-rule); background: var(--pet-surface-subtle); }
-.pm-focus[aria-busy="true"] { border-color: rgba(var(--pet-info-rgb), 0.30); }
+.pm-focus[aria-busy="true"] { border-color: rgba(var(--pet-info-rgb), 0.32); }
 .pm-focus.hidden { display: none; }
 .pm-focus strong, .pm-focus span { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pm-focus strong { color: var(--pet-ink); font-size: 10.5px; }
 .pm-focus span { margin-top: 2px; color: var(--pet-primary); font: 700 14px/1 ui-monospace, Consolas, monospace; letter-spacing: 0; }
 .pm-focus-actions { display: flex; gap: 4px; }
-.pm-focus-btn { width: 27px; height: 27px; padding: 0; border: 1px solid var(--pet-rule); background: transparent; color: var(--pet-ink); display: grid; place-items: center; }
+.pm-focus-btn { width: 27px; height: 27px; padding: 0; border: 1px solid var(--pet-rule); border-radius: 5px; background: transparent; color: var(--pet-ink); display: grid; place-items: center; }
 .pm-focus-btn .ui-icon { width: 13px; height: 13px; }
 .pm-focus-btn.primary { border-color: var(--pet-primary); background: var(--pet-primary); color: #F7F6F2; }
 .pm-focus-btn:focus-visible { outline: 2px solid var(--pet-primary); outline-offset: 1px; }
@@ -237,7 +237,7 @@ html, body {
   transition: filter var(--pet-motion-fast) var(--pet-ease-standard), transform var(--pet-motion-fast) var(--pet-ease-standard);
 }
 .pm-main .ui-icon { width: 13px; height: 13px; }
-.pm-main.secondary { border-color: rgba(var(--pet-info-rgb), 0.35); background: rgba(var(--pet-info-rgb), 0.09); color: var(--pet-info); }
+.pm-main.secondary { border-color: rgba(var(--pet-info-rgb), 0.36); background: rgba(var(--pet-info-rgb), 0.09); color: var(--pet-info); }
 .pm-main:hover, .pm-main:focus-visible { filter: brightness(0.94); }
 .pm-grid {
   display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px;
@@ -284,20 +284,20 @@ html, body {
 }
 
 body.dark {
-  --pet-surface: rgba(30, 33, 39, 0.98);
-  --pet-surface-subtle: #191C21;
-  --pet-ink: #E8EAED;
-  --pet-ink-rgb: 232, 234, 237;
-  --pet-ink2: #C6C9CE;
-  --pet-muted: #8B8F98;
-  --pet-rule: #2C3038;
-  --pet-accent: #D0705A;
-  --pet-accent-rgb: 208, 112, 90;
-  --pet-primary: #46688F;
-  --pet-info: #7DA2CE;
-  --pet-info-rgb: 125, 162, 206;
-  --pet-danger: #D0705A;
+  --pet-surface: rgba(26, 32, 38, 0.98);
+  --pet-surface-subtle: #161B20;
+  --pet-ink: #DDE3E7;
+  --pet-ink-rgb: 221, 227, 231;
+  --pet-ink2: #BEC7CD;
+  --pet-muted: #8A939B;
+  --pet-rule: #2A333B;
+  --pet-accent: #D3765F;
+  --pet-accent-rgb: 211, 118, 95;
+  --pet-primary: #3F78A8;
+  --pet-info: #6FA3CF;
+  --pet-info-rgb: 111, 163, 207;
+  --pet-danger: #D3765F;
   --pet-shadow: 0 12px 30px rgba(0, 0, 0, 0.42);
 }
-body.dark .pet-bubble.hot { background: #352220; }
-body.dark .pet-bubble.hot::after { border-top-color: #352220; }
+body.dark .pet-bubble.hot { background: #33221F; }
+body.dark .pet-bubble.hot::after { border-top-color: #33221F; }

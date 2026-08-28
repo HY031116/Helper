@@ -56,7 +56,7 @@ function createMainWindow() {
     title: '工作台助手',
     icon: APP_ICON_PATH,
     frame: false, // 无原生标题栏，使用自定义标题栏（避免双份窗口管理按钮）
-    backgroundColor: '#f6f7fb',
+    backgroundColor: '#ECEEEF',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -232,7 +232,7 @@ function createTaskAgentWindow() {
     resizable: true,
     alwaysOnTop: true,
     skipTaskbar: true,
-    backgroundColor: '#F7F6F2',
+    backgroundColor: '#F7F8F9',
     icon: APP_ICON_PATH,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),

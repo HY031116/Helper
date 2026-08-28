@@ -169,8 +169,9 @@ test('应用品牌图标覆盖标题栏、窗口、托盘、通知和 Windows �
   assert.match(dataPathSetup, /if \(isolatedDataArg\)[\s\S]*?app\.setPath\('userData', isolatedRoot\)/);
   assert.match(dataPathSetup, /else \{[\s\S]*?app\.setPath\('userData', path\.join\(app\.getPath\('appData'\), 'work-helper'\)\)/);
   assert.ok(dataPathSetup.indexOf("app.setPath('userData'") < main.indexOf("const store = require('./main/store')"));
-  assert.match(appIconSvg, /<rect[^>]+fill="#C1523E"/);
-  assert.match(appIconSvg, /<circle[^>]+fill="#FFFFFF"/);
+  assert.match(appIconSvg, /<rect[^>]+fill="#2E6390"/);
+  assert.match(appIconSvg, /<path[^>]+fill="#FFFFFF"/);
+  assert.match(appIconSvg, /<circle[^>]+fill="#2E6390"/);
   assert.strictEqual(appIconIco.readUInt16LE(2), 1);
   assert.strictEqual(appIconIco.readUInt16LE(4), 9);
   [16, 20, 24, 32, 40, 48, 64, 128, 256, 512].forEach((size) => {
@@ -2059,8 +2060,8 @@ test('任务弹窗固定操作区并让字段区独立滚动', () => {
 });
 
 test('界面颜色与间距由统一设计令牌驱动', () => {
-  assert.match(css, /--accent-hover: #9E4832/);
-  assert.match(css, /--muted-rgb: 138, 141, 147/);
+  assert.match(css, /--accent-hover: #A03627/);
+  assert.match(css, /--muted-rgb: 115, 123, 131/);
   assert.match(css, /--control-md: 36px/);
   assert.doesNotMatch(css, /rgba\((?:196, 69, 59|199, 138, 43|62, 142, 90|122, 111, 96|240, 140, 80)/);
   assert.doesNotMatch(css, /#E8743B/i);
@@ -2096,7 +2097,7 @@ test('统计与周报提供准确图表语义、空状态和完整操作反馈',
   assert.match(renderStatSource, /class="stat-card rate"/);
   assert.match(renderStatSource, /class="trend-column\$\{i === trend\.length - 1 \? ' today' : ''\}"/);
   assert.match(css, /\.stat-card\.done \.sc-v \{ color: var\(--ok\); \}/);
-  assert.match(css, /\.trend-column\.today \.trend-bar \{ background: var\(--accent\);/);
+  assert.match(css, /\.trend-column\.today \.trend-bar \{ background: var\(--ink\);/);
   assert.match(renderStatSource, /role="radio" aria-checked="\$\{reportWeek === 0\}"/);
   assert.match(renderStatSource, /x\.setAttribute\('aria-checked', 'false'\)/);
   assert.match(renderStatSource, /\$\('#report-preview'\)\.textContent = ''/);
@@ -2218,7 +2219,7 @@ test('看板按持久化顺序渲染并区分同列与跨列落点', () => {
   assert.strictEqual(item.classList.contains('drop-before'), false);
   assert.strictEqual(item.classList.contains('drop-after'), false);
   assert.match(css, /\.bc-card-item\.drop-before \{ box-shadow: 0 -3px/);
-  assert.match(css, /\.col-drop \.bc-head \{ color: var\(--accent\); \}/);
+  assert.match(css, /\.col-drop \.bc-head \{ color: var\(--accent2\); \}/);
 });
 
 test('看板状态菜单提供非拖拽路径并在重绘后恢复焦点', async () => {
@@ -2473,7 +2474,7 @@ test('设置页提供章节导航并将焦点送到真实内容分组', () => {
   assert.match(app, /id="settings-shortcuts" tabindex="-1" aria-labelledby="settings-shortcuts-title"/);
   assert.match(app, /id="settings-danger" tabindex="-1" aria-labelledby="settings-danger-title"/);
   assert.match(css, /\.settings-nav \{[^}]*position: sticky;[^}]*overflow-x: auto;/);
-  assert.match(css, /\.settings-nav-item\.active \{[^}]*border-bottom-color: var\(--accent\);/);
+  assert.match(css, /\.settings-nav-item\.active \{[^}]*border-bottom-color: var\(--accent2\);/);
   assert.match(css, /\.settings-nav-item\.danger\.active \{[^}]*border-bottom-color: var\(--danger\);/);
   assert.match(css, /\.set-group \{[^}]*scroll-margin-top: 52px;/);
 
