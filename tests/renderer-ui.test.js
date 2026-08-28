@@ -3125,6 +3125,63 @@ test('桌宠面板正文保留流开始防护且完成事件不带文案', () =>
   assert.match(petPanelApp, /chatState\.textContent = message;/);
 });
 
+test('任务小窗组合步骤预览一次确认整组执行', async () => {
+  const calls = { preview: [], apply: [] };
+  const previewResult = {
+    ok: true,
+    type: 'task_action_preview',
+    multi: true,
+    summary: '准备对「独立小窗的任务」连续执行 2 步',
+    steps: [
+      { intent: 'postpone', summary: '准备把「独立小窗的任务」顺延 2 天', fields: [{ label: '截止时间', before: '2026-08-28 18:00', after: '2026-08-30 18:00' }] },
+      { intent: 'start', summary: '准备开始「独立小窗的任务」', fields: [{ label: '状态', before: 'todo', after: '进行中' }] }
+    ],
+    action: { taskId: 42, actions: [{ intent: 'postpone', params: { days: 2 } }, { intent: 'start', params: {} }] }
+  };
+  const api = {
+    on: (channel, cb) => { api.__session = cb; },
+    taskAgent: { open: async () => ({ ok: true }), close: () => {} },
+    ai: {
+      onProgress: () => {},
+      previewTaskAction: async (taskId, text) => {
+        calls.preview.push({ taskId, text });
+        return JSON.parse(JSON.stringify(previewResult));
+      },
+      applyTaskAction: async (previewId) => {
+        calls.apply.push(previewId);
+        return { ok: true, type: 'plan', message: '已完成 2 项操作：\n· 顺延\n· 开始', undoable: true, undo: { action: 'restoreAgentTransaction', transactionId: 't-1' } };
+      },
+      handle: async () => ({ type: 'chat', message: '不应回退全局对话' }),
+      resolve: async () => ({}),
+      undo: async () => ({ ok: true })
+    }
+  };
+  const { elements, run } = loadTaskAgentWindowRuntime(api);
+  api.__session({ taskId: 42, title: '独立小窗的任务', draft: '', workLogId: '', workLogKind: '' });
+
+  await run('sendPrompt("顺延两天然后开始做")');
+  assert.strictEqual(calls.preview.length, 1);
+  const thread = elements['#ta-thread'];
+  const lastMessage = thread.children[thread.children.length - 1];
+  const previewCard = lastMessage.children.find((child) => child.classList.contains('ta-preview'));
+  assert.ok(previewCard, '应渲染组合预览卡');
+  assert.match(previewCard.children.find((child) => child.classList.contains('ta-preview-summary')).textContent, /连续执行 2 步/);
+  const stepsBlock = previewCard.children.find((child) => child.classList.contains('ta-preview-fields'));
+  assert.strictEqual(stepsBlock.children.length, 2);
+  assert.match(stepsBlock.children[0].children[0].textContent, /1\. 准备把「独立小窗的任务」顺延 2 天/);
+  assert.match(stepsBlock.children[0].children[1].textContent, /截止时间：2026-08-30 18:00/);
+  assert.match(stepsBlock.children[1].children[0].textContent, /2\. 准备开始「独立小窗的任务」/);
+  assert.match(stepsBlock.children[1].children[1].textContent, /状态：进行中/);
+  const actions = previewCard.children.find((child) => child.classList.contains('ta-preview-actions'));
+  const applyBtn = actions.children.find((button) => button.classList.contains('primary'));
+  assert.strictEqual(applyBtn.textContent, '确认执行 2 步');
+
+  await applyBtn.listeners.click();
+  assert.strictEqual(calls.apply.length, 1);
+  const resultMessage = thread.children[thread.children.length - 1];
+  assert.match(resultMessage.querySelector('.ta-text').textContent, /已完成 2 项操作/);
+});
+
 test('模型流被中断时思考块在轮次收尾处折叠而不是悬浮成回答', async () => {
   // 主窗口：请求失败路径收尾思考块
   const makeEl = (cls) => {

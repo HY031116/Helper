@@ -358,6 +358,43 @@ test('任务上下文 Agent：无具体步骤时不会写入占位拆分', async
   assert.deepStrictEqual(store.getTask(task.id).children, []);
 });
 
+test('真实模型：复合破坏性请求不进入工具循环，回组合确认管线', async () => {
+  reset();
+  store.updateSettings({
+    aiStage: 'llm', aiProvider: 'custom', aiBaseUrl: 'https://example.invalid/v1', aiApiKey: 'test-key', aiModel: 'test-model'
+  });
+  const originalFetch = global.fetch;
+  const bodies = [];
+  global.fetch = async (url, options) => {
+    bodies.push(JSON.parse(options.body));
+    return {
+      ok: true,
+      json: async () => ({ choices: [{ message: { content: JSON.stringify({
+        schemaVersion: 1,
+        confidence: 'high',
+        actions: [
+          { intent: 'create', title: '准备发布' },
+          { intent: 'delete', target: '旧任务' }
+        ]
+      }) } }] })
+    };
+  };
+  try {
+    store.createTask({ title: '旧任务', status: 'todo' });
+    const result = await ai.handleAuto('新建一项准备发布，然后删除旧任务');
+    // 工具未启用：模型只能返回组合意图 JSON，不能真执行创建
+    assert.strictEqual(bodies[0].tools, undefined);
+    // delete 不允许进组合计划 → 澄清，且没有执行任何操作
+    assert.strictEqual(result.type, 'clarify');
+    assert.strictEqual(result.intent, 'plan');
+    assert.strictEqual(store.getAllTasks().filter((task) => task.title === '准备发布').length, 0);
+    assert.ok(store.getAllTasks().some((task) => task.title === '旧任务'));
+  } finally {
+    global.fetch = originalFetch;
+    store.updateSettings({ aiStage: 'mock' });
+  }
+});
+
 test('真实模型：纯对话被截断时加大预算重试并返回完整回复', async () => {
   reset();
   store.updateSettings({
@@ -379,6 +416,180 @@ test('真实模型：纯对话被截断时加大预算重试并返回完整回�
     assert.match(result.message, /预算/);
     assert.strictEqual(bodies[0].max_tokens, 3072);
     assert.strictEqual(bodies[1].max_tokens, 8192);
+  } finally {
+    global.fetch = originalFetch;
+    store.updateSettings({ aiStage: 'mock' });
+  }
+});
+
+test('真实模型：对话入口的只读调查后回答标记为 chat 而不是查询', async () => {
+  reset();
+  resetMemos();
+  store.updateSettings({
+    aiStage: 'llm', aiProvider: 'custom', aiBaseUrl: 'https://example.invalid/v1', aiApiKey: 'test-key', aiModel: 'test-model'
+  });
+  const originalFetch = global.fetch;
+  const bodies = [];
+  let call = 0;
+  global.fetch = async (url, options) => {
+    call += 1;
+    bodies.push(JSON.parse(options.body));
+    if (call === 1) {
+      return { ok: true, json: async () => ({ choices: [{ message: { content: null, tool_calls: [{
+        id: 'call-0', type: 'function', function: { name: 'memo_query', arguments: JSON.stringify({ query: '续约' }) }
+      }] } }] }) };
+    }
+    return { ok: true, json: async () => ({ choices: [{ message: { content: '建议先确认预算，再约法务评审。' } }] }) };
+  };
+  try {
+    store.createMemo({ title: '客户续约结论', content: '先确认预算，再约法务评审' });
+    const result = await ai.handleAuto('结合客户续约结论，你觉得下一步先做什么？', { onProgress() {} });
+    // 对话入口：只读调查 + 最终回答 = 聊天回复，而不是查询结果
+    assert.strictEqual(result.intent, 'chat');
+    assert.strictEqual(result.type, 'chat');
+    assert.match(result.message, /预算/);
+    assert.deepStrictEqual(result.agentSteps, ['memo_query']);
+    assert.strictEqual(result.engine, 'agent');
+    // 只读调查没有修改备忘录
+    assert.strictEqual(store.getAllMemos()[0].pinned, false);
+  } finally {
+    global.fetch = originalFetch;
+    store.updateSettings({ aiStage: 'mock' });
+  }
+});
+
+test('真实模型：安全组合不强制组合管线，模型仍可自主多步', async () => {
+  reset();
+  resetMemos();
+  store.updateSettings({
+    aiStage: 'llm', aiProvider: 'custom', aiBaseUrl: 'https://example.invalid/v1', aiApiKey: 'test-key', aiModel: 'test-model'
+  });
+  const originalFetch = global.fetch;
+  const bodies = [];
+  global.fetch = async (url, options) => {
+    bodies.push(JSON.parse(options.body));
+    return {
+      ok: true,
+      json: async () => ({ choices: [{ message: { content: JSON.stringify({
+        schemaVersion: 1,
+        confidence: 'high',
+        actions: [
+          { intent: 'memo_create', memoTitle: '客户偏好', memoContent: '客户更喜欢 A 方案' },
+          { intent: 'create', title: '周五确认客户方案', pri: 3 }
+        ]
+      }) } }] })
+    };
+  };
+  try {
+    const tasksBefore = store.getAllTasks().length;
+    const memosBefore = store.getAllMemos().length;
+    const result = await ai.handleAuto('记下客户喜欢A方案，再建个周五确认的任务');
+    // 没有破坏性子句：工具保持启用，模型返回的组合走一次确认
+    assert.ok(Array.isArray(bodies[0].tools) && bodies[0].tools.length >= 20);
+    assert.strictEqual(result.intent, 'plan');
+    assert.strictEqual(result.type, 'confirm');
+    // 确认卡阶段没有执行任何操作
+    assert.strictEqual(store.getAllTasks().length, tasksBefore);
+    assert.strictEqual(store.getAllMemos().length, memosBefore);
+  } finally {
+    global.fetch = originalFetch;
+    store.updateSettings({ aiStage: 'mock' });
+  }
+});
+
+test('任务上下文 Agent：组合步骤一次预览、原子执行并可整组撤销', async () => {
+  reset();
+  store.updateSettings({
+    aiStage: 'llm', aiProvider: 'custom', aiBaseUrl: 'https://example.invalid/v1', aiApiKey: 'test-key', aiModel: 'test-model'
+  });
+  const originalFetch = global.fetch;
+  global.fetch = async () => ({
+    ok: true,
+    json: async () => ({ choices: [{ message: { content: JSON.stringify({
+      schemaVersion: 1,
+      confidence: 'high',
+      actions: [
+        { intent: 'postpone', target: '组合预览任务', days: 2 },
+        { intent: 'start', target: '组合预览任务' }
+      ]
+    }) } }] })
+  });
+  try {
+    const task = store.createTask({ title: '组合预览任务', status: 'todo', due: '2026-08-27 18:00' });
+    const preview = await ai.previewTaskAction(task.id, '顺延两天然后开始做');
+    assert.strictEqual(preview.ok, true);
+    assert.strictEqual(preview.multi, true);
+    assert.deepStrictEqual(preview.steps.map((step) => step.intent), ['postpone', 'start']);
+    assert.match(preview.summary, /连续执行 2 步/);
+    assert.strictEqual(Array.isArray(preview.action.actions) && preview.action.actions.length, 2);
+    // 每一步都锁定到当前任务
+    assert.strictEqual(preview.action.actions.every((step) => step.params.taskId === task.id), true);
+    // 预览阶段不写入任何数据
+    assert.strictEqual(store.getTask(task.id).status, 'todo');
+
+    const applied = ai.applyTaskAction(preview.action);
+    assert.strictEqual(applied.ok, true);
+    assert.strictEqual(applied.type, 'plan');
+    assert.strictEqual(applied.operations.length, 2);
+    assert.strictEqual(store.getTask(task.id).status, 'doing');
+    // 整组撤销还原到预览前状态
+    assert.ok(ai.undoAction(applied.undo));
+    assert.strictEqual(store.getTask(task.id).status, 'todo');
+  } finally {
+    global.fetch = originalFetch;
+    store.updateSettings({ aiStage: 'mock' });
+  }
+});
+
+test('任务上下文 Agent：组合步骤拒绝危险项、外部目标与过期指纹', async () => {
+  reset();
+  store.updateSettings({
+    aiStage: 'llm', aiProvider: 'custom', aiBaseUrl: 'https://example.invalid/v1', aiApiKey: 'test-key', aiModel: 'test-model'
+  });
+  const originalFetch = global.fetch;
+  let actions = [
+    { intent: 'update', target: '守卫任务', pri: 4 },
+    { intent: 'delete', target: '守卫任务' }
+  ];
+  global.fetch = async () => ({
+    ok: true,
+    json: async () => ({ choices: [{ message: { content: JSON.stringify({
+      schemaVersion: 1, confidence: 'high', actions
+    }) } }] })
+  });
+  try {
+    const task = store.createTask({ title: '守卫任务', status: 'todo' });
+    const other = store.createTask({ title: '另一项任务', status: 'todo' });
+
+    // delete 不允许进入组合步骤
+    const dangerous = await ai.previewTaskAction(task.id, '改紧急然后删掉');
+    assert.strictEqual(dangerous.ok, false);
+    assert.match(dangerous.message, /不支持/);
+    assert.strictEqual(store.getTask(task.id).status, 'todo');
+
+    // 涉及其他任务时拒绝，交回全局处理
+    actions = [
+      { intent: 'update', target: '另一项任务', pri: 3 },
+      { intent: 'start', target: '守卫任务' }
+    ];
+    const foreign = await ai.previewTaskAction(task.id, '把另一项任务改成中优先级，然后开始当前任务');
+    assert.strictEqual(foreign.ok, false);
+    assert.match(foreign.message, /拆开执行/);
+    assert.strictEqual(store.getTask(other.id).pri, 2);
+
+    // 预览后任务发生变化：整组拒绝执行
+    actions = [
+      { intent: 'update', target: '守卫任务', pri: 4 },
+      { intent: 'start', target: '守卫任务' }
+    ];
+    const preview = await ai.previewTaskAction(task.id, '设为紧急然后开始');
+    assert.strictEqual(preview.ok, true);
+    store.updateTask(task.id, { desc: '预览后有人补充了备注' });
+    const applied = ai.applyTaskAction(preview.action);
+    assert.strictEqual(applied.ok, false);
+    assert.strictEqual(applied.type, 'conflict');
+    assert.strictEqual(store.getTask(task.id).pri, 2);
+    assert.strictEqual(store.getTask(task.id).status, 'todo');
   } finally {
     global.fetch = originalFetch;
     store.updateSettings({ aiStage: 'mock' });

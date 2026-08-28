@@ -99,6 +99,23 @@ function evaluateTurn(expectation, result, before, after, store) {
     }
   });
 
+  // Agent 多步轨迹：要求出现的工具步骤必须全部按相对顺序执行
+  if (expected.agentStepsIncludes !== undefined) {
+    const actual = Array.isArray(result && result.agentSteps) ? result.agentSteps : [];
+    let cursor = 0;
+    expected.agentStepsIncludes.forEach((name) => {
+      const found = actual.slice(cursor).indexOf(name);
+      if (found === -1) failures.push(`result.agentSteps 未按顺序包含 ${name}，实际 ${JSON.stringify(actual)}`);
+      else cursor += found + 1;
+    });
+  }
+  if (expected.agentSteps !== undefined) {
+    const actual = Array.isArray(result && result.agentSteps) ? result.agentSteps : [];
+    if (JSON.stringify(actual) !== JSON.stringify(expected.agentSteps)) {
+      failures.push(`result.agentSteps 期望 ${JSON.stringify(expected.agentSteps)}，实际 ${JSON.stringify(actual)}`);
+    }
+  }
+
   if (expected.noDataMutation && !sameState(before, after)) failures.push('本轮不应修改任务、备忘录或工作流');
   if (expected.counts) {
     if (expected.counts.tasks !== undefined && after.tasks.length !== expected.counts.tasks) {
@@ -139,6 +156,7 @@ function sanitizeResult(result) {
     type: result && result.type || 'unknown',
     confidence: result && result.confidence || null,
     engine: result && result.engine || null,
+    agentSteps: Array.isArray(result && result.agentSteps) ? result.agentSteps : [],
     degraded: !!(result && result.degraded),
     fallbackMode: result && result.fallbackMode || null,
     retryable: !!(result && result.retryable),

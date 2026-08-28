@@ -127,10 +127,9 @@ function renderPreviewCard(message, preview, sourceText) {
   summary.textContent = preview.summary || '准备修改任务';
   card.appendChild(summary);
 
-  if (Array.isArray(preview.fields) && preview.fields.length) {
-    const fields = document.createElement('div');
-    fields.className = 'ta-preview-fields';
-    preview.fields.forEach((field) => {
+  const stepList = Array.isArray(preview.steps) && preview.steps.length ? preview.steps : null;
+  const appendFieldRows = (container, fields) => {
+    (fields || []).forEach((field) => {
       const row = document.createElement('div');
       row.className = 'ta-preview-field';
       const label = document.createElement('span');
@@ -149,8 +148,31 @@ function renderPreviewCard(message, preview, sourceText) {
       now.textContent = field.after;
       value.appendChild(now);
       row.append(label, value);
-      fields.appendChild(row);
+      container.appendChild(row);
     });
+  };
+
+  if (stepList) {
+    // 组合步骤：按序展示每一步的摘要与变化，确认后整组原子执行
+    const steps = document.createElement('div');
+    steps.className = 'ta-preview-fields';
+    stepList.forEach((step, index) => {
+      const row = document.createElement('div');
+      row.className = 'ta-preview-field';
+      const label = document.createElement('span');
+      label.className = 'ta-preview-field-label';
+      label.textContent = `${index + 1}. ${step.summary || ''}`;
+      const value = document.createElement('span');
+      value.className = 'ta-preview-field-value';
+      value.textContent = (step.fields || []).map((field) => `${field.label || ''}${field.after ? `：${field.after}` : ''}`).join('；');
+      row.append(label, value);
+      steps.appendChild(row);
+    });
+    card.appendChild(steps);
+  } else if (Array.isArray(preview.fields) && preview.fields.length) {
+    const fields = document.createElement('div');
+    fields.className = 'ta-preview-fields';
+    appendFieldRows(fields, preview.fields);
     card.appendChild(fields);
   }
 
@@ -159,7 +181,7 @@ function renderPreviewCard(message, preview, sourceText) {
   const applyBtn = document.createElement('button');
   applyBtn.type = 'button';
   applyBtn.className = 'primary';
-  applyBtn.textContent = '确认修改';
+  applyBtn.textContent = stepList ? `确认执行 ${stepList.length} 步` : '确认修改';
   const cancelBtn = document.createElement('button');
   cancelBtn.type = 'button';
   cancelBtn.textContent = '取消';
@@ -175,7 +197,10 @@ function renderPreviewCard(message, preview, sourceText) {
       const result = await window.api.ai.applyTaskAction(preview.previewId);
       applyBtn.closest('.ta-preview').remove();
       if (result && result.ok !== false) {
-        previousAction = { intent: preview.action.intent, params: preview.action.params };
+        // 组合步骤没有单一意图，不设置 previousAction，避免污染下一轮的上下文续接
+        if (preview.action && preview.action.intent) {
+          previousAction = { intent: preview.action.intent, params: preview.action.params };
+        }
         previousText = preview.action && preview.action.params ? String(preview.action.params.text || '') : '';
         const done = addMessage('ai', result.message || '修改已保存。');
         appendResultActions(done, result);

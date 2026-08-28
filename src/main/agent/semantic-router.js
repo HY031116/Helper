@@ -220,7 +220,9 @@ function routeSemanticInput(text, options) {
   }
   if (config.contextEntityType === 'task' && ['update', 'child', 'split', 'postpone', 'start', 'complete', 'archive', 'delete'].includes(intent)) {
     entityType = 'task';
-    protectedIntent = true;
+    // 任务锚定的复合句（“顺延两天然后开始做”）允许模型返回组合操作；
+    // 预览层会逐项校验意图与任务归属，单句锚定保护仍然生效
+    protectedIntent = !hasCompoundOperationCue(raw);
     confidence = 'high';
     cue = cue === 'conversation' ? 'task_surface_context' : cue;
   }

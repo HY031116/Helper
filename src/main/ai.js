@@ -272,6 +272,15 @@ function hasIncompleteCompoundWrite(intent, text) {
   return compoundWriteClauseIntents(text).length >= 2;
 }
 
+/* 复合写里包含破坏性子句（删除/批量/清空）时，禁止进入工具循环：
+   循环会先执行安全子句再对危险子句确认，破坏“整组确认、失败回滚”的组合契约 */
+const DESTRUCTIVE_WRITE_INTENTS = new Set(['delete', 'batch', 'memo_delete']);
+
+function hasDestructiveCompoundWrite(text) {
+  const intents = compoundWriteClauseIntents(text);
+  return intents.length >= 2 && intents.some((clauseIntent) => DESTRUCTIVE_WRITE_INTENTS.has(clauseIntent));
+}
+
 function compactPendingContextTurns(previousPending, text) {
   const previousTurns = previousPending && Array.isArray(previousPending.contextTurns)
     ? previousPending.contextTurns
@@ -3510,7 +3519,7 @@ ${workspaceSnapshot}
     { "intent": "create", "title": "...", "due": "YYYY-MM-DD HH:mm" }
   ]
 }
-actions 包含 2 到 5 项，可使用 create、memo_create、memo_pin、complete、start、archive、update、child、postpone。每个操作都必须包含完整参数和准确目标；不要使用 delete、batch、restore、转化、拆分、今日计划或专注控制。后一步需要引用前一步新建结果时不要生成 actions，改为 low confidence 并追问。系统会在执行前展示整组确认，并保证任一步失败时整体回滚。
+actions 包含 2 到 5 项，可使用 create、memo_create、memo_pin、complete、start、archive、update、child、postpone。每个操作都必须包含完整参数和准确目标；不要使用 delete、batch、restore、转化、拆分、今日计划或专注控制。当 semantic_envelope 的 entityType 是 task（用户正锚定某个任务对话）时，对当前任务的连续操作还可用 split（steps 必须是结合任务目标生成的具体步骤），例如“先拆成三步，然后把第一步开始”。后一步需要引用前一步新建结果时不要生成 actions，改为 low confidence 并追问。系统会在执行前展示整组确认，并保证任一步失败时整体回滚。
 
 意图判断规则：
 - 创建任务：包含任务内容，如「明天下午3点 交周报 #工作 紧急」「提醒我 明天 10 点开会」「帮我记一下 买牛奶」
@@ -3683,15 +3692,25 @@ function toRawToolCall(call) {
   };
 }
 
-function finishAgentLoop(text, primary, executedSteps, finalMessage) {
+function finishAgentLoop(text, primary, executedSteps, finalMessage, conversational) {
+  const summary = String(finalMessage || '').trim();
   if (primary) {
-    const result = finalizeResult(primary.intent, primary.params, primary.result);
-    const summary = String(finalMessage || '').trim();
-    if (summary) result.message = summary;
+    // 对话入口的循环：模型用只读工具调查后给出回答，语义是“聊天回复”而不是查询结果
+    const readOnlyTypes = ['query', 'stats', 'memo_query', 'suggest', 'summary'];
+    const answerOnly = conversational && summary && readOnlyTypes.includes(primary.result && primary.result.type);
+    const result = answerOnly
+      ? finalizeResult('chat', { text }, { type: 'chat', message: summary })
+      : finalizeResult(primary.intent, primary.params, primary.result);
+    if (summary && !answerOnly) result.message = summary;
     withAgentTrace(result, executedSteps);
-    return Object.assign({ intent: primary.intent, raw: text, params: primary.params, engine: 'agent' }, result);
+    return Object.assign({
+      intent: answerOnly ? 'chat' : primary.intent,
+      raw: text,
+      params: answerOnly ? { text } : primary.params,
+      engine: 'agent'
+    }, result);
   }
-  const message = String(finalMessage || '').trim() || '好的，已处理。';
+  const message = summary || '好的，已处理。';
   const result = finalizeResult('chat', { text }, { type: 'chat', message });
   withAgentTrace(result, executedSteps);
   return Object.assign({ intent: 'chat', raw: text, params: { text }, engine: 'agent' }, result);
@@ -3727,7 +3746,7 @@ async function callAgentLoopStep(conversation, requestContext) {
   }, requestContext, AGENT_LOOP_RETRY_TOKENS);
 }
 
-async function runAgentLoop({ text, requestContext, messages, firstToolCalls, firstContent }) {
+async function runAgentLoop({ text, requestContext, messages, firstToolCalls, firstContent, conversational }) {
   const executedSteps = [];
   const stepSummaries = [];
   const conversation = messages.slice();
@@ -3816,7 +3835,7 @@ async function runAgentLoop({ text, requestContext, messages, firstToolCalls, fi
     if (!(requestContext && requestContext.onProgress) && next && next.reasoning) {
       reportRequestProgress(requestContext, 'streaming', '正在组织回复…', null, next.reasoning, { reasoningDone: true, cumulativeReasoning: next.reasoning });
     }
-    return finishAgentLoop(text, primary, executedSteps, next && next.content || '');
+    return finishAgentLoop(text, primary, executedSteps, next && next.content || '', conversational);
   }
 
   // 步数上限：用已有操作结果收尾，避免静默失败
@@ -4122,7 +4141,10 @@ async function handleWithLLM(text, requestContext) {
   }
   let parsed;
   try {
-    parsed = await parseWithLLM(text, semanticPending, requestContext);
+    // 仅当复合写包含破坏性子句时禁用工具：安全组合仍可由模型自主多步执行，
+    // 破坏性组合必须整组确认而不是“先执行安全步骤再确认危险步骤”
+    const compoundGate = !semanticPending && hasDestructiveCompoundWrite(text);
+    parsed = await parseWithLLM(text, semanticPending, requestContext, compoundGate ? { toolsEnabled: false } : undefined);
   } catch (error) {
     if (isRequestCancelled(error, requestContext)) throw requestCancelledError();
     console.error('[ai] LLM 调用失败，进入受控本地降级:', error.message);
@@ -4335,7 +4357,8 @@ ${AGENT_TOOL_PROMPT_SUFFIX}`
       requestContext,
       messages,
       firstToolCalls: llmResult.toolCalls,
-      firstContent: (llmResult.content || '').trim()
+      firstContent: (llmResult.content || '').trim(),
+      conversational: true
     });
   }
   return { agent: false, message: ((llmResult && llmResult.content) || '').trim() };
@@ -4532,6 +4555,98 @@ function formatPreviewField(label, before, after) {
   return { label, before: display(before), after: display(after) };
 }
 
+/* 任务内组合步骤允许的意图：排除 delete 与工作流记录，破坏性与上下文强的操作保持单步预览 */
+const TASK_MULTI_INTENTS = new Set(['update', 'child', 'split', 'postpone', 'start', 'complete', 'archive']);
+
+function buildTaskActionPreview(task, intent, params) {
+  const fields = [];
+  let summary = '';
+  if (intent === 'worklog_add') {
+    fields.push({ label: WORK_LOG_KIND_LABELS[params.kind] || '工作记录', before: '未记录', after: params.text });
+    summary = `准备记录「${task.title}」的${WORK_LOG_KIND_LABELS[params.kind] || '进展'}`;
+  } else if (intent === 'worklog_update') {
+    fields.push({ label: WORK_LOG_KIND_LABELS[params.kind] || '工作记录', before: params.previousText, after: params.text });
+    summary = `准备更新「${task.title}」的工作记录`;
+  } else if (intent === 'worklog_delete') {
+    fields.push({ label: WORK_LOG_KIND_LABELS[params.kind] || '工作记录', before: params.text, after: '删除' });
+    summary = `准备删除「${task.title}」最近的工作记录`;
+  } else if (intent === 'update') {
+    const built = buildTaskUpdate(params, task);
+    if (!Object.keys(built.patch).length) return { error: '我没有识别到要修改的内容。可以说“改到明天”“设为紧急”或“加标签工作”。' };
+    Object.keys(built.patch).forEach((key) => fields.push(formatPreviewField(
+      { pri: '优先级', due: '截止时间', project: '项目', tags: '标签', desc: '备注', estimatedMinutes: '预计用时' }[key] || key,
+      task[key], built.patch[key]
+    )));
+    summary = `准备更新「${task.title}」`;
+  } else if (intent === 'child') {
+    if (!params.childTitle) return { error: '请告诉我要添加的子任务内容。' };
+    fields.push({ label: '新增子任务', before: '无', after: params.childTitle });
+    summary = `准备给「${task.title}」添加 1 个子任务`;
+  } else if (intent === 'split') {
+    const steps = Array.isArray(params.steps) ? params.steps.filter(Boolean).slice(0, 8) : [];
+    if (steps.length < 2) return { error: '我还没有生成足够具体的步骤。请说明“拆成三步”并补充目标，或直接把步骤写出来。' };
+    fields.push({ label: '子任务', before: task.children && task.children.length ? `${task.children.length} 个` : '无', after: steps.map((step, i) => `${i + 1}. ${step}`).join('\n') });
+    summary = `准备把「${task.title}」拆成 ${steps.length} 步`;
+    params.steps = steps;
+  } else if (intent === 'postpone') {
+    if (!task.due) return { error: '这项任务没有截止时间，无法顺延。' };
+    const days = Math.max(1, Math.min(30, Number(params.days) || 1));
+    const next = new Date(task.due.replace(' ', 'T') + ':00');
+    next.setDate(next.getDate() + days);
+    const pad = (n) => (n < 10 ? '0' + n : String(n));
+    const due = `${next.getFullYear()}-${pad(next.getMonth() + 1)}-${pad(next.getDate())} ${pad(next.getHours())}:${pad(next.getMinutes())}`;
+    fields.push(formatPreviewField('截止时间', task.due, due));
+    params.days = days;
+    summary = `准备把「${task.title}」顺延 ${days} 天`;
+  } else {
+    const labels = { start: ['状态', task.status, '进行中'], complete: ['状态', task.status, '已完成'], archive: ['状态', task.status, '已归档'], delete: ['任务', task.title, '移入回收站'] };
+    const item = labels[intent];
+    if (!item) return { error: '我还不能在任务内执行这类操作。' };
+    fields.push(formatPreviewField(item[0], item[1], item[2]));
+    summary = `准备${intent === 'start' ? '开始' : intent === 'complete' ? '完成' : intent === 'archive' ? '归档' : '删除'}「${task.title}」`;
+    params.confirmed = true;
+  }
+  return { fields, summary, params };
+}
+
+function buildTaskMultiPreview(task, actions, degraded) {
+  if (!Array.isArray(actions) || actions.length < 2 || actions.length > 5) {
+    return { ok: false, type: 'error', message: '组合操作需要包含 2 到 5 个明确的任务步骤。' };
+  }
+  const steps = [];
+  for (const step of actions) {
+    const stepIntent = step && step.intent;
+    if (!TASK_MULTI_INTENTS.has(stepIntent)) {
+      return { ok: false, type: 'error', message: '组合里包含任务内不支持的步骤，请拆开执行。' };
+    }
+    const stepParams = Object.assign({}, step.params || {});
+    if ((stepParams.taskId !== undefined && Number(stepParams.taskId) !== Number(task.id)) ||
+      (stepParams.target && stepParams.target !== task.title)) {
+      return { ok: false, type: 'error', message: '组合操作涉及其他任务，请拆开执行。' };
+    }
+    stepParams.taskId = task.id;
+    stepParams.target = task.title;
+    stepParams.explicitMention = true;
+    const built = buildTaskActionPreview(task, stepIntent, stepParams);
+    if (built.error) return { ok: false, type: 'error', message: built.error };
+    steps.push({ intent: stepIntent, summary: built.summary, fields: built.fields, params: built.params });
+  }
+  return {
+    ok: true,
+    type: 'task_action_preview',
+    multi: true,
+    summary: `准备对「${task.title}」连续执行 ${steps.length} 步`,
+    steps,
+    degraded,
+    notice: degraded ? '模型暂时不可用，已用本地解析生成预览；尚未修改任务。' : '',
+    action: {
+      taskId: task.id,
+      fingerprint: taskActionFingerprint(task),
+      actions: steps.map((step) => ({ intent: step.intent, params: step.params }))
+    }
+  };
+}
+
 async function previewTaskAction(taskId, text, requestContext, context) {
   const task = store.getTask(Number(taskId));
   if (!task || task._deleted) return { ok: false, type: 'error', message: '这项任务已不存在或已被删除。' };
@@ -4550,70 +4665,59 @@ async function previewTaskAction(taskId, text, requestContext, context) {
   }
   const action = contextualParsedAction(task.id, text, parsed, context);
   const { intent, params } = action;
+  // 模型规划了多步任务内操作：展开为组合预览，确认后整组原子执行
+  if (intent === 'plan' && Array.isArray(params && params.actions)) {
+    return buildTaskMultiPreview(task, params.actions, degraded);
+  }
   const supported = new Set(['update', 'child', 'split', 'postpone', 'start', 'complete', 'archive', 'delete', 'worklog_add', 'worklog_update', 'worklog_delete']);
   if (!supported.has(intent)) return { ok: false, type: 'error', message: '我还不能在任务内执行这类操作。可以修改任务，或说“进展：…”“阻塞：…”“成果：…”。' };
-  const fields = [];
-  let summary = '';
-  if (intent === 'worklog_add') {
-    fields.push({ label: WORK_LOG_KIND_LABELS[params.kind] || '工作记录', before: '未记录', after: params.text });
-    summary = `准备记录「${task.title}」的${WORK_LOG_KIND_LABELS[params.kind] || '进展'}`;
-  } else if (intent === 'worklog_update') {
-    fields.push({ label: WORK_LOG_KIND_LABELS[params.kind] || '工作记录', before: params.previousText, after: params.text });
-    summary = `准备更新「${task.title}」的工作记录`;
-  } else if (intent === 'worklog_delete') {
-    fields.push({ label: WORK_LOG_KIND_LABELS[params.kind] || '工作记录', before: params.text, after: '删除' });
-    summary = `准备删除「${task.title}」最近的工作记录`;
-  } else if (intent === 'update') {
-    const built = buildTaskUpdate(params, task);
-    if (!Object.keys(built.patch).length) return { ok: false, type: 'error', message: '我没有识别到要修改的内容。可以说“改到明天”“设为紧急”或“加标签工作”。' };
-    Object.keys(built.patch).forEach((key) => fields.push(formatPreviewField(
-      { pri: '优先级', due: '截止时间', project: '项目', tags: '标签', desc: '备注', estimatedMinutes: '预计用时' }[key] || key,
-      task[key], built.patch[key]
-    )));
-    summary = `准备更新「${task.title}」`;
-  } else if (intent === 'child') {
-    if (!params.childTitle) return { ok: false, type: 'error', message: '请告诉我要添加的子任务内容。' };
-    fields.push({ label: '新增子任务', before: '无', after: params.childTitle });
-    summary = `准备给「${task.title}」添加 1 个子任务`;
-  } else if (intent === 'split') {
-    const steps = Array.isArray(params.steps) ? params.steps.filter(Boolean).slice(0, 8) : [];
-    if (steps.length < 2) return { ok: false, type: 'error', message: '我还没有生成足够具体的步骤。请说明“拆成三步”并补充目标，或直接把步骤写出来。' };
-    fields.push({ label: '子任务', before: task.children && task.children.length ? `${task.children.length} 个` : '无', after: steps.map((step, i) => `${i + 1}. ${step}`).join('\n') });
-    summary = `准备把「${task.title}」拆成 ${steps.length} 步`;
-    params.steps = steps;
-  } else if (intent === 'postpone') {
-    if (!task.due) return { ok: false, type: 'error', message: '这项任务没有截止时间，无法顺延。' };
-    const days = Math.max(1, Math.min(30, Number(params.days) || 1));
-    const next = new Date(task.due.replace(' ', 'T') + ':00');
-    next.setDate(next.getDate() + days);
-    const pad = (n) => (n < 10 ? '0' + n : String(n));
-    const due = `${next.getFullYear()}-${pad(next.getMonth() + 1)}-${pad(next.getDate())} ${pad(next.getHours())}:${pad(next.getMinutes())}`;
-    fields.push(formatPreviewField('截止时间', task.due, due));
-    params.days = days;
-    summary = `准备把「${task.title}」顺延 ${days} 天`;
-  } else {
-    const labels = { start: ['状态', task.status, '进行中'], complete: ['状态', task.status, '已完成'], archive: ['状态', task.status, '已归档'], delete: ['任务', task.title, '移入回收站'] };
-    const item = labels[intent];
-    fields.push(formatPreviewField(item[0], item[1], item[2]));
-    summary = `准备${intent === 'start' ? '开始' : intent === 'complete' ? '完成' : intent === 'archive' ? '归档' : '删除'}「${task.title}」`;
-    params.confirmed = true;
-  }
+  const built = buildTaskActionPreview(task, intent, params);
+  if (built.error) return { ok: false, type: 'error', message: built.error };
   return {
     ok: true,
     type: 'task_action_preview',
-    summary,
-    fields,
+    summary: built.summary,
+    fields: built.fields,
     degraded,
     notice: degraded ? '模型暂时不可用，已用本地解析生成预览；尚未修改任务。' : '',
-    action: { intent, params, taskId: task.id, fingerprint: taskActionFingerprint(task) }
+    action: { intent, params: built.params, taskId: task.id, fingerprint: taskActionFingerprint(task) }
   };
 }
 
 function applyTaskAction(action) {
-  if (!action || !action.taskId || !action.intent) throw new Error('操作预览已失效，请重新输入。');
+  if (!action || !action.taskId || (!action.intent && !Array.isArray(action.actions))) throw new Error('操作预览已失效，请重新输入。');
   const task = store.getTask(Number(action.taskId));
   if (!task || taskActionFingerprint(task) !== action.fingerprint) {
     return { ok: false, type: 'conflict', message: '任务在预览后发生了变化，请重新生成预览。' };
+  }
+  if (Array.isArray(action.actions) && action.actions.length) {
+    // 组合步骤整组执行：任一步失败回滚全部，不留半成品
+    let transactionId = null;
+    let operations = [];
+    try {
+      const transaction = store.runAgentTransaction(() => action.actions.map((step) => {
+        const result = execute(step.intent, Object.assign({}, step.params, { confirmed: true }));
+        if (!result || ['ask', 'clarify', 'confirm', 'error'].includes(result.type)) {
+          throw new Error(result && result.message || '组合步骤未能执行');
+        }
+        return result;
+      }));
+      operations = transaction.value;
+      transactionId = transaction.transactionId;
+    } catch (error) {
+      return { ok: false, type: 'error', message: `组合操作没有完成：${error.message}，已回滚全部步骤。` };
+    }
+    const tasks = operations.flatMap((operation) => operation.tasks || (operation.task ? [operation.task] : []));
+    return {
+      ok: true,
+      type: 'plan',
+      task: store.getTask(action.taskId),
+      operations,
+      tasks,
+      message: `已完成 ${operations.length} 项操作：\n${operations.map((result) => `· ${result.message}`).join('\n')}`,
+      undoable: true,
+      undo: { action: 'restoreAgentTransaction', transactionId }
+    };
   }
   let result;
   if (action.intent === 'worklog_add') {

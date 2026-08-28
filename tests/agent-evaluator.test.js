@@ -62,7 +62,7 @@ test('Agent 评测器：报告只保留结构化结果并正确计算验收指�
   assert.deepStrictEqual(evaluator.sanitizeResult({
     intent: 'delete', type: 'confirm', confidence: 'high', engine: 'llm', message: '敏感正文', params: { secret: 'x' }
   }), {
-    intent: 'delete', type: 'confirm', confidence: 'high', engine: 'llm', degraded: false,
+    intent: 'delete', type: 'confirm', confidence: 'high', engine: 'llm', agentSteps: [], degraded: false,
     fallbackMode: null, retryable: false, operationCount: 0
   });
   const metrics = evaluator.summarizeScenarios([
@@ -81,8 +81,33 @@ test('Agent 评测器：报告只保留结构化结果并正确计算验收指�
   assert.strictEqual(metrics.slowFirstFeedbackTurns, 1);
 });
 
+test('Agent 评测器：多步轨迹按相对顺序断言且报告保留步骤名', () => {
+  const store = { getAgentState: () => ({ pending: null }) };
+  const before = state();
+  const result = { intent: 'start', type: 'start', agentSteps: ['query', 'start'] };
+
+  assert.deepStrictEqual(evaluator.evaluateTurn({
+    agentStepsIncludes: ['query', 'start']
+  }, result, before, before, store), []);
+  // 乱序、缺失和空轨迹都要给出可读失败
+  assert.deepStrictEqual(evaluator.evaluateTurn({
+    agentStepsIncludes: ['start', 'query']
+  }, result, before, before, store),
+  ['result.agentSteps 未按顺序包含 query，实际 ["query","start"]']);
+  assert.deepStrictEqual(evaluator.evaluateTurn({
+    agentStepsIncludes: ['start']
+  }, { type: 'start' }, before, before, store), ['result.agentSteps 未按顺序包含 start，实际 []']);
+  assert.deepStrictEqual(evaluator.evaluateTurn({
+    agentSteps: ['query', 'start']
+  }, result, before, before, store), []);
+  assert.ok(evaluator.evaluateTurn({ agentSteps: ['start', 'query'] }, result, before, before, store)
+    .some((failure) => failure.includes('agentSteps 期望')));
+  // sanitize 只保留步骤名，不带入正文
+  assert.deepStrictEqual(evaluator.sanitizeResult(result).agentSteps, ['query', 'start']);
+});
+
 test('Agent 评测场景：覆盖核心类别、安全和恢复路径', () => {
-  assert.strictEqual(fixture.version, 1);
+  assert.strictEqual(fixture.version, 2);
   assert.ok(fixture.scenarios.length >= 15);
   const ids = fixture.scenarios.map((scenario) => scenario.id);
   assert.strictEqual(new Set(ids).size, ids.length);
@@ -90,6 +115,8 @@ test('Agent 评测场景：覆盖核心类别、安全和恢复路径', () => {
   assert.ok(fixture.scenarios.some((scenario) => scenario.recovery));
   assert.ok(fixture.scenarios.some((scenario) => scenario.liveOnly && scenario.turns.some((turn) => turn.cancelOnStage)));
   assert.ok(fixture.scenarios.some((scenario) => scenario.category === 'multi-action'));
+  // Agent 多步轨迹场景是回归基线的一部分
+  assert.ok(fixture.scenarios.filter((scenario) => scenario.category === 'agent-loop').length >= 2);
   assert.ok(Array.isArray(fixture.offlineScenarios) && fixture.offlineScenarios.length >= 5);
   assert.ok(fixture.offlineScenarios.some((scenario) => scenario.dangerous));
   fixture.scenarios.forEach((scenario) => {

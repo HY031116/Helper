@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "offlineScenarios": [
     {
       "id": "offline-create-urgent-task",
@@ -121,6 +121,47 @@
     }
   ],
   "scenarios": [
+    {
+      "id": "agent-loop-query-then-start",
+      "category": "agent-loop",
+      "setup": {
+        "tasks": [
+          { "title": "整理季度数据", "status": "todo", "pri": 4 },
+          { "title": "回复邮件", "status": "todo", "pri": 2 }
+        ]
+      },
+      "turns": [
+        {
+          "input": "看看我有哪些紧急任务，把最急的那个开始做",
+          "expect": {
+            "result": { "intent": "start", "type": "start" },
+            "agentStepsIncludes": ["start"],
+            "tasks": [{ "title": "整理季度数据", "status": "doing" }],
+            "counts": { "tasks": 2 },
+            "pendingKind": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "agent-loop-memo-query-then-pin",
+      "category": "agent-loop",
+      "setup": {
+        "memos": [{ "title": "发布回滚方案", "content": "发布前先检查回滚步骤", "pinned": false }]
+      },
+      "turns": [
+        {
+          "input": "找一下关于回滚的备忘录，把那条置顶",
+          "expect": {
+            "result": { "intent": "memo_pin", "type": "memo_pin" },
+            "agentStepsIncludes": ["memo_pin"],
+            "memos": [{ "title": "发布回滚方案", "pinned": true }],
+            "counts": { "memos": 1, "tasks": 0 },
+            "pendingKind": null
+          }
+        }
+      ]
+    },
     {
       "id": "natural-create-urgent-task",
       "category": "natural-language",
@@ -299,10 +340,11 @@
     {
       "id": "atomic-create-task-and-memo",
       "category": "multi-action",
+      "maxClarifications": 1,
       "setup": {},
       "turns": [
         {
-          "input": "记下客户喜欢 A 方案，再建个明天下午四点确认报价的任务",
+          "input": "记到备忘录：客户更喜欢 A 方案。然后创建任务「周五确认客户方案」，优先级中",
           "expect": {
             "result": { "intent": "plan", "type": "confirm" },
             "noDataMutation": true,
