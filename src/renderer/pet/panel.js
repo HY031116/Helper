@@ -235,11 +235,62 @@ latestButton.addEventListener('click', () => scrollToLatest(true));
 function addMessage(role, text, timestamp) {
   const message = document.createElement('div');
   message.className = `chat-message ${role === 'user' ? 'user' : 'ai'}`;
-  message.textContent = String(text || '');
+  if (role === 'user') {
+    message.textContent = String(text || '');
+  } else {
+    const body = document.createElement('div');
+    body.className = 'cm-text';
+    body.textContent = String(text || '');
+    message.appendChild(body);
+  }
   if (timestamp) message.dataset.timestamp = String(timestamp);
   chatLog.appendChild(message);
   scrollToLatest(role === 'user');
   return message;
+}
+
+function ensureReasoningBlock(msgEl) {
+  if (!msgEl) return null;
+  let block = msgEl.querySelector('.cm-reasoning');
+  if (block) {
+    const body = block.querySelector('.cm-reasoning-body');
+    if (body) return { block, body };
+  }
+  block = document.createElement('details');
+  block.className = 'cm-reasoning';
+  block.open = true;
+  block.setAttribute('aria-label', '思考过程');
+  const summary = document.createElement('summary');
+  summary.className = 'cm-reasoning-summary';
+  summary.innerHTML = `<span class="cm-reasoning-seal" aria-hidden="true">思</span>
+    <span class="cm-reasoning-title">正在思考…</span>
+    <span class="cm-reasoning-chevron" aria-hidden="true"></span>`;
+  const body = document.createElement('div');
+  body.className = 'cm-reasoning-body';
+  block.append(summary, body);
+  const textBody = msgEl.querySelector('.cm-text');
+  if (textBody && textBody.parentNode) {
+    textBody.parentNode.insertBefore(block, textBody);
+  } else {
+    msgEl.prepend(block);
+  }
+  return { block, body };
+}
+
+function finishReasoningBlock(msgEl, cumulativeReasoning) {
+  if (!msgEl) return;
+  const refs = ensureReasoningBlock(msgEl);
+  if (!refs) return;
+  const { block, body } = refs;
+  if (typeof cumulativeReasoning === 'string' && cumulativeReasoning && !body.textContent) {
+    body.textContent = cumulativeReasoning;
+  }
+  const title = block.querySelector('.cm-reasoning-title');
+  const total = (body.textContent || '').trim().length;
+  if (title) title.textContent = total ? `思考过程（${total} 字）` : '思考过程';
+  block.open = false;
+  block.classList.remove('is-streaming');
+  block.classList.add('is-done');
 }
 
 function addActions(message, items, label) {
@@ -345,7 +396,8 @@ async function sendPrompt(rawText) {
   const pending = addMessage('ai', '正在理解你的要求…');
   pending.classList.add('pending');
   const requestId = `pet-${Date.now()}-${++requestSequence}`;
-  activeRequest = { id: requestId, text, pending };
+  const pendingText = pending.querySelector('.cm-text');
+  activeRequest = { id: requestId, text, pending, pendingText, reasoningStarted: false, streamStarted: false };
   setChatBusy(true);
   chatState.textContent = '正在处理';
   try {
@@ -353,7 +405,7 @@ async function sendPrompt(rawText) {
     pending.remove();
     renderAssistantResult(result, text);
   } catch (error) {
-    pending.textContent = '助手暂时没有响应。请检查模型设置后重试。';
+    pendingText.textContent = '助手暂时没有响应。请检查模型设置后重试。';
     pending.classList.remove('pending');
     addActions(pending, [{ label: '重试', primary: true, run: () => sendPrompt(text) }], '错误恢复');
     chatState.textContent = '请求未完成';
@@ -404,9 +456,37 @@ document.addEventListener('keydown', (event) => {
 if (window.api.ai.onProgress) {
   window.api.ai.onProgress((progress) => {
     if (!activeRequest || progress?.requestId && progress.requestId !== activeRequest.id) return;
-    if (progress?.message) {
-      activeRequest.pending.textContent = progress.message;
-      chatState.textContent = progress.message;
+    const message = String(progress?.message || '');
+    const reasoningDelta = typeof progress?.reasoningDelta === 'string' ? progress.reasoningDelta : '';
+    const delta = typeof progress?.delta === 'string' ? progress.delta : '';
+    if (reasoningDelta) {
+      const refs = ensureReasoningBlock(activeRequest.pending);
+      if (refs) {
+        if (!activeRequest.reasoningStarted) {
+          activeRequest.reasoningStarted = true;
+          refs.body.textContent = '';
+          refs.block.classList.add('is-streaming');
+        }
+        refs.body.textContent += reasoningDelta;
+      }
+    }
+    if (progress?.reasoningDone) {
+      finishReasoningBlock(activeRequest.pending, progress?.cumulativeReasoning);
+    }
+    if (delta) {
+      if (!activeRequest.streamStarted) {
+        activeRequest.streamStarted = true;
+        activeRequest.pendingText.textContent = '';
+        activeRequest.pending.classList.remove('pending');
+      }
+      activeRequest.pendingText.textContent += delta;
+    }
+    if (message) {
+      // 还没开始写 content 时把消息文案写到正文占位，开始流后只写状态
+      if (!activeRequest.streamStarted && !delta && !reasoningDelta) {
+        activeRequest.pendingText.textContent = message;
+      }
+      chatState.textContent = message;
     }
   });
 }

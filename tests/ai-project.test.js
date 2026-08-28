@@ -2684,6 +2684,203 @@ test('真实模型：模型失败时不会静默创建规则引擎猜出的任�
   }
 });
 
+test('真实模型：分阶段超时——连接超时走 TimeoutError，降级为本地确认而非取消', async () => {
+  reset();
+  const previous = store.getSettings();
+  store.updateSettings({
+    aiStage: 'llm', aiProvider: 'custom', aiBaseUrl: 'https://example.invalid/v1', aiApiKey: 'test-key', aiModel: 'test-model'
+  });
+  const originalFetch = global.fetch;
+  // 模拟连接阶段超时：fetch 直接抛出 AbortError（非 AI_REQUEST_CANCELLED）
+  global.fetch = async () => {
+    const err = new Error('Aborted');
+    err.name = 'AbortError';
+    throw err;
+  };
+  try {
+    const before = store.getAllTasks().length;
+    const result = await ai.handleAuto('帮我把 3 号项目报告明天上午十点前提交');
+    assert.strictEqual(result.degradeNotice, '模型响应超时');
+    // 超时后应安全降级：给出本地判断 + 确认，不会把 0 个任务创建出来
+    assert.ok(result.type === 'confirm' || result.fallbackMode === 'confirm_local' || result.fallbackMode === 'preflight_local',
+      `应进入确认态而非强写: type=${result.type}, fallbackMode=${result.fallbackMode}`);
+    assert.strictEqual(store.getAllTasks().length, before, '模型失败时不得擅自创建任务');
+  } finally {
+    global.fetch = originalFetch;
+    store.updateSettings({
+      aiStage: previous.aiStage, aiProvider: previous.aiProvider, aiBaseUrl: previous.aiBaseUrl,
+      aiApiKey: previous.aiApiKey, aiModel: previous.aiModel
+    });
+  }
+});
+
+test('真实模型：流式首字节回来后不被连接超时误杀（chunk 间隔续期）', async () => {
+  reset();
+  const previous = store.getSettings();
+  store.updateSettings({
+    aiStage: 'llm', aiProvider: 'custom', aiBaseUrl: 'https://example.invalid/v1', aiApiKey: 'test-key', aiModel: 'test-model'
+  });
+  const originalFetch = global.fetch;
+  let requestCount = 0;
+  global.fetch = async (url, options) => {
+    requestCount += 1;
+    assert.strictEqual(JSON.parse(options.body).stream, true, '聊天路径应请求流式');
+    const encoder = new TextEncoder();
+    // 多个 chunk 间隔 60ms 发出；旧逻辑会在 connectTimeout 终点把正在流的 body 杀掉
+    const chunks = [
+      'data: {"choices":[{"delta":{"content":"今天"}}]}\n\n',
+      'data: {"choices":[{"delta":{"content":"重点"}}]}\n\n',
+      'data: {"choices":[{"delta":{"content":"放在。"}}]}\n\n',
+      'data: [DONE]\n\n'
+    ];
+    return {
+      ok: true,
+      body: new ReadableStream({
+        start(controller) {
+          let i = 0;
+          const enq = () => {
+            if (i >= chunks.length) { controller.close(); return; }
+            controller.enqueue(encoder.encode(chunks[i++]));
+            setTimeout(enq, 60);
+          };
+          enq();
+        }
+      })
+    };
+  };
+  const progress = [];
+  try {
+    const result = await ai.handleAuto('聊聊今天的工作节奏', { onProgress: (e) => progress.push(e) });
+    assert.strictEqual(requestCount, 1);
+    assert.strictEqual(result.type, 'chat');
+    assert.strictEqual(result.message, '今天重点放在。');
+    assert.ok(progress.some((e) => e.delta), '应有流式增量');
+  } finally {
+    global.fetch = originalFetch;
+    store.updateSettings({
+      aiStage: previous.aiStage, aiProvider: previous.aiProvider, aiBaseUrl: previous.aiBaseUrl,
+      aiApiKey: previous.aiApiKey, aiModel: previous.aiModel
+    });
+  }
+});
+
+test('真实模型：流式 reasoning + content 顺序上抛 reasoningDelta/delta/reasoningDone', async () => {
+  reset();
+  const previous = store.getSettings();
+  store.updateSettings({
+    aiStage: 'llm', aiProvider: 'custom', aiBaseUrl: 'https://example.invalid/v1', aiApiKey: 'test-key', aiModel: 'test-model'
+  });
+  const originalFetch = global.fetch;
+  let requestCount = 0;
+  global.fetch = async (url, options) => {
+    requestCount += 1;
+    const encoder = new TextEncoder();
+    // 推理模型：先吐 reasoning_content，再转 content
+    const chunks = [
+      'data: {"choices":[{"delta":{"reasoning_content":"先读用户意图："}}]}\n\n',
+      'data: {"choices":[{"delta":{"reasoning_content":"“聊聊节奏”属于闲聊。"}}]}\n\n',
+      'data: {"choices":[{"delta":{"content":"节奏"}}]}\n\n',
+      'data: {"choices":[{"delta":{"content":"可梳理。"}}]}\n\n',
+      'data: [DONE]\n\n'
+    ];
+    return {
+      ok: true,
+      body: new ReadableStream({
+        start(controller) {
+          let i = 0;
+          const enq = () => {
+            if (i >= chunks.length) { controller.close(); return; }
+            controller.enqueue(encoder.encode(chunks[i++]));
+            setTimeout(enq, 20);
+          };
+          enq();
+        }
+      })
+    };
+  };
+  const progress = [];
+  try {
+    const result = await ai.handleAuto('聊聊今天的工作节奏', { onProgress: (e) => progress.push(e) });
+    assert.strictEqual(requestCount, 1);
+    assert.strictEqual(result.type, 'chat');
+    assert.strictEqual(result.message, '节奏可梳理。');
+    const reasoningDeltas = progress.filter((e) => typeof e.reasoningDelta === 'string' && e.reasoningDelta)
+      .map((e) => e.reasoningDelta).join('');
+    assert.ok(reasoningDeltas.includes('先读用户意图'), 'reasoning 内容应按 delta 上抛');
+    assert.ok(reasoningDeltas.includes('聊聊节奏'), 'reasoning 内链应完整');
+    const contentDeltas = progress.filter((e) => typeof e.delta === 'string' && e.delta).map((e) => e.delta).join('');
+    assert.strictEqual(contentDeltas, '节奏可梳理。', 'content delta 不应混进 reasoning 内容');
+    const doneEv = progress.find((e) => e.reasoningDone);
+    assert.ok(doneEv, 'reasoning 结束时应发 reasoningDone 信号');
+  } finally {
+    global.fetch = originalFetch;
+    store.updateSettings({
+      aiStage: previous.aiStage, aiProvider: previous.aiProvider, aiBaseUrl: previous.aiBaseUrl,
+      aiApiKey: previous.aiApiKey, aiModel: previous.aiModel
+    });
+  }
+});
+
+test('真实模型：非流式返回 reasoning 时一次性注入思考块', async (context) => {
+  if (context && typeof context.mock === 'function' && context.mock.timers) { /* noop */ }
+  reset();
+  const t1 = store.createTask({ title: '完成报告思考上抛', project: '助手体验' });
+  const t2 = store.createTask({ title: '购买生活用品', project: '个人事务' });
+  store.completeTask(t1.id);
+  store.completeTask(t2.id);
+  const previous = store.getSettings();
+  store.updateSettings({
+    aiStage: 'llm', aiProvider: 'custom', aiBaseUrl: 'https://example.invalid/v1', aiApiKey: 'test-key', aiModel: 'test-model'
+  });
+  const originalFetch = global.fetch;
+  let requestCount = 0;
+  const receivedReasonings = [];
+  global.fetch = async () => {
+    requestCount += 1;
+    return {
+      ok: true,
+      json: () => Promise.resolve({
+        choices: [{
+          message: {
+            content: JSON.stringify({
+              title: '日报（事实+推理）',
+              sections: [
+                { heading: '已完成', kind: 'facts', items: [{ text: '完成报告思考上抛。', sourceIds: [`task-${t1.id}`] }] },
+                { heading: '归纳', kind: 'analysis', items: [{ text: '已经形成 reasoning 一次性上抛闭环。', sourceIds: [`task-${t1.id}`] }] },
+                { heading: '建议', kind: 'suggestions', items: [{ text: '继续推进真实窗口验证。', sourceIds: [] }] }
+              ]
+            }),
+            reasoning: '先用已完成任务作为 facts，基于 t1 推导 analysis，再写一条下一步建议。下周计划先空。'
+          }
+        }]
+      }),
+      text: () => Promise.resolve('x')
+    };
+  };
+  try {
+    const result = await ai.handleAuto('生成今天的日报', {
+      onProgress: (e) => {
+        if (typeof e.reasoningDelta === 'string' && e.reasoningDelta) receivedReasonings.push(e.reasoningDelta);
+        if (typeof e.reasoning === 'string' && e.reasoning) receivedReasonings.push(e.reasoning);
+      }
+    });
+    assert.strictEqual(requestCount, 1, '报告接口应请求一次');
+    assert.strictEqual(result.type, 'report');
+    assert.strictEqual(result.authoredBy, 'model');
+    assert.ok(/已完成/.test(result.markdown) && /建议/.test(result.markdown),
+      'markdown=' + JSON.stringify(result && result.markdown || '').slice(0, 160));
+    const totalReasoning = receivedReasonings.join('');
+    assert.ok(totalReasoning.includes('facts') || totalReasoning.includes('建议') || totalReasoning.includes('下一步'),
+      '非流式场景也应把 reasoning 一次性上报，当前：' + JSON.stringify(totalReasoning.slice(0, 80)));
+  } finally {
+    global.fetch = originalFetch;
+    store.updateSettings({
+      aiStage: previous.aiStage, aiProvider: previous.aiProvider, aiBaseUrl: previous.aiBaseUrl,
+      aiApiKey: previous.aiApiKey, aiModel: previous.aiModel
+    });
+  }
+});
+
 test('真实模型：只读查询失败时可安全使用本地能力', async () => {
   reset();
   const previous = store.getSettings();

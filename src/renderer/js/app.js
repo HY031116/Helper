@@ -4209,11 +4209,76 @@ function nextAiRequestId() {
   return `assistant-${Date.now()}-${aiRequestSequence}`;
 }
 
+function ensureAiReasoningBlock(msgEl) {
+  if (!msgEl) return null;
+  let block = msgEl.querySelector('.msg-reasoning');
+  if (block) {
+    const body = block.querySelector('.msg-reasoning-body');
+    if (body) return { block, body };
+  }
+  block = document.createElement('details');
+  block.className = 'msg-reasoning';
+  block.open = true;
+  block.setAttribute('aria-label', '思考过程');
+  const summary = document.createElement('summary');
+  summary.className = 'msg-reasoning-summary';
+  summary.innerHTML = `<span class="msg-reasoning-seal" aria-hidden="true">思</span>
+    <span class="msg-reasoning-title">正在思考…</span>
+    <span class="msg-reasoning-chevron" aria-hidden="true"></span>`;
+  const body = document.createElement('div');
+  body.className = 'msg-reasoning-body';
+  block.append(summary, body);
+  const textBody = msgEl.querySelector('.msg-text');
+  if (textBody && textBody.parentNode) {
+    textBody.parentNode.insertBefore(block, textBody);
+  } else {
+    msgEl.prepend(block);
+  }
+  return { block, body };
+}
+
+function finishAiReasoningBlock(msgEl, cumulativeReasoning) {
+  if (!msgEl) return;
+  const refs = ensureAiReasoningBlock(msgEl);
+  if (!refs) return;
+  const { block, body } = refs;
+  if (typeof cumulativeReasoning === 'string' && cumulativeReasoning && !body.textContent) {
+    body.textContent = cumulativeReasoning;
+  }
+  const title = block.querySelector('.msg-reasoning-title');
+  const total = (body.textContent || '').trim().length;
+  if (title) title.textContent = total ? `思考过程（${total} 字）` : '思考过程';
+  block.open = false;
+  block.classList.remove('is-streaming');
+  block.classList.add('is-done');
+}
+
 function updateAiRequestProgress(progress) {
   if (!activeAiRequest || !progress || progress.requestId !== activeAiRequest.id) return;
   const message = String(progress.message || '').trim();
   const requestState = aiProgressState(progress);
   setAssistantMessageState(activeAiRequest.pending, requestState.state, requestState.label);
+
+  // 推理 / 思考阶段 delta：优先写入思考块（用户感知"模型不是卡住，是在想"，减少误判超时）
+  const reasoningDelta = typeof progress.reasoningDelta === 'string' ? progress.reasoningDelta : '';
+  if (reasoningDelta) {
+    const refs = ensureAiReasoningBlock(activeAiRequest.pending);
+    if (refs) {
+      if (!activeAiRequest.reasoningStarted) {
+        activeAiRequest.reasoningStarted = true;
+        refs.body.textContent = '';
+        refs.block.classList.add('is-streaming');
+      }
+      refs.body.textContent += reasoningDelta;
+      setAiContext('working', message || '正在思考…');
+      scrollChat(false);
+    }
+  }
+  if (progress.reasoningDone) {
+    finishAiReasoningBlock(activeAiRequest.pending, progress.cumulativeReasoning);
+    scrollChat(false);
+  }
+
   if (activeAiRequest.pending && typeof progress.delta === 'string' && progress.delta) {
     const body = activeAiRequest.pending.querySelector('.msg-text');
     if (!activeAiRequest.streamStarted) {
@@ -4226,7 +4291,7 @@ function updateAiRequestProgress(progress) {
     scrollChat(false);
     return;
   }
-  if (message && activeAiRequest.pending) {
+  if (message && activeAiRequest.pending && !reasoningDelta && !progress.reasoningDone) {
     activeAiRequest.pending.querySelector('.msg-text').textContent = message;
     setAiContext('working', message);
     scrollChat(false);

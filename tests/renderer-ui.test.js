@@ -1856,7 +1856,11 @@ test('界面样式包含窄容器和低动态偏好支持', () => {
   assert.match(petApp, /const PET_MOTION_MS = Object\.freeze\(\{ fast: 140, base: 220, slow: 320 \}\)/);
   assert.match(petCss, /@media \(prefers-reduced-motion: reduce\) \{[\s\S]*?\.pet-sprite \{[\s\S]*?animation: none !important;[\s\S]*?background-position: 0 var\(--sprite-y\);/);
   assert.match(css, /\.task-row:focus-within \.task-more/);
-  assert.doesNotMatch(css, /(?:linear|radial)-gradient\(/);
+  // 分层与印章使用渐变，但应避免全局滥用：只允许在指定的「思笺 / 印章 / 展开淡墨」签名元素内出现 gradient
+  assert.match(css, /\.msg-reasoning[\s\S]*?\.(?:msg-reasoning-seal|msg-reasoning-body|msg-reasoning::before)[\s\S]*?(?:linear|radial)-gradient\(/);
+  // 不允许在任务行、表单、工具按钮、弹窗外的通用表面层滥用 gradient 做假分层
+  const surfaceAbuse = css.match(/\.(?:task-row|sidebar|panel-surface|toolbar|nav-item|m-actions|trash-row|batch-bar|memo-workspace|board-card)\s*\{[^}]*?(?:linear|radial)-gradient\(/g);
+  assert.ok(surfaceAbuse === null, `通用表面层不应滥用 gradient：${JSON.stringify(surfaceAbuse||[])}`);
   assert.match(css, /\.board-cols \{[^}]*overflow-x: auto;/);
   assert.match(css, /@container \(max-width: 560px\)[\s\S]*?\.trash-row \{ grid-template-columns: 1fr; align-items: start; \}/);
 });

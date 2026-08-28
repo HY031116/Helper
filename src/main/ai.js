@@ -2430,16 +2430,22 @@ async function generateAgentReport(text, params, requestContext, options) {
     try {
       reportRequestProgress(requestContext, 'understanding', '正在核对报告事实与写作要求…');
       const previousReport = snapshot.excludedSourceIds.length ? null : (previousSession && previousSession.report);
-      const content = await callLLM([
+      const llmResult = await callLLM([
         { role: 'system', content: buildReportWriterPrompt(snapshot, preferences, previousReport) },
         { role: 'user', content: String(text || `撰写${reportPeriodLabel(period, offset)}`) }
       ], {
         jsonMode: true,
-        timeout: requestContext && requestContext.timeout || 45000,
+        timeout: requestContext && requestContext.timeout || 60000,
+        readTimeout: 90000,
         maxTokens: 4000,
         signal: requestContext && requestContext.signal
       });
+      const content = llmResult && llmResult.content || '';
+      const reasoning = llmResult && llmResult.reasoning || '';
       throwIfRequestCancelled(requestContext);
+      if (reasoning) {
+        reportRequestProgress(requestContext, 'writing', '', null, reasoning, { reasoningDone: true });
+      }
       reportRequestProgress(requestContext, 'checking', '正在核对事实引用与安全边界…');
       const report = normalizeReportModelResponse(content, new Set(snapshot.sources.map((item) => item.id)));
       const session = Object.assign({}, sessionBase, {
@@ -3120,9 +3126,16 @@ function isLLMConfigured() {
   return !!(cfg.apiKey && cfg.baseUrl && cfg.model);
 }
 
-function reportRequestProgress(context, stage, message, delta) {
+function reportRequestProgress(context, stage, message, delta, reasoningDelta, flags) {
   if (context && typeof context.onProgress === 'function') {
-    context.onProgress(Object.assign({ stage, message }, delta ? { delta } : {}));
+    const payload = { stage, message };
+    if (delta) payload.delta = delta;
+    if (reasoningDelta) payload.reasoningDelta = reasoningDelta;
+    if (flags && flags.reasoningDone) payload.reasoningDone = true;
+    if (flags && typeof flags.cumulativeReasoning === 'string' && flags.cumulativeReasoning) {
+      payload.cumulativeReasoning = flags.cumulativeReasoning;
+    }
+    context.onProgress(payload);
   }
 }
 
@@ -3137,31 +3150,72 @@ function throwIfRequestCancelled(context) {
   if (context && context.signal && context.signal.aborted) throw requestCancelledError();
 }
 
-async function readModelStream(response, onDelta, parentSignal) {
+async function readModelStream(response, onDelta, parentSignal, readIdleTimeout) {
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
   let content = '';
+  let reasoning = '';
   let rawPayload = '';
-  for (;;) {
-    if (parentSignal && parentSignal.aborted) throw requestCancelledError();
-    const chunk = await reader.read();
-    buffer += decoder.decode(chunk.value || new Uint8Array(), { stream: !chunk.done });
-    const lines = buffer.split(/\r?\n/);
-    buffer = lines.pop() || '';
-    for (const line of lines) {
-      const payload = line.trim().replace(/^data:\s*/, '');
-      if (!payload || payload === '[DONE]') continue;
-      rawPayload += payload;
-      let event;
-      try { event = JSON.parse(payload); } catch (error) { continue; }
-      const delta = event.choices && event.choices[0] && event.choices[0].delta;
-      const text = delta && typeof delta.content === 'string' ? delta.content : '';
-      if (!text) continue;
-      content += text;
-      if (typeof onDelta === 'function') onDelta(text);
+  let reasoningStarted = false;
+  let contentStarted = false;
+  // 流式读阶段：每次收到 chunk 就续期，不再受总请求时长限制
+  let idleTimer = null;
+  const resetIdle = () => {
+    if (idleTimer) clearTimeout(idleTimer);
+    idleTimer = setTimeout(() => {
+      const error = new Error('流式响应停顿超时，服务可能已断开');
+      error.name = 'AbortError';
+      error.code = 'AI_STREAM_IDLE_TIMEOUT';
+      error.reason = 'read-idle-timeout';
+      reader.cancel && reader.cancel(error).catch(() => {});
+    }, readIdleTimeout || 60000);
+  };
+  resetIdle();
+  try {
+    for (;;) {
+      if (parentSignal && parentSignal.aborted) throw requestCancelledError();
+      const chunk = await reader.read();
+      resetIdle();
+      buffer += decoder.decode(chunk.value || new Uint8Array(), { stream: !chunk.done });
+      const lines = buffer.split(/\r?\n/);
+      buffer = lines.pop() || '';
+      for (const line of lines) {
+        const payload = line.trim().replace(/^data:\s*/, '');
+        if (!payload || payload === '[DONE]') continue;
+        rawPayload += payload;
+        let event;
+        try { event = JSON.parse(payload); } catch (error) { continue; }
+        const delta = event.choices && event.choices[0] && event.choices[0].delta;
+        if (!delta) continue;
+        // 推理模型兼容字段：reasoning_content（主流）/ reasoning
+        const reasoningText = (typeof delta.reasoning_content === 'string' && delta.reasoning_content)
+          || (typeof delta.reasoning === 'string' && delta.reasoning) || '';
+        const text = typeof delta.content === 'string' ? delta.content : '';
+        if (reasoningText) {
+          reasoning += reasoningText;
+          if (!reasoningStarted) reasoningStarted = true;
+          if (typeof onDelta === 'function') onDelta(null, reasoningText, {});
+        }
+        if (text) {
+          if (reasoningStarted && !contentStarted) {
+            contentStarted = true;
+            if (typeof onDelta === 'function') onDelta(null, null, { reasoningDone: true, cumulativeReasoning: reasoning });
+          } else {
+            contentStarted = true;
+          }
+          content += text;
+          if (typeof onDelta === 'function') onDelta(text, null, {});
+        }
+      }
+      if (chunk.done) break;
     }
-    if (chunk.done) break;
+    // 流结束时若只吐了 reasoning 没吐 content（罕见），也发 reasoningDone
+    if (reasoningStarted && !contentStarted && typeof onDelta === 'function') {
+      onDelta(null, null, { reasoningDone: true, cumulativeReasoning: reasoning });
+    }
+  } finally {
+    if (idleTimer) clearTimeout(idleTimer);
   }
   if (!content && buffer.trim()) rawPayload += buffer.trim().replace(/^data:\s*/, '');
   if (!content && rawPayload) {
@@ -3169,10 +3223,12 @@ async function readModelStream(response, onDelta, parentSignal) {
       const data = JSON.parse(rawPayload);
       const message = data.choices && data.choices[0] && data.choices[0].message;
       content = message && typeof message.content === 'string' ? message.content : '';
-      if (content && typeof onDelta === 'function') onDelta(content);
+      if (content && typeof onDelta === 'function') onDelta(content, null, {});
     } catch (error) { /* streamed payloads were already parsed line by line */ }
   }
-  return content.trim();
+  const result = { content: content.trim() };
+  if (reasoning) result.reasoning = reasoning.trim();
+  return result;
 }
 
 function isRequestCancelled(error, context) {
@@ -3189,7 +3245,27 @@ async function callLLM(messages, opts) {
   const abortFromParent = () => controller.abort();
   if (parentSignal && parentSignal.aborted) throw requestCancelledError();
   if (parentSignal) parentSignal.addEventListener('abort', abortFromParent, { once: true });
-  const timeout = setTimeout(() => controller.abort(), (opts && opts.timeout) || 30000);
+
+  // 分阶段超时：
+  // 1. connectTimeout：连接到拿到响应首字节（headers），默认 30s
+  // 2. readTimeout（非流式）：headers 之后到读完完整 JSON body
+  // 3. idleTimeout（流式）：每个 chunk 之间的空闲超时，默认 60s，有字节就续期
+  const isStream = !!(opts && opts.stream);
+  const connectTimeout = (opts && opts.timeout) || 30000;
+  const readTimeout = (opts && opts.readTimeout) || 60000;
+  const idleTimeout = (opts && opts.idleTimeout) || 60000;
+
+  let phaseTimer = null;
+  const setPhaseTimer = (ms, label) => {
+    if (phaseTimer) clearTimeout(phaseTimer);
+    phaseTimer = setTimeout(() => {
+      const error = new Error(label || '模型响应超时');
+      error.name = 'AbortError';
+      error.reason = 'timeout';
+      controller.abort(error);
+    }, ms);
+  };
+  setPhaseTimer(connectTimeout, `模型连接超时（${Math.round(connectTimeout / 1000)}s 内未收到响应）`);
 
   try {
     const res = await fetch(url, {
@@ -3205,22 +3281,31 @@ async function callLLM(messages, opts) {
         // 推理模型（如 DeepSeek V4）会先输出 reasoning 再输出 content，需要足够 token 空间
         max_tokens: (opts && opts.maxTokens) || 1000,
         response_format: (opts && opts.jsonMode) ? { type: 'json_object' } : undefined,
-        stream: !!(opts && opts.stream)
+        stream: isStream
       }),
       signal: controller.signal
     });
+    // headers 回来了：流式转 idle 续期，非流式给一个更长的 readTimeout
+    if (isStream) {
+      if (phaseTimer) clearTimeout(phaseTimer);
+    } else {
+      setPhaseTimer(readTimeout, `模型响应超时（${Math.round(readTimeout / 1000)}s 内未读完数据）`);
+    }
     if (!res.ok) {
+      // 错误响应体也受 readTimeout 保护，避免服务端挂起时无限等待
+      setPhaseTimer(readTimeout, `模型响应超时（${Math.round(readTimeout / 1000)}s 内未返回错误详情）`);
       const body = await res.text().catch(() => '');
       throw new Error(`LLM 请求失败 (${res.status}): ${body.slice(0, 200)}`);
     }
-    if (opts && opts.stream && res.body && typeof res.body.getReader === 'function') {
-      const streamed = await readModelStream(res, opts.onDelta, parentSignal);
-      if (streamed) return streamed;
+    if (isStream && res.body && typeof res.body.getReader === 'function') {
+      const streamed = await readModelStream(res, opts.onDelta, parentSignal, idleTimeout);
+      if (streamed && streamed.content) return streamed;
       const error = new Error('模型没有返回最终答案');
       error.code = 'LLM_FINAL_CONTENT_EMPTY';
       throw error;
     }
     const data = await res.json();
+    if (phaseTimer) { clearTimeout(phaseTimer); phaseTimer = null; }
     if (parentSignal && parentSignal.aborted) throw requestCancelledError();
     const msg = data.choices && data.choices[0] && data.choices[0].message;
     if (!msg) throw new Error('LLM 返回为空');
@@ -3230,9 +3315,37 @@ async function callLLM(messages, opts) {
       error.code = 'LLM_FINAL_CONTENT_EMPTY';
       throw error;
     }
-    return content;
+    const result = { content };
+    // 非流式路径同样把 reasoning 带出来（推理模型会在 message.reasoning / message.reasoning_content）
+    const reasoning = (typeof msg.reasoning === 'string' && msg.reasoning)
+      || (typeof msg.reasoning_content === 'string' && msg.reasoning_content) || '';
+    if (reasoning) result.reasoning = reasoning.trim();
+    return result;
+  } catch (err) {
+    // 把 connect/read 阶段的 abort 统一包装成"超时"语义，而不是通用 AbortError
+    if (err && err.name === 'AbortError' && !isRequestCancelled(err, null)) {
+      // 用户点取消走 parentSignal，AI_REQUEST_CANCELLED code 不会到这里；
+      // 到这里的都是内部定时器触发的，转成超时语义
+      const hint = err && err.message && /^模型.*超时/.test(err.message)
+        ? err.message
+        : '模型响应超时';
+      const te = new Error(hint);
+      te.name = 'TimeoutError';
+      te.code = 'AI_REQUEST_TIMEOUT';
+      te.cause = err;
+      throw te;
+    }
+    // 流式空闲超时在 readModelStream 内已带具体原因，直接透传（勿泛化成"响应超时"）
+    if (err && err.code === 'AI_STREAM_IDLE_TIMEOUT') {
+      const te = new Error(err.message || '流式响应停顿超时，服务可能已断开');
+      te.name = 'TimeoutError';
+      te.code = 'AI_STREAM_IDLE_TIMEOUT';
+      te.cause = err;
+      throw te;
+    }
+    throw err;
   } finally {
-    clearTimeout(timeout);
+    if (phaseTimer) clearTimeout(phaseTimer);
     if (parentSignal) parentSignal.removeEventListener('abort', abortFromParent);
   }
 }
@@ -3436,16 +3549,18 @@ async function parseWithLLM(text, continuation, requestContext, semanticOptions)
     : '';
   throwIfRequestCancelled(requestContext);
   reportRequestProgress(requestContext, 'understanding', '正在理解你的要求…');
-  const content = await callLLM([
+  const llmResult = await callLLM([
     { role: 'system', content: buildSystemPrompt(text, semantic) + continuationContext },
     ...getRecentConversationMessages(),
     { role: 'user', content: text }
   ], {
     jsonMode: true,
-    timeout: requestContext && requestContext.timeout || 30000,
+    timeout: requestContext && requestContext.timeout || 45000,
+    readTimeout: 75000,
     maxTokens: 2200,
     signal: requestContext && requestContext.signal
   });
+  const content = llmResult && llmResult.content || '';
 
   throwIfRequestCancelled(requestContext);
   reportRequestProgress(requestContext, 'checking', '正在核对目标和安全边界…');
@@ -3788,7 +3903,9 @@ async function handleWithLLM(text, requestContext) {
 
 function modelFailureNotice(error) {
   const message = String(error && error.message || '');
-  if (error && error.name === 'AbortError' || /aborted|timeout|超时/i.test(message)) return '模型响应超时';
+  const name = String(error && error.name || '');
+  const code = String(error && error.code || '');
+  if (name === 'AbortError' || name === 'TimeoutError' || code === 'AI_REQUEST_TIMEOUT' || code === 'AI_STREAM_IDLE_TIMEOUT' || /aborted|timeout|超时/i.test(message)) return '模型响应超时';
   if (/\(401\)|\(403\)/.test(message)) return '模型授权失败';
   if (/\(429\)/.test(message)) return '模型请求过于频繁';
   if (/MODEL_OUTPUT|模型回复|最终答案|JSON|字段|意图/.test(`${error && error.code || ''} ${message}`)) return '模型回复格式异常';
@@ -3799,7 +3916,9 @@ function modelFailureNotice(error) {
 async function chatWithLLM(text, requestContext) {
   const today = currentDateKey();
   const workspaceSnapshot = serializeWorkspaceSnapshot(store, text);
-  const content = await callLLM([
+  // chat 路径透传 reasoning：流式按 chunk 推（reasoningDelta），非流式用 reasoning 合成一条 reasoningDelta
+  const hasStream = !!(requestContext && requestContext.onProgress);
+  const llmResult = await callLLM([
     {
       role: 'system',
       content: `你是「工作台助手」，一个常驻用户桌面的中文个人工作助手。今天是 ${today}。
@@ -3813,12 +3932,20 @@ ${workspaceSnapshot}
     ...getRecentConversationMessages(),
     { role: 'user', content: text }
   ], {
-    timeout: 20000,
+    timeout: 30000,
+    readTimeout: 45000,
+    idleTimeout: 90000,
     maxTokens: 1200,
     signal: requestContext && requestContext.signal,
-    stream: !!(requestContext && requestContext.onProgress),
-    onDelta: (delta) => reportRequestProgress(requestContext, 'streaming', '正在生成回复…', delta)
+    stream: hasStream,
+    onDelta: (delta, reasoningDelta, flags) => reportRequestProgress(requestContext, 'streaming', '正在生成回复…', delta, reasoningDelta, flags)
   });
+  const content = llmResult && llmResult.content || '';
+  const reasoning = llmResult && llmResult.reasoning || '';
+  // 非流式拿到 reasoning 时一次性注入，保证 UI 折叠块与流式一致
+  if (!hasStream && reasoning) {
+    reportRequestProgress(requestContext, 'streaming', '正在生成回复…', null, reasoning, { reasoningDone: true, cumulativeReasoning: reasoning });
+  }
   throwIfRequestCancelled(requestContext);
   return content.trim();
 }
@@ -3886,10 +4013,11 @@ async function testConnection() {
   if (!cfg.baseUrl) return { ok: false, message: '请先填写 API Base URL' };
   if (!cfg.model) return { ok: false, message: '请先填写模型名称' };
   try {
-    const content = await callLLM([
+    const llmResult = await callLLM([
       { role: 'system', content: '只回复两个字：正常' },
       { role: 'user', content: '测试' }
     ], { timeout: 30000, maxTokens: 800 });
+    const content = llmResult && llmResult.content || '';
     return { ok: true, message: `连接成功：${cfg.model}`, reply: content.slice(0, 50) };
   } catch (e) {
     return { ok: false, message: `连接失败：${e.message}` };
