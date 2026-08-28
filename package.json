@@ -5,7 +5,7 @@
   "description": "个人工作 AI 助手 - 常驻桌面的本地任务管理与 AI 助手（桌宠形态）",
   "main": "src/main.js",
   "scripts": {
-    "test": "node --test tests/ai-project.test.js tests/renderer-ui.test.js tests/agent-evaluator.test.js",
+    "test": "node --test tests/ai-project.test.js tests/renderer-ui.test.js tests/agent-evaluator.test.js tests/agent-loop.test.js",
     "start": "electron .",
     "dev": "electron . --dev",
     "build:win": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-win.ps1",

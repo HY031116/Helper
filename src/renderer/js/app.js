@@ -4516,6 +4516,13 @@ async function runAiTurn(request, retry, options) {
       const reportTypes = ['report'];
       pending.classList.remove('pending', 'error');
       pending.querySelector('.msg-text').textContent = result.message;
+      // Agent 自主多步执行轨迹：查询任务 → 开始任务
+      if (result.agentTrace && Array.isArray(result.agentSteps) && result.agentSteps.length > 1) {
+        const trace = document.createElement('div');
+        trace.className = 'msg-agent-trace';
+        trace.textContent = `自主执行 ${result.agentSteps.length} 步 · ${result.agentTrace}`;
+        pending.querySelector('.msg-text').after(trace);
+      }
       if (result.cancelled) {
         pending.classList.add('cancelled');
         setAssistantMessageState(pending, 'cancelled', '已停止');

@@ -2032,6 +2032,24 @@ body.dark .msg-reasoning-body {
     0 1px 0 rgba(0,0,0,0.25);
 }
 
+/* Agent 自主执行轨迹：一枚朱砂细线书签 */
+.msg-agent-trace {
+  margin: 6px 0 2px 0;
+  padding: 3px 10px 3px 9px;
+  display: inline-flex; align-items: center; gap: 6px;
+  border-left: 2px solid rgba(var(--accent-rgb), 0.45);
+  border-radius: 0 4px 4px 0;
+  color: var(--muted);
+  font: 500 10.5px/1.4 var(--font-ui);
+  letter-spacing: 0.02em;
+  background: color-mix(in srgb, var(--bg3) 60%, transparent);
+}
+.msg-agent-trace::before {
+  content: '⌘';
+  font-size: 10px;
+  color: rgba(var(--accent-rgb), 0.75);
+}
+
 .msg-footer { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 5px; }
 .msg.ai .msg-footer { justify-content: flex-start; }
 .msg .mt { display: block; font-size: 11px; color: var(--muted); }

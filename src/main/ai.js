@@ -15,6 +15,7 @@ const { normalizeBlockedTimes } = require('./workflow-planner');
 const { decideModelAction, decideFallbackAction } = require('./agent/decision');
 const { TOOL_DEFINITIONS, getToolDefinition, createToolRegistry } = require('./agent/tool-registry');
 const { routeSemanticInput, reconcileModelRoute } = require('./agent/semantic-router');
+const { AGENT_TOOLS, AGENT_TOOL_NAMES } = require('./agent/tool-schemas');
 
 const MAX_CONTEXT_MESSAGES = 12;
 const MAX_CONTEXT_MESSAGE_CHARS = 1200;
@@ -3159,6 +3160,8 @@ async function readModelStream(response, onDelta, parentSignal, readIdleTimeout)
   let rawPayload = '';
   let reasoningStarted = false;
   let contentStarted = false;
+  // 流式 tool_calls 按 index 分片累积（id/name/arguments 都可能拆成多个 delta 到达）
+  const toolCallFragments = new Map();
   // 流式读阶段：每次收到 chunk 就续期，不再受总请求时长限制
   let idleTimer = null;
   const resetIdle = () => {
@@ -3207,6 +3210,21 @@ async function readModelStream(response, onDelta, parentSignal, readIdleTimeout)
           content += text;
           if (typeof onDelta === 'function') onDelta(text, null, {});
         }
+        if (Array.isArray(delta.tool_calls)) {
+          for (const fragment of delta.tool_calls) {
+            const index = typeof fragment.index === 'number' ? fragment.index : 0;
+            let entry = toolCallFragments.get(index);
+            if (!entry) {
+              entry = { id: '', name: '', arguments: '' };
+              toolCallFragments.set(index, entry);
+            }
+            if (fragment.id) entry.id = fragment.id;
+            if (fragment.function) {
+              if (fragment.function.name) entry.name += fragment.function.name;
+              if (typeof fragment.function.arguments === 'string') entry.arguments += fragment.function.arguments;
+            }
+          }
+        }
       }
       if (chunk.done) break;
     }
@@ -3228,7 +3246,31 @@ async function readModelStream(response, onDelta, parentSignal, readIdleTimeout)
   }
   const result = { content: content.trim() };
   if (reasoning) result.reasoning = reasoning.trim();
+  const toolCalls = normalizeToolCalls(Array.from(toolCallFragments.values()).map((entry) => ({
+    id: entry.id || `call_${entry.name || 'tool'}_${Math.random().toString(36).slice(2, 10)}`,
+    function: { name: entry.name, arguments: entry.arguments }
+  })));
+  if (toolCalls && toolCalls.length) result.toolCalls = toolCalls;
   return result;
+}
+
+/* 把 OpenAI 兼容的 tool_calls 原始结构归一化成 {id, name, args} */
+function normalizeToolCalls(rawToolCalls) {
+  if (!Array.isArray(rawToolCalls) || !rawToolCalls.length) return null;
+  const normalized = [];
+  for (const entry of rawToolCalls) {
+    const fn = entry && entry.function || {};
+    const name = String(fn.name || '').trim();
+    if (!name) continue;
+    let args = {};
+    const rawArgs = typeof fn.arguments === 'string' ? fn.arguments : '';
+    if (rawArgs.trim()) {
+      // 非法 JSON 不静默当作空参数执行：置 null，由 agent 循环回传错误观察让模型重新调用
+      try { args = JSON.parse(rawArgs); } catch (error) { args = null; }
+    }
+    normalized.push({ id: entry.id || `call_${name}_${normalized.length}`, name, args });
+  }
+  return normalized.length ? normalized : null;
 }
 
 function isRequestCancelled(error, context) {
@@ -3280,7 +3322,9 @@ async function callLLM(messages, opts) {
         temperature: cfg.temperature,
         // 推理模型（如 DeepSeek V4）会先输出 reasoning 再输出 content，需要足够 token 空间
         max_tokens: (opts && opts.maxTokens) || 1000,
-        response_format: (opts && opts.jsonMode) ? { type: 'json_object' } : undefined,
+        // 注意：OpenAI 兼容接口不允许 response_format=json_object 与 tools 同时使用
+        response_format: (opts && opts.jsonMode && !(opts && opts.tools)) ? { type: 'json_object' } : undefined,
+        tools: opts && opts.tools,
         stream: isStream
       }),
       signal: controller.signal
@@ -3299,7 +3343,7 @@ async function callLLM(messages, opts) {
     }
     if (isStream && res.body && typeof res.body.getReader === 'function') {
       const streamed = await readModelStream(res, opts.onDelta, parentSignal, idleTimeout);
-      if (streamed && streamed.content) return streamed;
+      if (streamed && (streamed.content || (streamed.toolCalls && streamed.toolCalls.length))) return streamed;
       const error = new Error('模型没有返回最终答案');
       error.code = 'LLM_FINAL_CONTENT_EMPTY';
       throw error;
@@ -3310,12 +3354,14 @@ async function callLLM(messages, opts) {
     const msg = data.choices && data.choices[0] && data.choices[0].message;
     if (!msg) throw new Error('LLM 返回为空');
     const content = typeof msg.content === 'string' ? msg.content.trim() : '';
-    if (!content) {
+    const toolCalls = normalizeToolCalls(msg.tool_calls);
+    if (!content && !(toolCalls && toolCalls.length)) {
       const error = new Error('模型没有返回最终答案');
       error.code = 'LLM_FINAL_CONTENT_EMPTY';
       throw error;
     }
     const result = { content };
+    if (toolCalls && toolCalls.length) result.toolCalls = toolCalls;
     // 非流式路径同样把 reasoning 带出来（推理模型会在 message.reasoning / message.reasoning_content）
     const reasoning = (typeof msg.reasoning === 'string' && msg.reasoning)
       || (typeof msg.reasoning_content === 'string' && msg.reasoning_content) || '';
@@ -3526,6 +3572,226 @@ actions 包含 2 到 5 项，可使用 create、memo_create、memo_pin、complet
 }
 
 /* ---------- LLM 解析 ---------- */
+/* ---------- Agent 主循环：模型自主决定调用哪些工具，多步执行后给出答复 ---------- */
+const AGENT_MAX_STEPS = 8;
+const AGENT_TOOL_LABELS = {
+  query: '查询任务', stats: '统计进度', suggest: '分析优先级', summary: '汇总进展',
+  create: '创建任务', complete: '完成任务', start: '开始任务', update: '更新任务',
+  child: '添加子任务', postpone: '顺延任务', delete: '删除任务', archive: '归档任务',
+  split: '拆分任务', batch: '批量操作',
+  memo_create: '创建备忘录', memo_query: '查询备忘录', memo_pin: '置顶备忘录',
+  memo_to_task: '备忘转任务', memo_split: '拆分备忘录', memo_delete: '删除备忘录',
+  daily_plan: '生成今日计划', daily_replan: '重排今日计划', daily_review: '生成今日复盘',
+  focus_start: '开始专注', focus_pause: '暂停专注', focus_resume: '继续专注',
+  focus_interrupt: '记录打断', focus_finish: '结束专注'
+};
+const AGENT_TOOL_PROMPT_SUFFIX = `
+
+你还可以调用提供的工具（tool calls）来完成任务：
+- 当请求包含多个操作（如「查出紧急任务并把最急的那个标记开始」）、或需要读取实时工作区数据来回答时，优先连续调用工具，工具结果会作为观察返回给你；
+- 危险操作（删除等）会先向用户请求确认，属正常流程；
+- 仅当请求是单个简单意图且参数齐全时，才直接返回意图 JSON（此时不要调用工具）。两者不要同时输出。`;
+
+function agentToolLabel(name) {
+  return AGENT_TOOL_LABELS[name] || name;
+}
+
+/* 给结果补上 agent 执行轨迹（展示用：查询任务 → 开始任务） */
+function withAgentTrace(result, executedSteps) {
+  result.agentSteps = executedSteps;
+  if (executedSteps.length > 1) {
+    result.agentTrace = executedSteps.map(agentToolLabel).join(' → ');
+  }
+  return result;
+}
+
+/* 工具结果压成给模型看的 observation：截断防止上下文爆炸 */
+function compactToolObservation(result) {
+  try {
+    const slim = {};
+    if (!result || typeof result !== 'object') return JSON.stringify({ message: String(result || '') });
+    if (result.message) slim.message = String(result.message).slice(0, 600);
+    if (result.type) slim.type = result.type;
+    if (Array.isArray(result.tasks)) slim.tasks = result.tasks.slice(0, 12).map((t) => ({ id: t.id, title: t.title, status: t.status, pri: t.pri, due: t.due || null }));
+    if (Array.isArray(result.memos)) slim.memos = result.memos.slice(0, 12).map((m) => ({ id: m.id, title: m.title, pinned: !!m.pinned }));
+    // query/memo_query 结果只带 id 列表：解析出实体概要，供模型在后续步骤里引用
+    if (!slim.tasks && Array.isArray(result.taskIds)) {
+      slim.tasks = result.taskIds.slice(0, 12).map((id) => {
+        const t = store.getTask(id);
+        return t ? { id: t.id, title: t.title, status: t.status, pri: t.pri, due: t.due || null } : { id };
+      });
+      slim.total = result.taskIds.length;
+    }
+    if (!slim.memos && Array.isArray(result.memoIds)) {
+      slim.memos = result.memoIds.slice(0, 12).map((id) => {
+        const m = store.getMemo(id);
+        return m ? { id: m.id, title: m.title, pinned: !!m.pinned } : { id };
+      });
+      slim.total = result.memoIds.length;
+    }
+    if (result.task) slim.task = { id: result.task.id, title: result.task.title, status: result.task.status };
+    if (result.memo) slim.memo = { id: result.memo.id, title: result.memo.title };
+    if (Array.isArray(result.candidates)) slim.candidates = result.candidates.slice(0, 6).map((c) => ({ id: c.id, title: c.title, entityType: c.entityType }));
+    if (Array.isArray(result.items)) slim.items = result.items.slice(0, 12);
+    if (Array.isArray(result.sections)) slim.sections = result.sections.map((s) => ({ heading: s.heading, itemCount: (s.items || []).length }));
+    if (typeof result.count === 'number') slim.count = result.count;
+    if (result.error) slim.error = String(result.error).slice(0, 200);
+    // 超限时逐步收缩数组而不是截断字符串，保证 observation 始终是合法 JSON
+    let payload = JSON.stringify(slim);
+    while (payload.length > 4000) {
+      let shrunk = false;
+      for (const key of ['tasks', 'memos', 'items', 'candidates']) {
+        const list = slim[key];
+        if (Array.isArray(list) && list.length > 1) {
+          list.length = Math.ceil(list.length / 2);
+          shrunk = true;
+        }
+      }
+      if (!shrunk) break;
+      payload = JSON.stringify(slim);
+    }
+    if (payload.length > 4000) {
+      // 单字段超大（如超长 message）时退化为提示，仍然是合法 JSON
+      return JSON.stringify({ type: slim.type, total: slim.total, message: '工具结果过大，已省略详情' });
+    }
+    return payload;
+  } catch (error) {
+    return JSON.stringify({ message: '工具结果序列化失败' });
+  }
+}
+
+function toRawToolCall(call) {
+  return {
+    id: call.id,
+    type: 'function',
+    function: { name: call.name, arguments: JSON.stringify(call.args || {}) }
+  };
+}
+
+function finishAgentLoop(text, primary, executedSteps, finalMessage) {
+  if (primary) {
+    const result = finalizeResult(primary.intent, primary.params, primary.result);
+    const summary = String(finalMessage || '').trim();
+    if (summary) result.message = summary;
+    withAgentTrace(result, executedSteps);
+    return Object.assign({ intent: primary.intent, raw: text, params: primary.params, engine: 'agent' }, result);
+  }
+  const message = String(finalMessage || '').trim() || '好的，已处理。';
+  const result = finalizeResult('chat', { text }, { type: 'chat', message });
+  withAgentTrace(result, executedSteps);
+  return Object.assign({ intent: 'chat', raw: text, params: { text }, engine: 'agent' }, result);
+}
+
+async function runAgentLoop({ text, requestContext, messages, firstToolCalls, firstContent }) {
+  const executedSteps = [];
+  const conversation = messages.slice();
+  let pendingToolCalls = firstToolCalls;
+  let assistantContent = firstContent || '';
+  let lastPrimary = null;
+
+  for (let step = 0; step < AGENT_MAX_STEPS; step++) {
+    throwIfRequestCancelled(requestContext);
+    const assistantMessage = { role: 'assistant', content: assistantContent || null, tool_calls: pendingToolCalls.map(toRawToolCall) };
+    const toolMessages = [];
+    let interrupt = null; // 需要用户确认/选择/澄清的操作 → 中断循环交还交互
+    let primary = null;   // 本轮最后一个真正执行成功的操作（作为主结果返回）
+
+    for (const call of pendingToolCalls) {
+      const known = AGENT_TOOL_LABELS[call.name] !== undefined || AGENT_TOOL_NAMES.includes(call.name);
+      if (!known || !getToolDefinition(call.name)) {
+        toolMessages.push({ role: 'tool', tool_call_id: call.id, content: JSON.stringify({ error: `未知工具 ${call.name}` }) });
+        continue;
+      }
+      if (call.args === null) {
+        // 非法 JSON 参数：不执行，回传错误观察让模型重新调用
+        toolMessages.push({ role: 'tool', tool_call_id: call.id, content: JSON.stringify({ error: '工具参数不是合法 JSON，请重新调用并输出完整的 JSON 参数' }) });
+        continue;
+      }
+      reportRequestProgress(requestContext, 'executing', `正在${agentToolLabel(call.name)}…`);
+      let result;
+      try {
+        result = execute(call.name, JSON.parse(JSON.stringify(call.args || {})));
+      } catch (error) {
+        result = { type: 'error', message: `工具执行失败：${error.message}` };
+      }
+      if (result && (result.type === 'confirm' || result.type === 'ask' || result.type === 'clarify')) {
+        // 危险操作已进入确认流程：把确认卡片返回给用户，剩余工具调用作废
+        interrupt = { intent: call.name, params: call.args || {}, result };
+        toolMessages.push({ role: 'tool', tool_call_id: call.id, content: JSON.stringify({ status: '等待用户确认', message: result.message }) });
+        break;
+      }
+      primary = { intent: call.name, params: call.args || {}, result };
+      lastPrimary = primary;
+      executedSteps.push(call.name);
+      toolMessages.push({ role: 'tool', tool_call_id: call.id, content: compactToolObservation(result) });
+    }
+
+    conversation.push(assistantMessage, ...toolMessages);
+
+    if (interrupt) {
+      const result = finalizeResult(interrupt.intent, interrupt.params, interrupt.result);
+      withAgentTrace(result, executedSteps);
+      return Object.assign({ intent: interrupt.intent, raw: text, params: interrupt.params, engine: 'agent' }, result);
+    }
+
+    // 基于 observation 让模型决定下一步（继续调工具，或给出最终答复）
+    let next;
+    try {
+      next = await callLLM(conversation, {
+        tools: AGENT_TOOLS,
+        timeout: requestContext && requestContext.timeout || 45000,
+        readTimeout: 75000,
+        maxTokens: 1800,
+        signal: requestContext && requestContext.signal,
+        stream: !!(requestContext && requestContext.onProgress),
+        onDelta: (delta, reasoningDelta, flags) => reportRequestProgress(requestContext, 'streaming', '正在组织回复…', delta, reasoningDelta, flags)
+      });
+    } catch (error) {
+      if (isRequestCancelled(error, requestContext)) throw error;
+      // 循环中的模型调用失败：已执行的操作不回滚也不能重复执行，用已有结果收尾
+      console.error('[ai] agent 循环模型调用失败:', error.message);
+      const partial = lastPrimary
+        ? finalizeResult(lastPrimary.intent, lastPrimary.params, lastPrimary.result)
+        : { type: 'info', message: '' };
+      partial.agentSteps = executedSteps;
+      if (executedSteps.length > 1) partial.agentTrace = executedSteps.map(agentToolLabel).join(' → ');
+      partial.message = lastPrimary
+        ? `已完成 ${executedSteps.length} 步操作，但后续步骤连接模型失败（${error.message}）。已完成的部分如下，稍后可以继续。`
+        : `连接模型失败：${error.message}，本轮没有执行任何操作。`;
+      partial.retryable = true;
+      return Object.assign({
+        intent: lastPrimary ? lastPrimary.intent : 'chat',
+        raw: text,
+        params: lastPrimary ? lastPrimary.params : { text },
+        engine: 'agent'
+      }, partial);
+    }
+
+    if (next && Array.isArray(next.toolCalls) && next.toolCalls.length) {
+      assistantContent = next.content || '';
+      pendingToolCalls = next.toolCalls;
+      continue;
+    }
+    // 非流式拿到 reasoning 时补发一次，保证思笺 UI 与流式一致
+    if (!(requestContext && requestContext.onProgress) && next && next.reasoning) {
+      reportRequestProgress(requestContext, 'streaming', '正在组织回复…', null, next.reasoning, { reasoningDone: true, cumulativeReasoning: next.reasoning });
+    }
+    return finishAgentLoop(text, primary, executedSteps, next && next.content || '');
+  }
+
+  // 步数上限：用已有操作结果收尾，避免静默失败
+  if (lastPrimary) {
+    const result = finalizeResult(lastPrimary.intent, lastPrimary.params, lastPrimary.result);
+    withAgentTrace(result, executedSteps);
+    result.message = `已完成 ${executedSteps.length} 步操作，达到单轮执行上限（${AGENT_MAX_STEPS} 步），如需继续请告诉我。`;
+    return Object.assign({ intent: lastPrimary.intent, raw: text, params: lastPrimary.params, engine: 'agent' }, result);
+  }
+  const message = `这次请求的操作步骤超过单轮上限（${AGENT_MAX_STEPS} 步），还没有执行任何操作，建议拆成几句话分别发送。`;
+  const result = finalizeResult('chat', { text }, { type: 'info', message });
+  withAgentTrace(result, executedSteps);
+  return Object.assign({ intent: 'chat', raw: text, params: { text }, engine: 'agent' }, result);
+}
+
 async function parseWithLLM(text, continuation, requestContext, semanticOptions) {
   const localResult = continuation ? null : semanticOptions && semanticOptions.localResult || parse(text);
   const semantic = semanticOptions ? semanticEnvelope(
@@ -3549,18 +3815,32 @@ async function parseWithLLM(text, continuation, requestContext, semanticOptions)
     : '';
   throwIfRequestCancelled(requestContext);
   reportRequestProgress(requestContext, 'understanding', '正在理解你的要求…');
-  const llmResult = await callLLM([
-    { role: 'system', content: buildSystemPrompt(text, semantic) + continuationContext },
+  const messages = [
+    { role: 'system', content: buildSystemPrompt(text, semantic) + continuationContext + AGENT_TOOL_PROMPT_SUFFIX },
     ...getRecentConversationMessages(),
     { role: 'user', content: text }
-  ], {
+  ];
+  const llmResult = await callLLM(messages, {
     jsonMode: true,
+    tools: AGENT_TOOLS,
     timeout: requestContext && requestContext.timeout || 45000,
     readTimeout: 75000,
     maxTokens: 2200,
     signal: requestContext && requestContext.signal
   });
   const content = llmResult && llmResult.content || '';
+
+  // 模型选择直接调用工具（而非返回意图 JSON）→ 进入 agent 主循环：多步执行 + observation 回填
+  if (llmResult && Array.isArray(llmResult.toolCalls) && llmResult.toolCalls.length) {
+    const agentOutcome = await runAgentLoop({
+      text,
+      requestContext,
+      messages,
+      firstToolCalls: llmResult.toolCalls,
+      firstContent: content
+    });
+    return { intent: '__agent_loop__', agentOutcome };
+  }
 
   throwIfRequestCancelled(requestContext);
   reportRequestProgress(requestContext, 'checking', '正在核对目标和安全边界…');
@@ -3812,6 +4092,16 @@ async function handleWithLLM(text, requestContext) {
   }
 
   const { intent, params, reply, confidence, clarification: clarificationMessage, semanticConflict } = parsed;
+  // parseWithLLM 中模型直接选择了工具调用 → agent 主循环已产出完整结果，直接返回
+  if (intent === '__agent_loop__' && parsed.agentOutcome) {
+    const outcome = parsed.agentOutcome;
+    // agent 路径同样消费了旧澄清状态：未产生新的确认/追问时清掉残留 pending，
+    // 避免下一条普通命令被误当作旧澄清的补充（confirm/ask/clarify 的 pending 已由 execute 写入，须保留）
+    if (semanticPending && !['confirm', 'ask', 'clarify'].includes(outcome.type)) {
+      store.updateAgentState({ pending: null });
+    }
+    return outcome;
+  }
   if (semanticPending) store.updateAgentState({ pending: null });
   if (intent === 'report') {
     return Object.assign({ intent: 'report', raw: text, params, engine: 'llm' }, await generateAgentReport(text, params, requestContext));

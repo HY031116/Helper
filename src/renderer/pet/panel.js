@@ -356,6 +356,13 @@ function renderResultControls(message, result, retryText) {
 
 function renderAssistantResult(result, retryText) {
   const message = addMessage('ai', result?.message || '操作已完成。');
+  // Agent 自主多步执行轨迹：查询任务 → 开始任务
+  if (result?.agentTrace && Array.isArray(result.agentSteps) && result.agentSteps.length > 1) {
+    const trace = document.createElement('div');
+    trace.className = 'cm-agent-trace';
+    trace.textContent = `自主执行 ${result.agentSteps.length} 步 · ${result.agentTrace}`;
+    message.appendChild(trace);
+  }
   renderResultControls(message, result || {}, retryText);
   chatState.textContent = result?.historyNotice || (result?.cancelled ? '已停止' : '与主工作台共享对话');
   refreshOverview();

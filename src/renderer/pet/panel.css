@@ -95,6 +95,24 @@ button:disabled { cursor: wait; opacity: 0.58; }
 .chat-message.pending > .cm-text { color: var(--panel-muted); }
 .chat-message.pending { color: var(--panel-muted); }
 
+/* Agent 自主执行轨迹：朱砂细线书签（主窗口同款缩小版） */
+.cm-agent-trace {
+  margin: 5px 0 3px 0;
+  padding: 2px 8px 2px 7px;
+  display: inline-flex; align-items: center; gap: 5px;
+  border-left: 2px solid rgba(180, 83, 58, 0.45);
+  border-radius: 0 4px 4px 0;
+  color: var(--panel-muted);
+  font: 500 9.5px/1.4 var(--font-ui);
+  letter-spacing: 0.02em;
+  background: rgba(38, 40, 43, 0.04);
+}
+.cm-agent-trace::before {
+  content: '⌘';
+  font-size: 9px;
+  color: rgba(180, 83, 58, 0.75);
+}
+
 /* 桌宠思笺：缩小版朱砂印 + 书眉 + 笔尖光标 */
 .cm-reasoning {
   margin: 0 0 7px -10px;
