@@ -98,6 +98,14 @@ function finishReasoningBlock(msgEl, cumulativeReasoning) {
   block.classList.add('is-done');
 }
 
+/* 轮次结束时兜底收尾思考块：流被中断时 reasoningDone 不会到达，避免思考文本悬浮成"回答主体" */
+function settleReasoningBlock(msgEl) {
+  const block = msgEl && msgEl.querySelector ? msgEl.querySelector('.ta-reasoning') : null;
+  if (block && typeof block.querySelector === 'function' && block.querySelector('.ta-reasoning-body')) {
+    finishReasoningBlock(msgEl);
+  }
+}
+
 /* ---------- Agent 轨迹 ---------- */
 
 function appendAgentTrace(message, result) {
@@ -282,7 +290,7 @@ function updateProgress(progress) {
     scrollToEnd(false);
     return;
   }
-  if (message && !reasoningDelta && !progress.reasoningDone) {
+  if (message && !activeRequest.streamStarted && !reasoningDelta && !progress.reasoningDone) {
     pending.querySelector('.ta-text').textContent = message;
     scrollToEnd(false);
   }
@@ -313,12 +321,14 @@ async function sendPrompt(text) {
   } catch (error) {
     activeRequest = null;
     pending.classList.remove('is-streaming');
+    settleReasoningBlock(pending);
     setState(error.message || '请求失败，请重试');
     return;
   }
 
   activeRequest = null;
   pending.classList.remove('is-streaming');
+  settleReasoningBlock(pending);
 
   if (preview && preview.ok) {
     // 任务范围修改：清掉解析阶段的流式文本，改为预览卡确认
@@ -351,12 +361,14 @@ async function runGlobalChat(pending, input) {
   } catch (error) {
     activeRequest = null;
     pending.classList.remove('is-streaming');
+    settleReasoningBlock(pending);
     pending.querySelector('.ta-text').textContent = error.message || '连接模型失败，请稍后重试。';
     setState('');
     return;
   }
   activeRequest = null;
   pending.classList.remove('is-streaming');
+  settleReasoningBlock(pending);
   const body = pending.querySelector('.ta-text');
   body.textContent = (result && result.message) || '';
   appendResultActions(pending, result);

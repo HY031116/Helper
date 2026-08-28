@@ -412,6 +412,8 @@ async function sendPrompt(rawText) {
     pending.remove();
     renderAssistantResult(result, text);
   } catch (error) {
+    // 流被中断时 reasoningDone 不会到达：失败收尾时把思考块折叠，避免思考文本悬浮成"回答主体"
+    if (pending.querySelector('.cm-reasoning')) finishReasoningBlock(pending);
     pendingText.textContent = '助手暂时没有响应。请检查模型设置后重试。';
     pending.classList.remove('pending');
     addActions(pending, [{ label: '重试', primary: true, run: () => sendPrompt(text) }], '错误恢复');

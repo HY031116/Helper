@@ -194,12 +194,81 @@ test('Agent 主循环：循环中途模型失败时保留已执行结果且不�
     assert.strictEqual(result.engine, 'agent');
     assert.deepStrictEqual(result.agentSteps, ['create']);
     assert.strictEqual(result.type, 'create');
-    assert.match(result.message, /已完成 1 步操作/);
-    assert.match(result.message, /连接模型失败/);
+    // 失败消息汇总已执行步骤的真实结果，而不是空泛的"已完成的部分如下"
+    assert.match(result.message, /已完成 1 步：/);
+    assert.match(result.message, /准备汇报材料/);
+    assert.match(result.message, /模型中断没有执行/);
+    assert.match(result.message, /模型连接超时/);
+    assert.match(result.message, /可重试继续/);
     assert.ok(result.retryable);
     // 只创建了一次，没有因降级重复创建
     const created = store.getAllTasks().filter((t) => t.title === '准备汇报材料');
     assert.strictEqual(created.length, 1);
+  } finally {
+    global.fetch = originalFetch;
+    store.updateSettings({ aiStage: 'mock' });
+  }
+});
+
+test('Agent 主循环：思考耗尽预算导致正文为空时加大 token 预算重试一次', async (context) => {
+  context.mock.timers.enable({ apis: ['Date'], now: new Date('2026-08-21T10:00:00') });
+  reset();
+  useLlmSettings();
+  const originalFetch = global.fetch;
+  let call = 0;
+  const bodies = [];
+  global.fetch = async (url, options) => {
+    call += 1;
+    bodies.push(JSON.parse(options.body));
+    // 第 1 次：解析出工具调用；第 2 次：只有思考没有正文（token 预算被思考耗尽）
+    if (call === 1) return { ok: true, json: async () => toolCallMessage([{ name: 'query', args: {} }]) };
+    if (call === 2) return { ok: true, json: async () => contentMessage('') };
+    // 第 3 次：加大预算的重试成功给出最终答复
+    return { ok: true, json: async () => contentMessage('这是重试后的完整回答。') };
+  };
+  try {
+    const result = await ai.handleAuto('看看我的任务');
+    assert.strictEqual(result.engine, 'agent');
+    // 最终 type 跟随最后执行成功的操作（query），最终消息来自重试后的模型答复
+    assert.strictEqual(result.type, 'query');
+    assert.strictEqual(result.message, '这是重试后的完整回答。');
+    assert.deepStrictEqual(result.agentSteps, ['query']);
+    // 循环内调用使用加大的预算，正文为空后用更大预算重试
+    assert.strictEqual(bodies[1].max_tokens, 4096);
+    assert.strictEqual(bodies[2].max_tokens, 8192);
+    // 重试的是同一段对话（observation 已回填），不是新请求
+    assert.ok(bodies[2].messages.some((m) => m.role === 'tool' && m.tool_call_id === 'call-0'));
+  } finally {
+    global.fetch = originalFetch;
+    store.updateSettings({ aiStage: 'mock' });
+  }
+});
+
+test('Agent 主循环：加预算重试仍拿不到正文时走部分收尾', async (context) => {
+  context.mock.timers.enable({ apis: ['Date'], now: new Date('2026-08-21T10:00:00') });
+  reset();
+  useLlmSettings();
+  const originalFetch = global.fetch;
+  let call = 0;
+  const bodies = [];
+  global.fetch = async (url, options) => {
+    call += 1;
+    bodies.push(JSON.parse(options.body));
+    if (call === 1) return { ok: true, json: async () => toolCallMessage([{ name: 'stats', args: {} }]) };
+    return { ok: true, json: async () => contentMessage('') }; // 始终只有思考没有正文
+  };
+  try {
+    const result = await ai.handleAuto('统计一下进度');
+    assert.strictEqual(result.engine, 'agent');
+    assert.deepStrictEqual(result.agentSteps, ['stats']);
+    assert.match(result.message, /已完成 1 步：/);
+    assert.match(result.message, /模型没有返回最终答案/);
+    assert.match(result.message, /可重试继续/);
+    assert.ok(result.retryable);
+    // 恰好三次带工具的调用：初始解析 + 循环常规预算 + 一次加预算重试，不做无限重试
+    assert.strictEqual(bodies.filter((b) => Array.isArray(b.tools)).length, 3);
+    assert.strictEqual(bodies[1].max_tokens, 4096);
+    assert.strictEqual(bodies[2].max_tokens, 8192);
   } finally {
     global.fetch = originalFetch;
     store.updateSettings({ aiStage: 'mock' });

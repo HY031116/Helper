@@ -255,19 +255,21 @@ function isRecentMemoSplitRequest(intent, text) {
   return !!recentMemoContext();
 }
 
+function compoundWriteClauseIntents(text) {
+  const raw = String(text || '').trim();
+  if (!/(然后|再(?:把|将|建|创|记|删|完成|开始|改|加|顺延|推迟)|同时|并且|另外|并\s*(?:把|将|创建|新建|添加|记|删|完成|开始|归档|修改|改|加|顺延|推迟|拆))/.test(raw)) return [];
+  const clauses = raw.split(/(?:，|,|；|;)?\s*(?:然后|再|同时|并且|另外|并(?=\s*(?:把|将|创建|新建|添加|记|删|完成|开始|归档|修改|改|加|顺延|推迟|拆)))\s*/).filter(Boolean);
+  return clauses.map((clause) => {
+    const normalized = clause.replace(/^建个/, '新建').replace(/^记下/, '记一下');
+    const clauseIntent = detectIntent(intentTextWithoutEntityTitles(normalized), normalized);
+    const definition = getToolDefinition(clauseIntent);
+    return definition && definition.effect === 'write' ? clauseIntent : null;
+  }).filter(Boolean);
+}
+
 function hasIncompleteCompoundWrite(intent, text) {
   if (intent === 'plan') return false;
-  const raw = String(text || '').trim();
-  if (!/(然后|再(?:把|将|建|创|记|删|完成|开始|改|加|顺延|推迟)|同时|并且|另外|并\s*(?:把|将|创建|新建|添加|记|删|完成|开始|归档|修改|改|加|顺延|推迟|拆))/.test(raw)) return false;
-  const clauses = raw.split(/(?:，|,|；|;)?\s*(?:然后|再|同时|并且|另外|并(?=\s*(?:把|将|创建|新建|添加|记|删|完成|开始|归档|修改|改|加|顺延|推迟|拆)))\s*/).filter(Boolean);
-  const writeIntents = clauses.map((clause) => {
-    const normalized = clause.replace(/^建个/, '新建').replace(/^记下/, '记一下');
-    return detectIntent(intentTextWithoutEntityTitles(normalized), normalized);
-  }).filter((clauseIntent) => {
-    const definition = getToolDefinition(clauseIntent);
-    return definition && definition.effect === 'write';
-  });
-  return writeIntents.length >= 2;
+  return compoundWriteClauseIntents(text).length >= 2;
 }
 
 function compactPendingContextTurns(previousPending, text) {
@@ -3695,8 +3697,39 @@ function finishAgentLoop(text, primary, executedSteps, finalMessage) {
   return Object.assign({ intent: 'chat', raw: text, params: { text }, engine: 'agent' }, result);
 }
 
+/* 循环内模型调用的 token 预算：推理模型的思考长度不可控，预算不足会被截断成"只有思考没有正文" */
+const AGENT_LOOP_MAX_TOKENS = 4096;
+const AGENT_LOOP_RETRY_TOKENS = 8192;
+const AGENT_CHAT_MAX_TOKENS = 3072;
+
+/* 推理模型可能把预算耗在思考上导致正文为空（LLM_FINAL_CONTENT_EMPTY）：用更大预算重试一次 */
+async function callLLMResilient(messages, opts, requestContext, retryMaxTokens) {
+  try {
+    return await callLLM(messages, opts);
+  } catch (error) {
+    if (isRequestCancelled(error, requestContext)) throw error;
+    if (error && error.code === 'LLM_FINAL_CONTENT_EMPTY' && retryMaxTokens > (opts.maxTokens || 0)) {
+      return callLLM(messages, Object.assign({}, opts, { maxTokens: retryMaxTokens }));
+    }
+    throw error;
+  }
+}
+
+async function callAgentLoopStep(conversation, requestContext) {
+  return callLLMResilient(conversation, {
+    tools: AGENT_TOOLS,
+    timeout: requestContext && requestContext.timeout || 45000,
+    readTimeout: 75000,
+    maxTokens: AGENT_LOOP_MAX_TOKENS,
+    signal: requestContext && requestContext.signal,
+    stream: !!(requestContext && requestContext.onProgress),
+    onDelta: (delta, reasoningDelta, flags) => reportRequestProgress(requestContext, 'streaming', '正在组织回复…', delta, reasoningDelta, flags)
+  }, requestContext, AGENT_LOOP_RETRY_TOKENS);
+}
+
 async function runAgentLoop({ text, requestContext, messages, firstToolCalls, firstContent }) {
   const executedSteps = [];
+  const stepSummaries = [];
   const conversation = messages.slice();
   let pendingToolCalls = firstToolCalls;
   let assistantContent = firstContent || '';
@@ -3736,6 +3769,8 @@ async function runAgentLoop({ text, requestContext, messages, firstToolCalls, fi
       primary = { intent: call.name, params: call.args || {}, result };
       lastPrimary = primary;
       executedSteps.push(call.name);
+      const stepSummary = String((result && result.message) || '').trim() || `${agentToolLabel(call.name)}完成`;
+      stepSummaries.push(stepSummary.length > 80 ? `${stepSummary.slice(0, 80)}…` : stepSummary);
       toolMessages.push({ role: 'tool', tool_call_id: call.id, content: compactToolObservation(result) });
     }
 
@@ -3750,15 +3785,7 @@ async function runAgentLoop({ text, requestContext, messages, firstToolCalls, fi
     // 基于 observation 让模型决定下一步（继续调工具，或给出最终答复）
     let next;
     try {
-      next = await callLLM(conversation, {
-        tools: AGENT_TOOLS,
-        timeout: requestContext && requestContext.timeout || 45000,
-        readTimeout: 75000,
-        maxTokens: 1800,
-        signal: requestContext && requestContext.signal,
-        stream: !!(requestContext && requestContext.onProgress),
-        onDelta: (delta, reasoningDelta, flags) => reportRequestProgress(requestContext, 'streaming', '正在组织回复…', delta, reasoningDelta, flags)
-      });
+      next = await callAgentLoopStep(conversation, requestContext);
     } catch (error) {
       if (isRequestCancelled(error, requestContext)) throw error;
       // 循环中的模型调用失败：已执行的操作不回滚也不能重复执行，用已有结果收尾
@@ -3769,7 +3796,7 @@ async function runAgentLoop({ text, requestContext, messages, firstToolCalls, fi
       partial.agentSteps = executedSteps;
       if (executedSteps.length > 1) partial.agentTrace = executedSteps.map(agentToolLabel).join(' → ');
       partial.message = lastPrimary
-        ? `已完成 ${executedSteps.length} 步操作，但后续步骤连接模型失败（${error.message}）。已完成的部分如下，稍后可以继续。`
+        ? `已完成 ${executedSteps.length} 步：${stepSummaries.join('；')}。后续步骤因模型中断没有执行（${error.message}），可重试继续。`
         : `连接模型失败：${error.message}，本轮没有执行任何操作。`;
       partial.retryable = true;
       return Object.assign({
@@ -4285,16 +4312,16 @@ ${AGENT_TOOL_PROMPT_SUFFIX}`
     ...conversationContextMessages(requestContext),
     { role: 'user', content: text }
   ];
-  const llmResult = await callLLM(messages, {
+  const llmResult = await callLLMResilient(messages, {
     tools: AGENT_TOOLS,
     timeout: 30000,
     readTimeout: 45000,
     idleTimeout: 90000,
-    maxTokens: 1200,
+    maxTokens: AGENT_CHAT_MAX_TOKENS,
     signal: requestContext && requestContext.signal,
     stream: hasStream,
     onDelta: (delta, reasoningDelta, flags) => reportRequestProgress(requestContext, 'streaming', '正在生成回复…', delta, reasoningDelta, flags)
-  });
+  }, requestContext, AGENT_LOOP_RETRY_TOKENS);
   const reasoning = llmResult && llmResult.reasoning || '';
   if (!hasStream && reasoning) {
     reportRequestProgress(requestContext, 'streaming', '正在生成回复…', null, reasoning, { reasoningDone: true, cumulativeReasoning: reasoning });

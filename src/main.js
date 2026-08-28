@@ -634,7 +634,7 @@ function registerIpc() {
         history,
         onProgress: (progress) => sendAiProgress(e.sender, requestId, progress)
       }));
-      sendAiProgress(e.sender, requestId, { stage: 'done', message: '处理完成' });
+      sendAiProgress(e.sender, requestId, { stage: 'done' });
       // 任务对话小窗：会话记忆由小窗自持，不写入主窗口侧边栏的对话记录
       if (isTaskAgent) return aiRequestCoordinator.complete(key, result);
       const persisted = persistAiExchange(text, result);

@@ -358,6 +358,33 @@ test('任务上下文 Agent：无具体步骤时不会写入占位拆分', async
   assert.deepStrictEqual(store.getTask(task.id).children, []);
 });
 
+test('真实模型：纯对话被截断时加大预算重试并返回完整回复', async () => {
+  reset();
+  store.updateSettings({
+    aiStage: 'llm', aiProvider: 'custom', aiBaseUrl: 'https://example.invalid/v1', aiApiKey: 'test-key', aiModel: 'test-model'
+  });
+  const originalFetch = global.fetch;
+  const bodies = [];
+  let call = 0;
+  global.fetch = async (url, options) => {
+    call += 1;
+    bodies.push(JSON.parse(options.body));
+    // 第一次只有思考没有正文（预算被思考耗尽），重试后返回完整回复
+    if (call === 1) return { ok: true, json: async () => ({ choices: [{ message: { content: '' } }] }) };
+    return { ok: true, json: async () => ({ choices: [{ message: { content: '建议先确认预算，再约法务评审。' } }] }) };
+  };
+  try {
+    const result = await ai.handleAuto('结合客户续约结论，你觉得下一步先做什么？', { onProgress() {} });
+    assert.strictEqual(result.type, 'chat');
+    assert.match(result.message, /预算/);
+    assert.strictEqual(bodies[0].max_tokens, 3072);
+    assert.strictEqual(bodies[1].max_tokens, 8192);
+  } finally {
+    global.fetch = originalFetch;
+    store.updateSettings({ aiStage: 'mock' });
+  }
+});
+
 test('任务上下文 Agent：连续补充时间沿用上一轮日期但只生成新预览', async (context) => {
   useMorning(context);
   reset();

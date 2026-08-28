@@ -4252,6 +4252,14 @@ function finishAiReasoningBlock(msgEl, cumulativeReasoning) {
   block.classList.add('is-done');
 }
 
+/* 轮次结束时兜底收尾思考块：流被中断时 reasoningDone 不会到达，避免思考文本悬浮成"回答主体" */
+function settleAiReasoningBlock(msgEl) {
+  const block = msgEl && msgEl.querySelector ? msgEl.querySelector('.msg-reasoning') : null;
+  if (block && typeof block.querySelector === 'function' && block.querySelector('.msg-reasoning-body')) {
+    finishAiReasoningBlock(msgEl);
+  }
+}
+
 function updateAiRequestProgress(progress) {
   if (!activeAiRequest || !progress || progress.requestId !== activeAiRequest.id) return;
   const message = String(progress.message || '').trim();
@@ -4290,7 +4298,7 @@ function updateAiRequestProgress(progress) {
     scrollChat(false);
     return;
   }
-  if (message && activeAiRequest.pending && !reasoningDelta && !progress.reasoningDone) {
+  if (message && activeAiRequest.pending && !activeAiRequest.streamStarted && !reasoningDelta && !progress.reasoningDone) {
     activeAiRequest.pending.querySelector('.msg-text').textContent = message;
     setAiContext('working', message);
     scrollChat(false);
@@ -4502,6 +4510,7 @@ async function runAiTurn(request, retry, options) {
       console.error('[assistant] request failed:', e);
       pending.classList.remove('pending');
       pending.classList.add('error');
+      settleAiReasoningBlock(pending);
       setAssistantMessageState(pending, 'error', '请求未完成');
       pending.querySelector('.msg-text').textContent = assistantRequestFailureMessage();
       pending.appendChild(retryAction(retry, options && options.draft));
@@ -4514,6 +4523,7 @@ async function runAiTurn(request, retry, options) {
       const operationTypes = ['create', 'memo_create', 'memo_delete', 'memo_pin', 'memo_to_task', 'memo_split', 'complete', 'start', 'delete', 'archive', 'split', 'update', 'child', 'postpone', 'restore', 'plan', 'daily_plan', 'daily_replan', 'focus_start', 'focus_pause', 'focus_resume', 'focus_interrupt', 'focus_finish', 'daily_review'];
       const reportTypes = ['report'];
       pending.classList.remove('pending', 'error');
+      settleAiReasoningBlock(pending);
       pending.querySelector('.msg-text').textContent = result.message;
       // Agent 自主多步执行轨迹：查询任务 → 开始任务
       if (result.agentTrace && Array.isArray(result.agentSteps) && result.agentSteps.length > 1) {

@@ -2978,3 +2978,216 @@ test('备忘录列表在运行时支持置顶排序展示和标签解析', () =>
   assert.strictEqual((list.innerHTML.match(/tabindex="0"/g) || []).length, 1);
   assert.strictEqual((list.innerHTML.match(/tabindex="-1"/g) || []).length, 1);
 });
+
+test('助手进度阶段不再覆盖已流出的回答正文', async () => {
+  // 消费端防线：流开始后任何阶段文案只能更新状态，不允许写正文
+  assert.match(app, /if \(message && activeAiRequest\.pending && !activeAiRequest\.streamStarted && !reasoningDelta && !progress\.reasoningDone\) \{/);
+  // 主进程契约：完成阶段只承载生命周期，不再携带可被误用为正文的文案
+  assert.match(main, /sendAiProgress\(e\.sender, requestId, \{ stage: 'done' \}\)/);
+  assert.doesNotMatch(main, /stage: 'done', message: /);
+
+  const body = { textContent: '' };
+  const state = { textContent: '', classList: fakeClassList(['msg-state']) };
+  const reasoningBody = { textContent: '' };
+  const reasoningBlock = {
+    classList: fakeClassList(['msg-reasoning']),
+    open: true,
+    querySelector(selector) {
+      return selector === '.msg-reasoning-body' ? reasoningBody : null;
+    }
+  };
+  const pending = {
+    classList: fakeClassList(['msg', 'ai', 'pending']),
+    dataset: {},
+    querySelector(selector) {
+      if (selector === '.msg-text') return body;
+      if (selector === '.msg-state') return state;
+      if (selector === '.msg-reasoning') return reasoningBlock;
+      return null;
+    }
+  };
+  const run = loadRendererRuntime({
+    '#ai-input': { focus() {} },
+    __testValues: { pending },
+    __activeElement: { closest: () => null }
+  });
+  run(`
+    addMsg = () => testValues.pending;
+    setAiBusy = () => {};
+    setAiContext = () => {};
+    scrollChat = () => {};
+    refreshTasks = async () => {};
+    toast = () => {};
+  `);
+
+  await run(`(async () => {
+    testValues.midStream = [];
+    const snapshot = () => testValues.pending.querySelector('.msg-text').textContent;
+    const note = (label) => testValues.midStream.push([label, snapshot()]);
+    await runAiTurn(async (requestId) => {
+      updateAiRequestProgress({ requestId, stage: 'understanding', message: '正在理解你的要求…' });
+      note('understanding');
+      updateAiRequestProgress({ requestId, stage: 'streaming', message: '正在生成回复…', delta: '真正的' });
+      updateAiRequestProgress({ requestId, stage: 'streaming', message: '正在生成回复…', delta: '回答' });
+      testValues.midStream.push(['streamed', snapshot(), testValues.pending.classList.contains('pending')]);
+      updateAiRequestProgress({ requestId, stage: 'executing', message: '正在执行工具…' });
+      updateAiRequestProgress({ requestId, stage: 'done', message: '处理完成' });
+      testValues.midStream.push(['done', snapshot(), testValues.pending.querySelector('.msg-state').textContent]);
+      updateAiRequestProgress({ requestId, reasoningDone: true, cumulativeReasoning: '模型思考内容' });
+      note('reasoningDone');
+      updateAiRequestProgress({ requestId: '其他请求', stage: 'streaming', message: '污染', delta: '污染' });
+      note('isolated');
+      return { type: 'chat', message: '最终完整回答' };
+    }, () => {}, { cancellable: true });
+  })()`);
+
+  assert.deepStrictEqual(JSON.parse(run('JSON.stringify(testValues.midStream)')), [
+    ['understanding', '正在理解你的要求…'],
+    ['streamed', '真正的回答', false],
+    ['done', '真正的回答', '正在整理结果'],
+    ['reasoningDone', '真正的回答'],
+    ['isolated', '真正的回答']
+  ]);
+  // done 阶段仍参与状态生命周期（状态栏显示“正在整理结果”），但只更新状态栏，不碰正文
+  assert.strictEqual(reasoningBody.textContent, '模型思考内容');
+  // 最终 IPC 结果照常替换流式累计内容
+  assert.strictEqual(body.textContent, '最终完整回答');
+  assert.strictEqual(state.textContent, '已回复');
+  assert.strictEqual(run('testValues.pending.dataset.requestState'), 'complete');
+  assert.strictEqual(run('activeAiRequest'), null);
+});
+
+test('任务对话小窗进度阶段不覆盖已流出的回答并保留会话记忆', async () => {
+  assert.match(taWindowApp, /if \(message && !activeRequest\.streamStarted && !reasoningDelta && !progress\.reasoningDone\) \{/);
+
+  const calls = { handle: [] };
+  let resolveHandle = null;
+  let progressListener = null;
+  const api = {
+    on: (channel, cb) => { api.__session = cb; },
+    taskAgent: { open: async () => ({ ok: true }), close: () => {} },
+    ai: {
+      onProgress: (cb) => { progressListener = cb; return () => {}; },
+      handle: (text, requestId) => {
+        calls.handle.push({ text, requestId });
+        return new Promise((resolve) => { resolveHandle = resolve; });
+      },
+      previewTaskAction: async () => ({ ok: false, type: 'error', message: '不支持' }),
+      applyTaskAction: async () => ({ ok: true }),
+      resolve: async () => ({}),
+      undo: async () => ({ ok: true })
+    }
+  };
+  const { run } = loadTaskAgentWindowRuntime(api);
+  api.__session({ taskId: 42, title: '独立小窗的任务', draft: '', workLogId: '', workLogKind: '' });
+  assert.ok(progressListener, '小窗应注册进度监听');
+
+  run(`(function() {
+    const pending = document.createElement('div');
+    const body = document.createElement('div');
+    body.className = 'ta-text';
+    pending.appendChild(body);
+    globalThis.__pending = pending;
+  })()`);
+
+  const turn = run(`runGlobalChat(globalThis.__pending, '帮我看看今天的安排')`);
+  assert.strictEqual(calls.handle.length, 1);
+  const requestId = calls.handle[0].requestId;
+  const text = () => run('globalThis.__pending.querySelector(".ta-text").textContent');
+
+  // 流开始前的阶段文案仍可充当占位
+  progressListener({ requestId, stage: 'understanding', message: '正在理解你的要求…' });
+  assert.strictEqual(text(), '正在理解你的要求…');
+  progressListener({ requestId, stage: 'streaming', message: '正在生成回复…', delta: '任务' });
+  progressListener({ requestId, stage: 'streaming', message: '正在生成回复…', delta: '回答' });
+  assert.strictEqual(text(), '任务回答');
+  // 工具执行与完成阶段不允许覆盖已流出的正文
+  progressListener({ requestId, stage: 'executing', message: '正在执行工具…' });
+  progressListener({ requestId, stage: 'done', message: '处理完成' });
+  assert.strictEqual(text(), '任务回答');
+  assert.strictEqual(run('activeRequest && activeRequest.streamStarted'), true);
+  // 其他请求的进度按 requestId 隔离
+  progressListener({ requestId: '别的请求', stage: 'streaming', message: '污染', delta: '污染' });
+  assert.strictEqual(text(), '任务回答');
+
+  resolveHandle({ type: 'chat', message: '任务最终回答' });
+  await turn;
+  assert.strictEqual(text(), '任务最终回答');
+  assert.strictEqual(run('activeRequest'), null);
+  assert.deepStrictEqual(JSON.parse(run('JSON.stringify(currentSessionHistory())')), [
+    { role: 'user', content: '帮我看看今天的安排' },
+    { role: 'assistant', content: '任务最终回答' }
+  ]);
+});
+
+test('桌宠面板正文保留流开始防护且完成事件不带文案', () => {
+  assert.match(petPanelApp, /if \(!activeRequest\.streamStarted && !delta && !reasoningDelta\) \{\s*activeRequest\.pendingText\.textContent = message;/);
+  assert.match(petPanelApp, /chatState\.textContent = message;/);
+});
+
+test('模型流被中断时思考块在轮次收尾处折叠而不是悬浮成回答', async () => {
+  // 主窗口：请求失败路径收尾思考块
+  const makeEl = (cls) => {
+    const el = fakeTaElement('div');
+    el.className = cls || '';
+    return el;
+  };
+  const pendingMain = makeEl('msg ai pending');
+  pendingMain.appendChild(makeEl('msg-text'));
+  const mainRun = loadRendererRuntime({
+    '#ai-input': { focus() {} },
+    __testValues: { pending: pendingMain },
+    __activeElement: { closest: () => null },
+    __createElement: makeEl
+  });
+  mainRun(`
+    addMsg = () => testValues.pending;
+    setAiBusy = () => {};
+    setAiContext = () => {};
+    scrollChat = () => {};
+    refreshTasks = async () => {};
+    toast = () => {};
+    retryAction = () => ({ remove() {} });
+  `);
+  await mainRun(`(async () => {
+    await runAiTurn(async () => {
+      updateAiRequestProgress({ requestId: '', reasoningDelta: '模型正在推演任务列表…' });
+      throw new Error('连接中断');
+    }, null);
+  })()`);
+  const mainBlock = pendingMain.querySelector('.msg-reasoning');
+  assert.ok(mainBlock, '思考块应已创建');
+  assert.strictEqual(mainBlock.classList.contains('is-streaming'), false);
+  assert.strictEqual(mainBlock.classList.contains('is-done'), true);
+  assert.strictEqual(mainBlock.open, false);
+  assert.strictEqual(mainBlock.querySelector('.msg-reasoning-body').textContent, '模型正在推演任务列表…');
+
+  // 任务小窗：全局对话失败路径同样收尾思考块
+  let progressListener = null;
+  let rejectHandle = null;
+  const api = {
+    on: (channel, cb) => { api.__session = cb; },
+    taskAgent: { open: async () => ({ ok: true }), close: () => {} },
+    ai: {
+      onProgress: (cb) => { progressListener = cb; return () => {}; },
+      handle: () => new Promise((resolve, reject) => { rejectHandle = reject; }),
+      previewTaskAction: async () => ({ ok: false, type: 'error', message: '不支持' }),
+      applyTaskAction: async () => ({ ok: true }),
+      resolve: async () => ({}),
+      undo: async () => ({ ok: true })
+    }
+  };
+  const { run } = loadTaskAgentWindowRuntime(api);
+  api.__session({ taskId: 42, title: '独立小窗的任务', draft: '', workLogId: '', workLogKind: '' });
+  const turn = run(`runGlobalChat(addMessage('ai', ''), '继续')`);
+  const requestId = run(`activeRequest && activeRequest.id`);
+  progressListener({ requestId, reasoningDelta: '小窗里的思考…' });
+  rejectHandle(new Error('连接中断'));
+  await turn;
+  const taBlock = run(`document.querySelector('#ta-thread').children[document.querySelector('#ta-thread').children.length - 1].querySelector('.ta-reasoning')`);
+  assert.ok(taBlock, '小窗思考块应已创建');
+  assert.strictEqual(taBlock.classList.contains('is-streaming'), false);
+  assert.strictEqual(taBlock.classList.contains('is-done'), true);
+  assert.strictEqual(taBlock.open, false);
+  assert.strictEqual(taBlock.querySelector('.ta-reasoning-body').textContent, '小窗里的思考…');
+});
