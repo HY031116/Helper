@@ -1589,8 +1589,8 @@ mark { background: rgba(var(--warn-rgb), 0.25); color: inherit; border-radius: 2
 .set-group:focus-visible { box-shadow: 0 0 0 2px rgba(var(--accent2-rgb), 0.12), 0 0 0 3px var(--accent2); }
 .danger-zone:focus-visible { box-shadow: 0 0 0 2px rgba(var(--danger-rgb), 0.08), 0 0 0 3px var(--danger); }
 .set-group-title {
-  margin: 0 -4px;
-  padding: 10px 8px 9px;
+  margin: 0;
+  padding: 10px 2px 9px;
   border-bottom: 1px solid var(--rule);
   color: var(--ink);
   font-family: var(--font-display);

@@ -350,87 +350,133 @@ app.whenReady().then(async () => {
     }
     interactionChecks.push({ id: 'task-row-lock-and-focus', passed: true });
 
-    const taskAgentTypingSetup = await mainWindow.webContents.executeJavaScript(`
+    // 任务上下文 Agent：独立对话小窗（task-agent window，跨窗口驱动）
+    const agentTaskRef = await mainWindow.webContents.executeJavaScript(`
       (() => {
         switchView('tasks');
         const row = document.querySelector('#tasks-list .task-row:not(.archived)');
         const task = tasks.find((item) => item.id === Number(row.dataset.id));
         const trigger = row.querySelector('.task-agent-btn');
         openTaskAgent(task, trigger);
-        const input = document.querySelector('#task-agent-input');
-        return { enabled: !input.disabled, focused: document.activeElement === input };
+        return { taskId: task.id, title: task.title };
       })()
     `);
-    mainWindow.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'X' });
-    mainWindow.webContents.sendInputEvent({ type: 'char', keyCode: 'x' });
-    mainWindow.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'X' });
-    await wait(50);
-    const taskAgentTypedValue = await mainWindow.webContents.executeJavaScript(`document.querySelector('#task-agent-input').value`);
-    if (!taskAgentTypingSetup.enabled || !taskAgentTypingSetup.focused || !taskAgentTypedValue.includes('x')) {
+    const agentWindow = await waitForWindow('任务对话');
+    await wait(300);
+    const taskAgentTypingSetup = await agentWindow.webContents.executeJavaScript(`
+      ({
+        enabled: !document.querySelector('#ta-input').disabled,
+        focused: document.activeElement === document.querySelector('#ta-input'),
+        title: document.querySelector('#ta-title').textContent
+      })
+    `);
+    agentWindow.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'X' });
+    agentWindow.webContents.sendInputEvent({ type: 'char', keyCode: 'x' });
+    agentWindow.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'X' });
+    await wait(80);
+    const taskAgentTypedValue = await agentWindow.webContents.executeJavaScript(`document.querySelector('#ta-input').value`);
+    if (!taskAgentTypingSetup.enabled || !taskAgentTypingSetup.focused || !taskAgentTypedValue.includes('x')
+      || taskAgentTypingSetup.title !== agentTaskRef.title) {
       throw new Error(`任务上下文 Agent 键盘输入验证失败：${JSON.stringify({ ...taskAgentTypingSetup, value: taskAgentTypedValue })}`);
     }
 
-    const taskAgentCheck = await mainWindow.webContents.executeJavaScript(`
-      (async () => {
+    const agentWorkArea = screen.getPrimaryDisplay().workArea;
+    const lastAgentPreviewNow = `
+      (function () {
+        const list = document.querySelectorAll('#ta-thread .ta-preview');
+        if (!list.length) return '';
+        const nows = list[list.length - 1].querySelectorAll('.ta-preview-field-value .now');
+        return Array.from(nows).map((n) => n.textContent).join('|');
+      })()
+    `;
+    const confirmLastAgentPreview = `
+      (function () {
+        const list = document.querySelectorAll('#ta-thread .ta-preview');
+        list[list.length - 1].querySelector('.ta-preview-actions .primary').click();
+        return true;
+      })()
+    `;
+    const taskAgentContext = await mainWindow.webContents.executeJavaScript(`
+      (() => {
         switchView('tasks');
         const row = document.querySelector('#tasks-list .task-row:not(.archived)');
         const taskId = Number(row.dataset.id);
         const task = tasks.find((item) => item.id === taskId);
-        const beforeDue = task.due || null;
-        const trigger = row.querySelector('.task-agent-btn');
-        openTaskAgent(task, trigger);
-        const input = document.querySelector('#task-agent-input');
-        input.value = '改到明天';
-        document.querySelector('#task-agent-form').requestSubmit();
-        for (let attempt = 0; attempt < 60 && !taskAgentState.previewId; attempt++) await new Promise((resolve) => setTimeout(resolve, 40));
-        const firstDue = taskAgentState.previousAction?.params?.due || '';
-        input.value = '下午三点';
-        input.dispatchEvent(new Event('input', { bubbles: true }));
-        document.querySelector('#task-agent-form').requestSubmit();
-        for (let attempt = 0; attempt < 60 && (!taskAgentState.previewId || taskAgentState.previousAction?.params?.due === firstDue); attempt++) {
-          await new Promise((resolve) => setTimeout(resolve, 40));
-        }
-        const popover = document.querySelector('#task-agent-popover');
-        const rect = popover.getBoundingClientRect();
-        return {
-          taskId,
-          beforeDue,
-          afterDue: tasks.find((item) => item.id === taskId).due || null,
-          firstDue,
-          secondDue: taskAgentState.previousAction?.params?.due || '',
-          previewVisible: !document.querySelector('#task-agent-preview').classList.contains('hidden'),
-          threadText: document.querySelector('#task-agent-thread').textContent,
-          focusOnConfirm: document.activeElement === document.querySelector('#task-agent-submit'),
-          triggerExpanded: trigger.getAttribute('aria-expanded'),
-          inViewport: rect.left >= 0 && rect.top >= 0 && rect.right <= innerWidth && rect.bottom <= innerHeight
-        };
+        openTaskAgent(task, row.querySelector('.task-agent-btn'));
+        return { taskId, beforeDue: task.due || null };
       })()
     `);
-    if (taskAgentCheck.beforeDue !== taskAgentCheck.afterDue || !taskAgentCheck.previewVisible
-      || !taskAgentCheck.firstDue || !taskAgentCheck.secondDue.endsWith('15:00')
-      || taskAgentCheck.firstDue.slice(0, 10) !== taskAgentCheck.secondDue.slice(0, 10)
+    await wait(300);
+    const submitAgentPrompt = async (text) => {
+      await agentWindow.webContents.executeJavaScript(`
+        (function () {
+          const input = document.querySelector('#ta-input');
+          input.value = ${JSON.stringify(text)};
+          document.querySelector('#ta-form').requestSubmit();
+          return true;
+        })()
+      `);
+    };
+    // 第一轮：改到明天 → 预览 → 确认（确认后才会建立续接上下文）
+    await submitAgentPrompt('改到明天');
+    let firstDue = '';
+    for (let attempt = 0; attempt < 60; attempt += 1) {
+      await wait(40);
+      firstDue = await agentWindow.webContents.executeJavaScript(lastAgentPreviewNow);
+      if (firstDue.includes(':')) break;
+    }
+    await agentWindow.webContents.executeJavaScript(confirmLastAgentPreview);
+    let appliedDue = null;
+    for (let attempt = 0; attempt < 60; attempt += 1) {
+      await wait(40);
+      appliedDue = await mainWindow.webContents.executeJavaScript(`(tasks.find((item) => item.id === ${taskAgentContext.taskId}) || {}).due || null`);
+      if (appliedDue && appliedDue !== taskAgentContext.beforeDue) break;
+    }
+    // 第二轮：续接「下午三点」→ 同一天 15:00 → 预览 → 确认
+    await submitAgentPrompt('下午三点');
+    let secondDue = '';
+    for (let attempt = 0; attempt < 60; attempt += 1) {
+      await wait(40);
+      secondDue = await agentWindow.webContents.executeJavaScript(lastAgentPreviewNow);
+      if (secondDue.includes('15:00')) break;
+    }
+    await agentWindow.webContents.executeJavaScript(confirmLastAgentPreview);
+    let afterDue = null;
+    for (let attempt = 0; attempt < 60; attempt += 1) {
+      await wait(40);
+      afterDue = await mainWindow.webContents.executeJavaScript(`(tasks.find((item) => item.id === ${taskAgentContext.taskId}) || {}).due || null`);
+      if (afterDue && afterDue.endsWith('15:00')) break;
+    }
+    const taskAgentCheck = {
+      beforeDue: taskAgentContext.beforeDue,
+      appliedDue,
+      afterDue,
+      firstDue,
+      secondDue,
+      threadText: await agentWindow.webContents.executeJavaScript(`document.querySelector('#ta-thread').textContent`),
+      focusOnInput: await agentWindow.webContents.executeJavaScript(`document.activeElement === document.querySelector('#ta-input')`),
+      agentBounds: agentWindow.getBounds()
+    };
+    const agentInView = taskAgentCheck.agentBounds.x >= agentWorkArea.x && taskAgentCheck.agentBounds.y >= agentWorkArea.y
+      && taskAgentCheck.agentBounds.x + taskAgentCheck.agentBounds.width <= agentWorkArea.x + agentWorkArea.width
+      && taskAgentCheck.agentBounds.y + taskAgentCheck.agentBounds.height <= agentWorkArea.y + agentWorkArea.height;
+    if (taskAgentCheck.beforeDue === taskAgentCheck.afterDue || !appliedDue || !appliedDue.endsWith('18:00')
+      || !firstDue || !secondDue.endsWith('15:00')
+      || firstDue.slice(0, 10) !== secondDue.slice(0, 10) || firstDue.slice(0, 10) !== (appliedDue || '').slice(0, 10)
+      || (afterDue || '').slice(0, 10) !== firstDue.slice(0, 10)
       || !taskAgentCheck.threadText.includes('改到明天') || !taskAgentCheck.threadText.includes('下午三点')
-      || !taskAgentCheck.focusOnConfirm || taskAgentCheck.triggerExpanded !== 'true' || !taskAgentCheck.inViewport) {
+      || !taskAgentCheck.focusOnInput || !agentInView) {
       throw new Error(`任务上下文 Agent 连续预览验证失败：${JSON.stringify(taskAgentCheck)}`);
     }
-    results.push(await capture(mainWindow, 'task-agent-continuation-light.png'));
-    const taskAgentEscapeCheck = await mainWindow.webContents.executeJavaScript(`
-      (() => {
-        const trigger = taskAgentState.trigger;
-        document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
-        return {
-          hidden: document.querySelector('#task-agent-popover').classList.contains('hidden'),
-          focusRestored: document.activeElement === trigger,
-          expanded: trigger.getAttribute('aria-expanded')
-        };
-      })()
-    `);
-    if (!taskAgentEscapeCheck.hidden || !taskAgentEscapeCheck.focusRestored || taskAgentEscapeCheck.expanded !== 'false') {
-      throw new Error(`任务上下文 Agent 关闭与焦点恢复失败：${JSON.stringify(taskAgentEscapeCheck)}`);
+    results.push(await capture(agentWindow, 'task-agent-continuation-light.png'));
+    await agentWindow.webContents.executeJavaScript(`document.querySelector('#ta-close').click(); true;`);
+    await wait(300);
+    if (agentWindow.isVisible()) {
+      throw new Error('任务上下文 Agent 关闭验证失败：小窗仍然可见');
     }
 
-    const taskWorkLogCheck = await mainWindow.webContents.executeJavaScript(`
-      (async () => {
+    const taskWorkLogTarget = await mainWindow.webContents.executeJavaScript(`
+      (() => {
         switchView('tasks');
         currentFilter = 'all';
         currentSearch = '';
@@ -439,20 +485,41 @@ app.whenReady().then(async () => {
         renderTasks();
         const add = document.querySelector('.task-row[data-id="' + task.id + '"] [data-worklog-add]');
         add.click();
-        const input = document.querySelector('#task-agent-input');
-        const stayedOpen = !document.querySelector('#task-agent-popover').classList.contains('hidden');
+        return { taskId: task.id };
+      })()
+    `);
+    await wait(350);
+    const workLogDraft = await agentWindow.webContents.executeJavaScript(`document.querySelector('#ta-input').value`);
+    await agentWindow.webContents.executeJavaScript(`
+      (function () {
+        const input = document.querySelector('#ta-input');
         input.value = '成果：完成真实窗口工作记录闭环';
-        document.querySelector('#task-agent-form').requestSubmit();
-        for (let attempt = 0; attempt < 60 && !taskAgentState.previewId; attempt++) {
-          await new Promise((resolve) => setTimeout(resolve, 40));
-        }
-        const previewReady = !!taskAgentState.previewId
-          && document.querySelector('#task-agent-preview').textContent.includes('完成真实窗口工作记录闭环');
-        document.querySelector('#task-agent-form').requestSubmit();
-        for (let attempt = 0; attempt < 60; attempt++) {
-          await new Promise((resolve) => setTimeout(resolve, 40));
-          if ((tasks.find((item) => item.id === task.id)?.workLogs || []).some((log) => log.text === '完成真实窗口工作记录闭环')) break;
-        }
+        document.querySelector('#ta-form').requestSubmit();
+        return true;
+      })()
+    `);
+    let workLogPreviewReady = false;
+    for (let attempt = 0; attempt < 60; attempt += 1) {
+      await wait(40);
+      const previewText = await agentWindow.webContents.executeJavaScript(lastAgentPreviewNow);
+      if (previewText.includes('完成真实窗口工作记录闭环')) { workLogPreviewReady = true; break; }
+    }
+    await agentWindow.webContents.executeJavaScript(`
+      (function () {
+        const list = document.querySelectorAll('#ta-thread .ta-preview');
+        list[list.length - 1].querySelector('.ta-preview-actions .primary').click();
+        return true;
+      })()
+    `);
+    let workLogSaved = false;
+    for (let attempt = 0; attempt < 60; attempt += 1) {
+      await wait(40);
+      workLogSaved = await mainWindow.webContents.executeJavaScript(`(tasks.find((item) => item.id === ${taskWorkLogTarget.taskId}) || { workLogs: [] }).workLogs.some((log) => log.text === '完成真实窗口工作记录闭环')`);
+      if (workLogSaved) break;
+    }
+    const workLogVisibleCheck = await mainWindow.webContents.executeJavaScript(`
+      (async () => {
+        const task = tasks.find((item) => item.id === ${taskWorkLogTarget.taskId});
         expandedIds.add('d' + task.id);
         renderTasks();
         const row = document.querySelector('.task-row[data-id="' + task.id + '"]');
@@ -463,25 +530,24 @@ app.whenReady().then(async () => {
         const edit = row.querySelector('[data-worklog-edit]');
         edit.click();
         return {
-          stayedOpen,
-          previewReady,
           visibleRecord,
           reportReady: report.markdown.includes('完成真实窗口工作记录闭环'),
-          sourceReady,
-          editOpen: !document.querySelector('#task-agent-popover').classList.contains('hidden'),
-          editPrefilled: document.querySelector('#task-agent-input').value === '完成真实窗口工作记录闭环',
-          editFocused: document.activeElement === document.querySelector('#task-agent-input')
+          sourceReady
         };
       })()
     `);
-    if (!taskWorkLogCheck.stayedOpen || !taskWorkLogCheck.previewReady || !taskWorkLogCheck.visibleRecord
-      || !taskWorkLogCheck.reportReady || !taskWorkLogCheck.sourceReady || !taskWorkLogCheck.editOpen
-      || !taskWorkLogCheck.editPrefilled || !taskWorkLogCheck.editFocused) {
-      throw new Error(`任务工作记录与报告闭环验证失败：${JSON.stringify(taskWorkLogCheck)}`);
+    await wait(350);
+    const workLogEditPrefilled = await agentWindow.webContents.executeJavaScript(`document.querySelector('#ta-input').value`);
+    const workLogEditFocused = await agentWindow.webContents.executeJavaScript(`document.activeElement === document.querySelector('#ta-input')`);
+    if (!workLogDraft.includes('进展：') || !workLogPreviewReady || !workLogSaved
+      || !workLogVisibleCheck.visibleRecord || !workLogVisibleCheck.reportReady || !workLogVisibleCheck.sourceReady
+      || workLogEditPrefilled !== '完成真实窗口工作记录闭环' || !workLogEditFocused) {
+      throw new Error(`任务工作记录与报告闭环验证失败：${JSON.stringify({ workLogDraft, workLogPreviewReady, workLogSaved, workLogVisibleCheck, workLogEditPrefilled, workLogEditFocused })}`);
     }
     interactionChecks.push({ id: 'task-worklog-report-loop', passed: true });
     results.push(await capture(mainWindow, 'task-worklog-agent-light.png'));
-    await mainWindow.webContents.executeJavaScript(`closeTaskAgent(false); true;`);
+    await agentWindow.webContents.executeJavaScript(`document.querySelector('#ta-close').click(); true;`);
+    await wait(300);
 
     const boardOrderCheck = await mainWindow.webContents.executeJavaScript(`
       (async () => {
@@ -609,29 +675,34 @@ app.whenReady().then(async () => {
       throw new Error(`每日 Agent 窄窗口验证失败：${JSON.stringify(copilotNarrowCheck)}`);
     }
     results.push(await capture(mainWindow, 'daily-copilot-narrow.png'));
-    const taskAgentModalCheck = await mainWindow.webContents.executeJavaScript(`
+    await mainWindow.webContents.executeJavaScript(`
       (() => {
         switchView('tasks');
         const task = tasks.find((item) => !item._deleted && item.status !== 'archived');
         openModal(task);
         document.querySelector('#m-agent').click();
-        const popover = document.querySelector('#task-agent-popover');
-        const rect = popover.getBoundingClientRect();
-        return {
-          visible: !popover.classList.contains('hidden'),
-          title: document.querySelector('#task-agent-title').textContent,
-          modalVisible: !document.querySelector('#modal-mask').classList.contains('hidden'),
-          inViewport: rect.left >= 0 && rect.top >= 0 && rect.right <= innerWidth && rect.bottom <= innerHeight,
-          width: rect.width
-        };
+        return true;
       })()
     `);
+    await wait(350);
+    const taskAgentModalBounds = agentWindow.getBounds();
+    const taskAgentModalCheck = {
+      visible: agentWindow.isVisible(),
+      title: await agentWindow.webContents.executeJavaScript(`document.querySelector('#ta-title').textContent`),
+      modalVisible: await mainWindow.webContents.executeJavaScript(`!document.querySelector('#modal-mask').classList.contains('hidden')`),
+      inWorkArea: taskAgentModalBounds.x >= agentWorkArea.x && taskAgentModalBounds.y >= agentWorkArea.y
+        && taskAgentModalBounds.x + taskAgentModalBounds.width <= agentWorkArea.x + agentWorkArea.width
+        && taskAgentModalBounds.y + taskAgentModalBounds.height <= agentWorkArea.y + agentWorkArea.height,
+      width: taskAgentModalBounds.width
+    };
     if (!taskAgentModalCheck.visible || !taskAgentModalCheck.modalVisible || !taskAgentModalCheck.title
-      || !taskAgentModalCheck.inViewport || taskAgentModalCheck.width > 390) {
+      || !taskAgentModalCheck.inWorkArea || taskAgentModalCheck.width > 420) {
       throw new Error(`任务详情 Agent 窄窗口验证失败：${JSON.stringify(taskAgentModalCheck)}`);
     }
-    results.push(await capture(mainWindow, 'task-agent-modal-narrow.png'));
-    await mainWindow.webContents.executeJavaScript(`closeTaskAgent(false); closeModal(false); true;`);
+    results.push(await capture(agentWindow, 'task-agent-modal-narrow.png'));
+    await agentWindow.webContents.executeJavaScript(`document.querySelector('#ta-close').click(); true;`);
+    await wait(250);
+    await mainWindow.webContents.executeJavaScript(`closeModal(false); true;`);
     interactionChecks.push({ id: 'task-agent-context-dialog', passed: true });
     results.push(await capture(mainWindow, 'main-narrow.png'));
 
