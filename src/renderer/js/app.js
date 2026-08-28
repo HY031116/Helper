@@ -55,9 +55,8 @@ let quickParseCache = { raw: '', parsed: null };
 let modalSaving = false;
 let modalReturnFocus = null;
 let modalInitialSnapshot = '';
-let taskAgentSessionSequence = 0;
-let taskAgentState = { sessionId: 0, taskId: null, trigger: null, previewId: null, busy: false, requestId: null, previousAction: null, previousText: '', turns: [], workLogId: '', workLogKind: '' };
 let aiSending = false;
+
 let activeAiRequest = null;
 let aiRequestSequence = 0;
 let aiChatFollowing = true;
@@ -5309,43 +5308,12 @@ function bindEvents() {
   $('#modal-mask').addEventListener('click', (e) => { if (e.target === $('#modal-mask')) requestCloseModal(); });
   // 表单原生处理 Enter 提交；此处负责 Esc 和焦点循环。
   $('#modal-mask').addEventListener('keydown', (e) => {
-    if (!$('#task-agent-popover').classList.contains('hidden')) return;
     if (e.key === 'Escape') {
       e.preventDefault();
       e.stopPropagation();
       requestCloseModal();
     }
     if (e.key === 'Tab') trapFocus($('#modal-mask'), e);
-  });
-
-  $('#task-agent-form').addEventListener('submit', submitTaskAgent);
-  $('#task-agent-close').addEventListener('click', () => closeTaskAgent());
-  $('#task-agent-cancel').addEventListener('click', () => closeTaskAgent());
-  $('.task-agent-chips').addEventListener('click', (event) => {
-    const chip = event.target.closest('[data-agent-prompt]');
-    if (!chip || taskAgentState.busy) return;
-    $('#task-agent-input').value = chip.dataset.agentPrompt;
-    resetTaskAgentPreview();
-    setTaskAgentStatus('快捷指令已填入，生成预览后再确认。');
-    $('#task-agent-form').requestSubmit();
-  });
-  $('#task-agent-input').addEventListener('input', () => {
-    if (taskAgentState.previewId) resetTaskAgentPreview();
-    setTaskAgentStatus('先生成预览，确认后才会修改任务。');
-  });
-  document.addEventListener('click', (event) => {
-    if ($('#task-agent-popover').classList.contains('hidden')) return;
-    if (event.target.closest('#task-agent-popover, .task-agent-btn, [data-worklog-add], [data-worklog-edit], #m-agent')) return;
-    closeTaskAgent(false);
-  });
-  document.addEventListener('keydown', (event) => {
-    if (event.key !== 'Escape' || $('#task-agent-popover').classList.contains('hidden')) return;
-    event.preventDefault();
-    event.stopPropagation();
-    closeTaskAgent();
-  }, true);
-  window.addEventListener('resize', () => {
-    if (!$('#task-agent-popover').classList.contains('hidden')) positionTaskAgent(taskAgentState.trigger);
   });
 
   // 主进程事件
@@ -5376,6 +5344,11 @@ function bindEvents() {
     workflowState = state || workflowState;
     renderWorkflowPanel();
     refreshDailyCopilot();
+  });
+  // 任务对话小窗等外部入口修改任务后，主窗口同步刷新列表与编辑弹窗
+  window.api.on('tasks:changed', async () => {
+    await refreshTasksAfterMutation('任务已在对话小窗修改，但列表刷新失败');
+    if (editingTask) refreshOpenTaskModal(tasks.find((item) => item.id === editingTask.id));
   });
 
   // 应用内快捷键（不抢输入框焦点）
@@ -5575,185 +5548,19 @@ async function loadTrash() {
   list.setAttribute('aria-busy', 'false');
 }
 
-function positionTaskAgent(trigger) {
-  const popover = $('#task-agent-popover');
-  if (!popover || !trigger) return;
-  const rect = trigger.getBoundingClientRect();
-  const width = Math.min(390, window.innerWidth - 24);
-  popover.style.width = `${width}px`;
-  const measured = popover.getBoundingClientRect();
-  let left = Math.min(rect.right - width, window.innerWidth - width - 12);
-  left = Math.max(12, left);
-  let top = rect.bottom + 8;
-  if (top + measured.height > window.innerHeight - 12) top = Math.max(12, rect.top - measured.height - 8);
-  popover.style.left = `${left}px`;
-  popover.style.top = `${top}px`;
-}
-
-function setTaskAgentBusy(busy, label) {
-  taskAgentState.busy = busy;
-  const popover = $('#task-agent-popover');
-  popover.setAttribute('aria-busy', String(busy));
-  $('#task-agent-input').disabled = busy;
-  $$('.task-agent-chip').forEach((button) => { button.disabled = busy; });
-  $('#task-agent-submit').disabled = busy;
-  if (label) $('#task-agent-submit').textContent = label;
-}
-
-function resetTaskAgentPreview() {
-  taskAgentState.previewId = null;
-  $('#task-agent-preview').classList.add('hidden');
-  $('#task-agent-preview').replaceChildren();
-  $('#task-agent-submit').textContent = '生成预览';
-}
-
-function setTaskAgentStatus(message, kind) {
-  const status = $('#task-agent-status');
-  status.textContent = message || '';
-  status.classList.toggle('error', kind === 'error');
-  status.classList.toggle('notice', kind === 'notice');
-}
-
+// 任务 Agent 已升级为独立悬浮对话小窗（task-agent:open），主窗口只负责唤起
 function openTaskAgent(task, trigger, options) {
   if (!task || task.status === 'archived') return;
-  const popover = $('#task-agent-popover');
-  if (!popover.classList.contains('hidden')) closeTaskAgent(false);
   closeTaskMenus(false);
-  const currentTrigger = taskAgentState.trigger;
-  if (currentTrigger && currentTrigger !== trigger) currentTrigger.setAttribute('aria-expanded', 'false');
   const workLog = options && options.workLog || null;
-  taskAgentState = { sessionId: ++taskAgentSessionSequence, taskId: task.id, trigger, previewId: null, busy: false, requestId: null, previousAction: null, previousText: '', turns: [], workLogId: workLog && workLog.id || '', workLogKind: workLog && workLog.kind || '' };
-  trigger.setAttribute('aria-expanded', 'true');
-  $('#task-agent-title').textContent = workLog ? `编辑记录 · ${task.title}` : task.title;
-  $('#task-agent-input').value = workLog ? workLog.text : String(options && options.draft || '');
-  $('#task-agent-thread').replaceChildren();
-  $('#task-agent-thread').classList.add('hidden');
-  setTaskAgentStatus('先生成预览，确认后才会修改任务。');
-  resetTaskAgentPreview();
-  setTaskAgentBusy(false, '生成预览');
-  popover.classList.remove('hidden');
-  positionTaskAgent(trigger);
-  const input = $('#task-agent-input');
-  input.focus({ preventScroll: true });
-  const inputLength = input.value.length;
-  if (typeof input.setSelectionRange === 'function') input.setSelectionRange(inputLength, inputLength);
-}
-
-function closeTaskAgent(restoreFocus = true) {
-  const popover = $('#task-agent-popover');
-  if (popover.classList.contains('hidden')) return;
-  if (taskAgentState.busy && taskAgentState.requestId) window.api.ai.cancel(taskAgentState.requestId).catch(() => {});
-  const trigger = taskAgentState.trigger;
-  if (trigger) trigger.setAttribute('aria-expanded', 'false');
-  setTaskAgentBusy(false, '生成预览');
-  popover.classList.add('hidden');
-  taskAgentState = { sessionId: 0, taskId: null, trigger: null, previewId: null, busy: false, requestId: null, previousAction: null, previousText: '', turns: [], workLogId: '', workLogKind: '' };
-  if (restoreFocus && trigger && trigger.isConnected) trigger.focus({ preventScroll: true });
-}
-
-function renderTaskAgentPreview(result) {
-  const preview = $('#task-agent-preview');
-  preview.innerHTML = `<div class="task-agent-summary">${esc(result.summary)}</div>${(result.fields || []).map((field) => `<div class="task-agent-diff">
-    <span class="task-agent-diff-label">${esc(field.label)}</span>
-    <span class="task-agent-diff-value"><del>${esc(field.before)}</del><ins>${esc(field.after)}</ins></span>
-  </div>`).join('')}`;
-  preview.classList.remove('hidden');
-  taskAgentState.previewId = result.previewId;
-  setTaskAgentStatus(result.notice || '请核对变更，确认后才会保存。', result.notice ? 'notice' : '');
-  $('#task-agent-submit').textContent = '确认修改';
-  positionTaskAgent(taskAgentState.trigger);
-}
-
-function renderTaskAgentThread() {
-  const thread = $('#task-agent-thread');
-  // Keep three user/agent exchanges visible so a correction still has readable context.
-  const turns = taskAgentState.turns.slice(-6);
-  thread.innerHTML = turns.map((turn) => `<div class="task-agent-turn ${turn.role === 'user' ? 'user' : 'agent'}"><span>${turn.role === 'user' ? '你' : 'Agent'}</span><p>${esc(turn.text)}</p></div>`).join('');
-  thread.classList.toggle('hidden', !turns.length);
-}
-
-async function submitTaskAgent(event) {
-  event.preventDefault();
-  if (taskAgentState.busy || !taskAgentState.taskId) return;
-  if (taskAgentState.previewId) {
-    const sessionId = taskAgentState.sessionId;
-    setTaskAgentBusy(true, '保存中…');
-    try {
-      const result = await window.api.ai.applyTaskAction(taskAgentState.previewId);
-      if (taskAgentState.sessionId !== sessionId) return;
-      if (!result || result.ok === false) {
-        resetTaskAgentPreview();
-        setTaskAgentStatus(result && result.message || '修改未保存，请重新生成预览。', 'error');
-        return;
-      }
-      const taskId = taskAgentState.taskId;
-      const openedFromModal = taskAgentState.trigger && taskAgentState.trigger.id === 'm-agent';
-      closeTaskAgent(false);
-      await refreshTasksAfterMutation('任务已修改，但列表刷新失败');
-      refreshOpenTaskModal(tasks.find((item) => item.id === taskId));
-      const returnTarget = openedFromModal && editingTask
-        ? $('#m-agent')
-        : $(`.task-row[data-id="${taskId}"] .task-agent-btn`) || $('.task-row .task-agent-btn, .task-row .task-title-btn');
-      if (returnTarget) returnTarget.focus({ preventScroll: true });
-      toast(result.message || '任务已更新', 5000, result.undoable && result.undo ? [{
-        label: '撤销',
-        run: async () => {
-          const undoResult = await window.api.ai.undo(result.undo);
-          if (undoResult && undoResult.ok === false) throw new Error(undoResult.message || '撤销失败');
-          await refreshTasksAfterMutation('操作已撤销，但列表刷新失败');
-          refreshOpenTaskModal(tasks.find((item) => item.id === taskId));
-          toast('已撤销');
-        }
-      }] : null, 'ok');
-    } catch (error) {
-      if (taskAgentState.sessionId !== sessionId) return;
-      setTaskAgentStatus(error.message || '保存失败，请重试。', 'error');
-    } finally {
-      if (taskAgentState.sessionId === sessionId && !$('#task-agent-popover').classList.contains('hidden')) {
-        setTaskAgentBusy(false, taskAgentState.previewId ? '确认修改' : '生成预览');
-      }
-    }
-    return;
-  }
-  const text = $('#task-agent-input').value.trim();
-  if (!text) {
-    setTaskAgentStatus('先说一下你想怎样修改这项任务。', 'error');
-    $('#task-agent-input').focus();
-    return;
-  }
-  const sessionId = taskAgentState.sessionId;
-  const requestId = `task-popover-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-  taskAgentState.requestId = requestId;
-  taskAgentState.turns.push({ role: 'user', text });
-  renderTaskAgentThread();
-  setTaskAgentBusy(true, '理解中…');
-  setTaskAgentStatus('正在结合这项任务生成变更预览…');
-  try {
-    const result = await window.api.ai.previewTaskAction(taskAgentState.taskId, text, requestId, {
-      previousText: taskAgentState.previousText,
-      previousAction: taskAgentState.previousAction,
-      workLogId: taskAgentState.workLogId,
-      workLogKind: taskAgentState.workLogKind
-    });
-    if (taskAgentState.sessionId !== sessionId || taskAgentState.requestId !== requestId) return;
-    if (!result || !result.ok) {
-      setTaskAgentStatus(result && result.message || '暂时无法理解这条指令，请换个说法。', 'error');
-      return;
-    }
-    renderTaskAgentPreview(result);
-    taskAgentState.previousText = text;
-    taskAgentState.previousAction = result.action;
-    taskAgentState.turns.push({ role: 'agent', text: result.summary || '已生成预览，请确认变更。' });
-    renderTaskAgentThread();
-  } catch (error) {
-    if (taskAgentState.sessionId !== sessionId || taskAgentState.requestId !== requestId) return;
-    setTaskAgentStatus(error.message || '预览生成失败，请重试。', 'error');
-  } finally {
-    if (taskAgentState.sessionId !== sessionId || taskAgentState.requestId !== requestId) return;
-    taskAgentState.requestId = null;
-    setTaskAgentBusy(false, taskAgentState.previewId ? '确认修改' : '生成预览');
-    if (taskAgentState.previewId) $('#task-agent-submit').focus({ preventScroll: true });
-  }
+  window.api.taskAgent.open({
+    taskId: task.id,
+    title: workLog ? `编辑记录 · ${task.title}` : task.title,
+    draft: workLog ? workLog.text : String(options && options.draft || ''),
+    workLogId: workLog && workLog.id || '',
+    workLogKind: workLog && workLog.kind || ''
+  }).catch(() => toast('打开任务对话失败'));
+  if (trigger && trigger.isConnected) trigger.focus({ preventScroll: true });
 }
 
 async function onTaskClick(e) {

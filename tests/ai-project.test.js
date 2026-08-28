@@ -2027,7 +2027,7 @@ test('真实模型体验：明确创建走本地快路径且立即报告执行�
   global.fetch = async () => { throw new Error('明确操作不应请求模型'); };
   const progress = [];
   try {
-    const result = await ai.handleAuto('明天下午3点交性能回归报告', {
+    const result = await ai.handleAuto('记一下：明天下午3点交性能回归报告', {
       onProgress: (event) => progress.push(event)
     });
     assert.strictEqual(result.type, 'create');
@@ -2205,6 +2205,54 @@ test('统一语义路由：任务内对话固定当前任务实体且只生成�
     assert.strictEqual(preview.action.intent, 'delete');
     assert.strictEqual(preview.action.params.taskId, task.id);
     assert.ok(store.getTask(task.id), '生成预览时不得删除当前任务');
+  } finally {
+    global.fetch = originalFetch;
+    store.updateSettings({
+      aiStage: previous.aiStage, aiProvider: previous.aiProvider, aiBaseUrl: previous.aiBaseUrl,
+      aiApiKey: previous.aiApiKey, aiModel: previous.aiModel
+    });
+  }
+});
+
+test('任务对话小窗：会话自持记忆，不读写主窗口侧边栏对话记录', async () => {
+  reset();
+  const task = store.createTask({ title: '小窗隔离任务' });
+  const previous = store.getSettings();
+  store.updateSettings({
+    aiStage: 'llm', aiProvider: 'custom', aiBaseUrl: 'https://example.invalid/v1', aiApiKey: 'test-key', aiModel: 'test-model'
+  });
+  // 预置主窗口侧边栏的全局对话记录
+  store.appendChat({ role: 'user', text: '侧边栏全局提问标记', ts: Date.now() });
+  store.appendChat({ role: 'ai', text: '侧边栏全局回复标记', ts: Date.now() + 1 });
+  const originalFetch = global.fetch;
+  let seenMessages = [];
+  global.fetch = async (url, options) => {
+    seenMessages = JSON.parse(options.body).messages || [];
+    return {
+      ok: true,
+      json: async () => ({ choices: [{ message: { content: JSON.stringify({
+        schemaVersion: 1, intent: 'update', confidence: 'high', due: '2026-08-22 18:00'
+      }) } }] })
+    };
+  };
+  try {
+    const preview = await ai.previewTaskAction(task.id, '改到明天', {
+      history: [
+        { role: 'user', content: '小窗会话上一轮提问' },
+        { role: 'assistant', content: '小窗会话上一轮回复' }
+      ]
+    });
+    assert.strictEqual(preview.ok, true);
+    assert.strictEqual(preview.action.intent, 'update');
+    const joined = seenMessages.map((message) => message.content).join('\n');
+    assert.ok(joined.includes('小窗会话上一轮提问'), '请求应携带小窗自持的会话记忆');
+    assert.ok(!joined.includes('侧边栏全局提问标记'), '不得混入主窗口侧边栏的对话记录');
+    assert.ok(!joined.includes('侧边栏全局回复标记'), '不得混入主窗口侧边栏的对话记录');
+
+    // 无 history 的全局路径仍读取侧边栏最近对话
+    await ai.parseWithLLM('帮我看看今天的事情');
+    const globalJoined = seenMessages.map((message) => message.content).join('\n');
+    assert.ok(globalJoined.includes('侧边栏全局提问标记'), '全局路径仍应读取侧边栏最近对话');
   } finally {
     global.fetch = originalFetch;
     store.updateSettings({

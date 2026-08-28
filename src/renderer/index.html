@@ -331,28 +331,7 @@
     </div>
   </div>
 
-  <section class="task-agent-popover hidden" id="task-agent-popover" role="dialog" aria-modal="false" aria-labelledby="task-agent-title" aria-describedby="task-agent-status">
-    <div class="task-agent-head">
-      <div class="task-agent-context"><span class="task-agent-kicker">任务 Agent</span><strong id="task-agent-title">当前任务</strong></div>
-      <button type="button" class="icon-btn" id="task-agent-close" title="关闭" aria-label="关闭任务 Agent"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-i-x"></use></svg></button>
-    </div>
-    <div class="task-agent-thread hidden" id="task-agent-thread" aria-live="polite"></div>
-    <div class="task-agent-chips" aria-label="快捷操作">
-      <button type="button" class="task-agent-chip" data-agent-prompt="改到明天">改到明天</button>
-      <button type="button" class="task-agent-chip" data-agent-prompt="设为紧急">设为紧急</button>
-      <button type="button" class="task-agent-chip" data-agent-prompt="拆成三步">拆成三步</button>
-      <button type="button" class="task-agent-chip" data-agent-prompt="安排今天">安排今天</button>
-    </div>
-    <form id="task-agent-form">
-      <textarea id="task-agent-input" rows="2" maxlength="300" placeholder="例如：改到明天下午 3 点，或加一个步骤"></textarea>
-      <div class="task-agent-status" id="task-agent-status" aria-live="polite"></div>
-      <div class="task-agent-preview hidden" id="task-agent-preview"></div>
-      <div class="task-agent-actions">
-        <button type="button" class="btn ghost" id="task-agent-cancel">取消</button>
-        <button type="submit" class="btn primary" id="task-agent-submit">生成预览</button>
-      </div>
-    </form>
-  </section>
+  <!-- 任务 Agent 已升级为独立悬浮对话小窗（src/renderer/task-agent/），入口见任务行与编辑弹窗 -->
 
   <!-- 删除确认 -->
   <div class="modal-mask hidden" id="confirm-mask" aria-hidden="true">

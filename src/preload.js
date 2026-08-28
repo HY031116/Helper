@@ -53,7 +53,7 @@ contextBridge.exposeInMainWorld('api', {
   /* AI */
   ai: {
     // 兼容旧版调用形态：previewTaskAction: (taskId, text, requestId) => ipcRenderer.invoke('ai:previewTaskAction', ...)
-    handle: (text, requestId) => ipcRenderer.invoke('ai:handle', { text, requestId }),
+    handle: (text, requestId, options) => ipcRenderer.invoke('ai:handle', { text, requestId, history: options && options.history }),
     report: (input, requestId) => ipcRenderer.invoke('ai:report', { ...(input || {}), requestId }),
     cancel: (requestId) => ipcRenderer.invoke('ai:cancel', requestId),
     onProgress: (callback) => {
@@ -66,7 +66,7 @@ contextBridge.exposeInMainWorld('api', {
     config: () => ipcRenderer.invoke('ai:config'),
     session: () => ipcRenderer.invoke('ai:session'),
     parse: (text) => ipcRenderer.invoke('ai:parse', text),
-    previewTaskAction: (taskId, text, requestId, context) => ipcRenderer.invoke('ai:previewTaskAction', { taskId, text, requestId, context }),
+    previewTaskAction: (taskId, text, requestId, context, history) => ipcRenderer.invoke('ai:previewTaskAction', { taskId, text, requestId, context, history }),
     applyTaskAction: (previewId) => ipcRenderer.invoke('ai:applyTaskAction', previewId),
     undo: (undo) => ipcRenderer.invoke('ai:undo', undo)
   },
@@ -127,9 +127,14 @@ contextBridge.exposeInMainWorld('api', {
     quit: () => ipcRenderer.invoke('window:quit'),
     toggleMaximize: () => ipcRenderer.invoke('window:toggleMaximize')
   },
+  /* 任务 Agent 独立对话小窗 */
+  taskAgent: {
+    open: (payload) => ipcRenderer.invoke('task-agent:open', payload),
+    close: () => ipcRenderer.invoke('task-agent:close')
+  },
   /* 事件订阅 */
   on: (channel, cb) => {
-    const valid = ['app:new-task', 'app:focus-ai', 'app:open-task', 'app:reminder', 'app:switch-view', 'window:maximized', 'pet:remind', 'pet:theme', 'pet-panel:shown', 'pet-panel:visibility', 'workflow:changed'];
+    const valid = ['app:new-task', 'app:focus-ai', 'app:open-task', 'app:reminder', 'app:switch-view', 'window:maximized', 'pet:remind', 'pet:theme', 'pet-panel:shown', 'pet-panel:visibility', 'workflow:changed', 'task-agent:session', 'tasks:changed'];
     if (!valid.includes(channel)) return;
     const listener = (_e, data) => cb(data);
     ipcRenderer.on(channel, listener);

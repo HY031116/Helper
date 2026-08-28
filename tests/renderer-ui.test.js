@@ -20,6 +20,10 @@ const petCss = fs.readFileSync(path.join(ROOT, 'src/renderer/pet/pet.css'), 'utf
 const petPanelHtml = fs.readFileSync(path.join(ROOT, 'src/renderer/pet/panel.html'), 'utf8');
 const petPanelApp = fs.readFileSync(path.join(ROOT, 'src/renderer/pet/panel.js'), 'utf8');
 const petPanelCss = fs.readFileSync(path.join(ROOT, 'src/renderer/pet/panel.css'), 'utf8');
+const taWindowHtml = fs.readFileSync(path.join(ROOT, 'src/renderer/task-agent/window.html'), 'utf8');
+const taWindowApp = fs.readFileSync(path.join(ROOT, 'src/renderer/task-agent/window.js'), 'utf8');
+const taWindowCss = fs.readFileSync(path.join(ROOT, 'src/renderer/task-agent/window.css'), 'utf8');
+const aiSource = fs.readFileSync(path.join(ROOT, 'src/main/ai.js'), 'utf8');
 const buildWin = fs.readFileSync(path.join(ROOT, 'scripts/build-win.ps1'), 'utf8');
 const iconGenerator = fs.readFileSync(path.join(ROOT, 'scripts/generate-app-icons.js'), 'utf8');
 const appIconSvg = fs.readFileSync(path.join(ROOT, 'src/assets/app-icon.svg'), 'utf8');
@@ -463,24 +467,47 @@ test('任务低频操作收进统一菜单并支持方向键浏览', () => {
   assert.strictEqual(items[1].focused, true);
 });
 
-test('任务上下文 Agent 在任务行与编辑弹窗共享安全预览入口', () => {
+test('任务上下文 Agent 在任务行与编辑弹窗唤起独立对话小窗', () => {
   assert.match(app, /class="task-agent-btn"[^`]+uiIcon\('message'\)/);
   assert.match(html, /id="m-agent"[^>]+aria-label="和 Agent 一起修改这项任务"/);
-  assert.match(html, /id="task-agent-popover" role="dialog" aria-modal="false"/);
-  assert.match(html, /data-agent-prompt="改到明天"/);
-  assert.match(html, /data-agent-prompt="安排今天"/);
-  assert.match(preload, /previewTaskAction: \(taskId, text, requestId\) => ipcRenderer\.invoke\('ai:previewTaskAction'/);
-  assert.match(preload, /applyTaskAction: \(previewId\) => ipcRenderer\.invoke\('ai:applyTaskAction'/);
-  assert.match(main, /ipcMain\.handle\('ai:previewTaskAction'/);
-  assert.match(main, /ipcMain\.handle\('ai:applyTaskAction'/);
-  assert.match(app, /if \(taskAgentState\.previewId\) \{/);
-  assert.match(app, /window\.api\.ai\.undo\(result\.undo\)/);
-  assert.match(css, /\.task-agent-popover \{[\s\S]*?position: fixed;[\s\S]*?width: min\(390px, calc\(100vw - 24px\)\)/);
-  assert.match(css, /@keyframes taskAgentIn/);
-  assert.match(html, /id="task-agent-thread"[^>]+aria-live="polite"/);
-  assert.match(app, /previousAction: taskAgentState\.previousAction/);
-  assert.match(app, /taskAgentState\.turns\.push/);
-  assert.match(css, /\.task-agent-thread \{[\s\S]*?max-height: 92px/);
+  // 内嵌 popover 已移除，改为独立悬浮小窗
+  assert.ok(!/task-agent-popover/.test(html));
+  assert.ok(!/task-agent-popover/.test(app));
+  assert.match(preload, /taskAgent: \{\s*open: \(payload\) => ipcRenderer\.invoke\('task-agent:open', payload\)/);
+  assert.match(preload, /'task-agent:session'/);
+  assert.match(main, /ipcMain\.handle\('task-agent:open'/);
+  assert.match(main, /ipcMain\.handle\('task-agent:close'/);
+  assert.match(main, /createTaskAgentWindow/);
+  assert.match(main, /loadFile\(path\.join\(__dirname, 'renderer', 'task-agent', 'window\.html'\)\)/);
+  // 主窗口只负责唤起：入口统一带任务上下文
+  assert.match(app, /window\.api\.taskAgent\.open\(\{/);
+  assert.match(app, /workLogId: workLog && workLog\.id \|\| ''/);
+  // 小窗三件套：对话流 + 快捷指令 + 预览确认
+  assert.match(taWindowHtml, /id="ta-thread"[^>]+aria-live="polite"/);
+  assert.match(taWindowHtml, /data-prompt="改到明天"/);
+  assert.match(taWindowApp, /previewTaskAction\(session\.taskId, input, requestId/);
+  assert.match(taWindowApp, /window\.api\.ai\.applyTaskAction\(preview\.previewId\)/);
+  assert.match(taWindowApp, /window\.api\.ai\.handle\(input, requestId/);
+  assert.match(taWindowApp, /task-agent:session/);
+  assert.match(taWindowCss, /\.ta-preview-actions button\.primary/);
+  // 主窗口监听小窗修改后的刷新通知
+  assert.match(main, /mainWindow\.webContents\.send\('tasks:changed'\)/);
+  assert.match(app, /window\.api\.on\('tasks:changed'/);
+  // 会话隔离：小窗对话不读写主窗口侧边栏的对话记录
+  assert.match(taWindowApp, /const SESSION_HISTORY_LIMIT = 12/);
+  assert.match(taWindowApp, /rememberTurn\(sourceText, result\.message\)/);
+  assert.match(taWindowApp, /rememberTurn\(input, result && result\.message\)/);
+  assert.match(taWindowApp, /\}, currentSessionHistory\(\)\)/);
+  assert.match(preload, /history: options && options\.history/);
+  assert.match(preload, /context, history\) => ipcRenderer\.invoke\('ai:previewTaskAction', \{ taskId, text, requestId, context, history \}\)/);
+  assert.match(main, /isTaskAgentSender\(e\)/);
+  assert.match(main, /function sanitizeSessionHistory\(input\)/);
+  assert.match(main, /if \(isTaskAgent\) return aiRequestCoordinator\.complete\(key, result\)/);
+  assert.match(main, /if \(isTaskAgentSender\(e\)\) return result/);
+  assert.match(main, /history: sanitizeSessionHistory\(payload\.history\)/);
+  assert.match(aiSource, /function conversationContextMessages\(requestContext\)/);
+  assert.match(aiSource, /\.\.\.conversationContextMessages\(requestContext\)/);
+  assert.ok(!/\.\.\.getRecentConversationMessages\(\),\s*\n\s*\{ role: 'user', content: text \}/.test(aiSource));
 });
 
 test('任务工作记录通过 Agent 安全编辑并进入报告来源', () => {
@@ -489,8 +516,10 @@ test('任务工作记录通过 Agent 安全编辑并进入报告来源', () => {
   assert.match(taskSource, /data-worklog-add="\$\{t\.id\}"/);
   assert.match(taskSource, /data-worklog-edit="\$\{esc\(log\.id\)\}"/);
   assert.match(taskSource, /data-worklog-remove="\$\{esc\(log\.id\)\}"/);
-  assert.match(app, /workLogId: taskAgentState\.workLogId/);
-  assert.match(app, /\[data-worklog-add\], \[data-worklog-edit\]/);
+  assert.match(app, /workLogId: workLog && workLog\.id \|\| ''/);
+  assert.match(app, /workLogKind: workLog && workLog\.kind \|\| ''/);
+  assert.match(app, /closest\('\[data-worklog-add\]'\)/);
+  assert.match(app, /closest\('\[data-worklog-edit\]'\)/);
   assert.match(app, /label: '记录成果'/);
   assert.match(app, /function openCompletionOutcome\(taskId\)/);
   assert.match(app, /worklog: '记录'/);
@@ -499,65 +528,201 @@ test('任务工作记录通过 Agent 安全编辑并进入报告来源', () => {
   assert.match(css, /\.task-worklog-item \{[^}]*grid-template-columns:/);
 });
 
-test('任务 Agent 请求中关闭后再次打开会恢复输入状态', () => {
-  const popover = {
-    classList: fakeClassList(), attrs: {}, style: {},
-    setAttribute(name, value) { this.attrs[name] = value; },
-    getBoundingClientRect() { return { height: 240 }; }
-  };
-  const input = {
-    value: '旧指令', disabled: true, focused: false,
-    focus() { this.focused = true; }
-  };
-  const submit = { disabled: true, textContent: '理解中…' };
-  const chip = { disabled: true };
-  const thread = { classList: fakeClassList(), replaceChildren() {} };
-  const preview = { classList: fakeClassList(), replaceChildren() {} };
-  const status = { classList: fakeClassList(), textContent: '' };
-  const title = { textContent: '' };
-  const oldTrigger = {
-    attrs: {}, isConnected: true,
-    setAttribute(name, value) { this.attrs[name] = value; }
-  };
-  const trigger = {
-    attrs: {}, isConnected: true,
-    setAttribute(name, value) { this.attrs[name] = value; },
-    getBoundingClientRect() { return { left: 20, right: 60, top: 20, bottom: 48 }; },
-    focus() {}
-  };
+test('任务 Agent 入口把任务与工作记录上下文传给独立小窗', () => {
+  const opened = [];
+  const trigger = { isConnected: true, focused: false, focus() { this.focused = true; } };
   const run = loadRendererRuntime({
-    '#task-agent-popover': popover,
-    '#task-agent-input': input,
-    '#task-agent-submit': submit,
-    '#task-agent-thread': thread,
-    '#task-agent-preview': preview,
-    '#task-agent-status': status,
-    '#task-agent-title': title,
-    __querySelectorAll(selector) {
-      if (selector === '.task-agent-chip') return [chip];
-      return [];
-    },
     __window: {
       innerWidth: 1200,
       innerHeight: 800,
-      api: { ai: { cancel: async () => ({ ok: true }) } }
+      api: {
+        taskAgent: { open: async (payload) => { opened.push(payload); return { ok: true }; } }
+      }
     },
-    __testValues: { oldTrigger, trigger, task: { id: 42, title: '可继续输入的任务', status: 'todo' } }
+    __testValues: {
+      trigger,
+      task: { id: 42, title: '独立小窗的任务', status: 'todo' },
+      archived: { id: 43, title: '已归档', status: 'archived' },
+      log: { id: 'log-7', kind: 'progress', text: '进展：完成一半' }
+    }
   });
 
-  run(`taskAgentState = { sessionId: 1, taskId: 41, trigger: testValues.oldTrigger, previewId: null, busy: true, requestId: 'old-request', previousAction: null, previousText: '', turns: [] }`);
-  run('closeTaskAgent(false)');
   run('openTaskAgent(testValues.task, testValues.trigger)');
+  assert.strictEqual(opened.length, 1);
+  assert.strictEqual(opened[0].taskId, 42);
+  assert.strictEqual(opened[0].title, '独立小窗的任务');
+  assert.strictEqual(opened[0].draft, '');
+  assert.strictEqual(opened[0].workLogId, '');
+  assert.strictEqual(trigger.focused, true);
 
-  assert.strictEqual(input.disabled, false);
-  assert.strictEqual(submit.disabled, false);
-  assert.strictEqual(chip.disabled, false);
-  assert.strictEqual(input.focused, true);
-  assert.strictEqual(popover.attrs['aria-busy'], 'false');
-  assert.strictEqual(popover.classList.contains('hidden'), false);
-  assert.strictEqual(trigger.attrs['aria-expanded'], 'true');
-  assert.strictEqual(run('taskAgentState.taskId'), 42);
-  assert.ok(run('taskAgentState.sessionId') > 0);
+  // 编辑工作记录入口：带记录上下文与草稿
+  run('openTaskAgent(testValues.task, testValues.trigger, { workLog: testValues.log })');
+  assert.strictEqual(opened.length, 2);
+  assert.strictEqual(opened[1].workLogId, 'log-7');
+  assert.strictEqual(opened[1].workLogKind, 'progress');
+  assert.strictEqual(opened[1].draft, '进展：完成一半');
+  assert.strictEqual(opened[1].title, '编辑记录 · 独立小窗的任务');
+
+  // 归档任务不打开小窗
+  run('openTaskAgent(testValues.archived, testValues.trigger)');
+  assert.strictEqual(opened.length, 2);
+});
+
+/* 任务对话小窗运行时：预览确认流 + 非任务操作回退全局对话 */
+function fakeTaElement(tag) {
+  const children = [];
+  const listeners = {};
+  const classList = fakeClassList();
+  const nativeContains = classList.contains;
+  const el = {
+    tagName: String(tag || 'div').toUpperCase(),
+    className: '',
+    textContent: '',
+    innerHTML: '',
+    disabled: false,
+    value: '',
+    dataset: {},
+    style: {},
+    attrs: {},
+    children,
+    listeners,
+    classList,
+    setAttribute(name, value) { this.attrs[name] = value; },
+    appendChild(child) { children.push(child); return child; },
+    append(...nodes) { nodes.forEach((node) => children.push(node)); },
+    prepend(...nodes) { nodes.forEach((node) => children.unshift(node)); },
+    replaceChildren(...nodes) { children.length = 0; nodes.forEach((node) => children.push(node)); },
+    addEventListener(name, listener) { listeners[name] = listener; },
+    removeEventListener() {},
+    querySelector(selector) {
+      const cls = selector.replace(/^\./, '');
+      for (const child of children) {
+        if (child.classList && child.classList.contains(cls)) return child;
+        const found = child.querySelector ? child.querySelector(selector) : null;
+        if (found) return found;
+      }
+      return null;
+    },
+    querySelectorAll() { return []; },
+    closest() { return { remove() {} }; },
+    focus() { this.focused = true; },
+    requestSubmit() { if (listeners.submit) listeners.submit({ preventDefault() {} }); },
+    setSelectionRange() {},
+    scrollIntoView() {},
+    scrollTop: 0,
+    scrollHeight: 0
+  };
+  // 生产代码用 className 赋值，querySelector 用 classList.contains：这里做同步
+  classList.contains = (name) => nativeContains.call(classList, name) ||
+    String(el.className || '').split(/\s+/).includes(name);
+  return el;
+}
+
+function loadTaskAgentWindowRuntime(api) {
+  const elements = {};
+  ['#ta-thread', '#ta-input', '#ta-send', '#ta-state', '#ta-title', '#ta-close', '#ta-form', '#ta-chips']
+    .forEach((id) => { elements[id] = fakeTaElement(id === '#ta-form' ? 'form' : 'div'); });
+  const chip = fakeTaElement('button');
+  chip.dataset.prompt = '改到明天';
+  elements.__chips = [chip];
+  const context = vm.createContext({
+    console,
+    Date,
+    Math,
+    JSON,
+    Promise,
+    setTimeout: (callback) => { callback(); return 1; },
+    clearTimeout: () => {},
+    document: {
+      querySelector: (selector) => elements[selector] || null,
+      querySelectorAll: (selector) => (selector === '.ta-chips .ta-chip' ? elements.__chips : []),
+      createElement: (tag) => fakeTaElement(tag),
+      addEventListener() {},
+      removeEventListener() {}
+    },
+    window: { api }
+  });
+  vm.runInContext(taWindowApp, context);
+  return { elements, run: (source) => vm.runInContext(source, context) };
+}
+
+test('任务对话小窗：任务修改走预览确认流，非任务操作回退全局 Agent', async () => {
+  const calls = { preview: [], handle: [], apply: [] };
+  let previewResult = {
+    ok: true,
+    type: 'task_action_preview',
+    summary: '准备更新「独立小窗的任务」',
+    fields: [{ label: '截止时间', before: '2026-08-21 18:00', after: '2026-08-22 18:00' }],
+    previewId: 'preview-1',
+    action: { intent: 'update', params: { due: '2026-08-22 18:00' } }
+  };
+  const api = {
+    on: (channel, cb) => { api.__session = cb; },
+    taskAgent: { open: async () => ({ ok: true }), close: () => {} },
+    ai: {
+      onProgress: () => {},
+      previewTaskAction: async (taskId, text, requestId, context, history) => {
+        calls.preview.push({ taskId, text, context, history });
+        return JSON.parse(JSON.stringify(previewResult));
+      },
+      applyTaskAction: async (previewId) => {
+        calls.apply.push(previewId);
+        return { ok: true, type: 'update', message: '已把「独立小窗的任务」改到明天。', undoable: false };
+      },
+      handle: async (text, requestId, options) => {
+        calls.handle.push({ text, history: options && options.history });
+        return { type: 'chat', message: '这个安排合理，紧急任务优先处理。' };
+      },
+      resolve: async () => ({}),
+      undo: async () => ({ ok: true })
+    }
+  };
+  const { elements, run } = loadTaskAgentWindowRuntime(api);
+
+  // 会话注入
+  api.__session({ taskId: 42, title: '独立小窗的任务', draft: '', workLogId: '', workLogKind: '' });
+  assert.strictEqual(elements['#ta-title'].textContent, '独立小窗的任务');
+  // 欢迎语 + 用户输入 + agent 消息
+  await run('sendPrompt("改到明天")');
+  assert.strictEqual(calls.preview.length, 1);
+  assert.strictEqual(calls.preview[0].taskId, 42);
+  assert.strictEqual(calls.preview[0].text, '改到明天');
+  // 会话记忆自持：首轮 history 为空数组（隔离全局侧边栏记录），而不是 undefined
+  assert.ok(Array.isArray(calls.preview[0].history));
+  assert.strictEqual(calls.preview[0].history.length, 0);
+
+  // 预览卡渲染在最后一条 agent 消息内
+  const thread = elements['#ta-thread'];
+  const lastMessage = thread.children[thread.children.length - 1];
+  const previewCard = lastMessage.children.find((child) => child.classList.contains('ta-preview'));
+  assert.ok(previewCard, '应渲染预览卡');
+  const actions = previewCard.children.find((child) => child.classList.contains('ta-preview-actions'));
+  assert.ok(actions);
+  const applyBtn = actions.children.find((button) => button.classList.contains('primary'));
+  assert.strictEqual(applyBtn.textContent, '确认修改');
+
+  // 确认修改：走 applyTaskAction，成功后展示结果消息
+  await applyBtn.listeners.click();
+  assert.deepStrictEqual(calls.apply, ['preview-1']);
+  const resultMessage = thread.children[thread.children.length - 1];
+  assert.strictEqual(resultMessage.querySelector('.ta-text').textContent, '已把「独立小窗的任务」改到明天。');
+
+  // 非任务操作（如咨询意见）：预览管线不支持 → 回退全局 Agent 对话
+  previewResult = { ok: false, type: 'error', message: '我还不能在任务内执行这类操作。' };
+  await run('sendPrompt("你觉得这个安排合理吗")');
+  assert.strictEqual(calls.handle.length, 1);
+  assert.strictEqual(calls.handle[0].text, '你觉得这个安排合理吗');
+  // 兜底对话带上会话自持记忆：包含刚才确认过的「改到明天」轮次
+  assert.ok(Array.isArray(calls.handle[0].history));
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(calls.handle[0].history)), [
+    { role: 'user', content: '改到明天' },
+    { role: 'assistant', content: '已把「独立小窗的任务」改到明天。' }
+  ]);
+  // 预览请求同样携带会话记忆，而不是全局侧边栏记录
+  assert.strictEqual(calls.preview.length, 2);
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(calls.preview[1].history)), JSON.parse(JSON.stringify(calls.handle[0].history)));
+  const chatMessage = thread.children[thread.children.length - 1];
+  assert.strictEqual(chatMessage.querySelector('.ta-text').textContent, '这个安排合理，紧急任务优先处理。');
 });
 
 test('快速添加同时支持按钮和回车，并防止重复提交', () => {
