@@ -383,32 +383,30 @@ function localDateKey(ts) {
 }
 
 /* ---------- 相对日期 ---------- */
-/* 工作结束时刻：优先用户设置的工作时间，否则默认 18:00 */
-function workEndTime(date) {
+/* 工作结束时刻：优先用户设置的工作时间，否则默认 18:00；周末与节假日同样适用 */
+function workEndTime() {
   const wh = (store.getSettings().workHours) || {};
-  const days = Array.isArray(wh.days) ? wh.days : [1, 2, 3, 4, 5];
-  const isWorkday = !date || days.length === 0 || days.includes(date.getDay());
   const end = /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(String(wh.end || '')) ? wh.end : '18:00';
   const [hh, mm] = end.split(':').map(Number);
-  return { hh: isWorkday ? hh : 18, mm: isWorkday ? mm : 0 };
+  return { hh, mm };
 }
 
 function parseRelativeDate(text) {
   const now = new Date();
   const pad = (n) => (n < 10 ? '0' + n : '' + n);
   const fmt = (d, hh, mm) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(hh)}:${pad(mm)}`;
-  const { hh, mm } = workEndTime(now);
+  const { hh, mm } = workEndTime();
 
   // 今天/明天/后天
   if (/今天|今日|今晚/.test(text)) return fmt(now, hh, mm);
   if (/明天|明日/.test(text)) {
     const d = new Date(now); d.setDate(d.getDate() + 1);
-    const e = workEndTime(d);
+    const e = workEndTime();
     return fmt(d, e.hh, e.mm);
   }
   if (/后天/.test(text)) {
     const d = new Date(now); d.setDate(d.getDate() + 2);
-    const e = workEndTime(d);
+    const e = workEndTime();
     return fmt(d, e.hh, e.mm);
   }
   // 周X
@@ -419,7 +417,7 @@ function parseRelativeDate(text) {
     let diff = target - now.getDay();
     if (diff <= 0) diff += 7;
     const d = new Date(now); d.setDate(d.getDate() + diff);
-    const e = workEndTime(d);
+    const e = workEndTime();
     return fmt(d, e.hh, e.mm);
   }
   // X月X日
@@ -2944,8 +2942,11 @@ function parse(text) {
     if (intent === 'memo_pin') params.pinned = !/(取消置顶|不再置顶)/.test(raw);
   } else if (intent === 'create') {
     let title = capturedTodayTask || raw
-      .replace(/^(创建|添加|记一下|安排|新建|帮我记|加一个|建一个|记个|记得|提醒我|要交|要去)\s*(?:一个|一项|个|项)?(?:任务|待办)?\s*[:：]?\s*/g, '')
+      .replace(/^(创建|添加|帮我记一下|记一下|安排|新建|帮我记|加一个|建一个|记个|记得|提醒我|要交|要去)\s*(?:一个|一项|个|项)?(?:任务|待办)?\s*[:：]?\s*/g, '')
+      .replace(/^(?:请|帮我)?(?:把|将)\s*/g, '')
       .replace(/(今天|明天|后天|周[一二三四五六日天]|\d{1,2}月\d{1,2}日|\d{1,2}[:：点]\d{0,2}|\d{1,2}点|凌晨|早上|上午|中午|下午|晚上|傍晚|夜里|半)/g, '')
+      .replace(/(?:安排|排|改|移|挪)?(?:到|在|至)\s*$/g, '')
+      .replace(/(?:帮我)?记一下\s*$/g, '')
       .replace(/(挺急的?|很急|比较急|有点急|急用|紧急|加急|立刻|马上|高优先级|中优先级|低优先级|重要|优先|高|中|低|不急|随便)/g, '')
       .replace(/(?:预计|估计|大概|需要)\s*\d+(?:\.\d+)?\s*(小时|分钟)/g, '')
       .replace(/#[\u4e00-\u9fa5A-Za-z0-9_-]+/g, '')
@@ -3523,7 +3524,7 @@ actions 包含 2 到 5 项，可使用 create、memo_create、memo_pin、complet
 
 意图判断规则：
 - 创建任务：包含任务内容，如「明天下午3点 交周报 #工作 紧急」「提醒我 明天 10 点开会」「帮我记一下 买牛奶」
-- 今日任务速记：「今日任务：核查发布配置」「今天待办 整理验收材料」表示创建一项今天 18:00 截止的任务；只有「今日任务有哪些」「查看今日任务」「今日任务」这类没有新任务内容的表达才是查询
+- 今日任务速记：「今日任务：核查发布配置」「今天待办 整理验收材料」表示创建一项今天工作结束时刻截止的任务；只有「今日任务有哪些」「查看今日任务」「今日任务」这类没有新任务内容的表达才是查询
 - 创建备忘录：用户明确说「记到备忘录」「写进备忘录」「新建备忘录」，使用 memo_create，不要创建任务
 - 查询备忘录：如「查看备忘录」「找一下客户那条笔记」，使用 memo_query
 - 删除备忘录：如「删除客户记录那条备忘录」，使用 memo_delete
@@ -3585,7 +3586,7 @@ actions 包含 2 到 5 项，可使用 create、memo_create、memo_pin、complet
 - 「今天/明天/后天」→ 对应日期
 - 「周X」→ 本周或下周对应星期
 - 「X月X日」→ 对应日期
-- 未指定时间默认 18:00
+- 未指定时间默认为工作结束时刻（未配置则 18:00）
 
 注意：
 - 用户说「提醒我 X」或「记得 X」通常是创建带截止时间的任务
@@ -4490,10 +4491,11 @@ function contextualWorkLogAction(task, raw, context) {
   return { intent: 'worklog_add', params: { kind: workLogKindFromText(addMatch[1]), text: addMatch[2].trim() } };
 }
 
-function todayDueAtSix() {
+function todayDueEnd() {
   const now = new Date();
   const pad = (n) => (n < 10 ? '0' + n : String(n));
-  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} 18:00`;
+  const { hh, mm } = workEndTime();
+  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(hh)}:${pad(mm)}`;
 }
 
 function contextualParsedAction(taskId, text, parsed, context) {
@@ -4535,7 +4537,7 @@ function contextualParsedAction(taskId, text, parsed, context) {
     if (synthetic.params && synthetic.params.days) action = { intent: 'postpone', params: synthetic.params };
   }
   if (/安排(?:到|在)?今天|今天安排|排到今天/.test(raw)) {
-    action = { intent: 'update', params: Object.assign({}, action.params, { due: todayDueAtSix() }) };
+    action = { intent: 'update', params: Object.assign({}, action.params, { due: todayDueEnd() }) };
   }
   const params = Object.assign({}, action.params || {});
   if (task && TARGET_INTENTS.has(action.intent)) {

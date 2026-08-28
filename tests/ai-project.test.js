@@ -889,6 +889,34 @@ test('工作时间：相对日期按设置的工作结束时间解析', () => {
   assert.ok(r.task.due && r.task.due.endsWith('17:30'), `due=${r.task.due}`);
 });
 
+test('工作时间：周末的相对日期同样使用配置的结束时间', (context) => {
+  // 冻结在周六 2026-08-22：非工作日不得回退默认 18:00
+  context.mock.timers.enable({ apis: ['Date'], now: new Date('2026-08-22T10:00:00') });
+  reset();
+  store.updateSettings({ workHours: { start: '09:00', end: '17:30', days: [1, 2, 3, 4, 5] } });
+  const today = ai.handle('今天 提交周报');
+  assert.strictEqual(today.intent, 'create');
+  assert.ok(today.task.due && today.task.due.startsWith('2026-08-22'), `due=${today.task.due}`);
+  assert.ok(today.task.due.endsWith('17:30'), `due=${today.task.due}`);
+  const tomorrow = ai.handle('明天 提交月报');
+  assert.strictEqual(tomorrow.intent, 'create');
+  assert.ok(tomorrow.task.due && tomorrow.task.due.startsWith('2026-08-23'), `due=${tomorrow.task.due}`);
+  assert.ok(tomorrow.task.due.endsWith('17:30'), `due=${tomorrow.task.due}`);
+});
+
+test('工作时间：周末速记与排到今天也使用配置的结束时间', (context) => {
+  context.mock.timers.enable({ apis: ['Date'], now: new Date('2026-08-22T10:00:00') });
+  reset();
+  store.updateSettings({ workHours: { start: '09:00', end: '17:30', days: [1, 2, 3, 4, 5] } });
+  const quick = ai.handle('今日任务 核对召唤物流派搭配');
+  assert.strictEqual(quick.intent, 'create');
+  assert.ok(quick.task.due && quick.task.due.endsWith('17:30'), `due=${quick.task.due}`);
+  const anchor = store.createTask({ title: '整理构筑表' });
+  const moved = ai.handle('把「整理构筑表」安排到今天');
+  assert.strictEqual(moved.intent, 'update');
+  assert.ok(moved.task && moved.task.due && moved.task.due.endsWith('17:30'), `due=${moved.task && moved.task.due}`);
+});
+
 test('工作时间：非法配置回退默认 18:00', () => {
   reset();
   store.updateSettings({ workHours: { start: '18:00', end: '09:00', days: [9] } });
