@@ -2240,6 +2240,13 @@ function visibleReportSnapshot(snapshot, preferences) {
       stat.count = stat.sourceIds.length;
     });
   }
+  if (copy.summary.memos) {
+    const memoIds = copy.summary.memos.sourceIds.filter((id) => !excluded.has(id));
+    copy.summary.memos.sourceIds = memoIds;
+    copy.summary.memos.count = memoIds.length;
+    copy.summary.memos.createdCount = memoIds.filter((id) => sourceMap.get(id)?.createdInPeriod).length;
+    copy.summary.memos.updatedCount = memoIds.length - copy.summary.memos.createdCount;
+  }
   ['projects', 'tags'].forEach((key) => {
     copy[key] = copy[key].map((stat) => {
       const sourceIds = stat.sourceIds.filter((id) => !excluded.has(id));
@@ -2299,16 +2306,18 @@ function localStructuredReport(snapshot, preferences) {
   const loggedRisks = workLogItems(['blocker']);
   const loggedNext = workLogItems(['next']);
   const outcomeRecordCount = Number(snapshot.summary.workLogs?.byKind?.outcome?.count) || 0;
+  const memoRecordCount = Number(snapshot.summary.memos?.count) || 0;
   const overviewSources = [...new Set([
     ...snapshot.summary.completed.sourceIds,
     ...snapshot.summary.active.sourceIds,
     ...snapshot.summary.overdueRisks.sourceIds,
     ...snapshot.summary.planExecution.sourceIds,
     ...snapshot.summary.focus.sourceIds,
-    ...(snapshot.summary.workLogs?.sourceIds || [])
+    ...(snapshot.summary.workLogs?.sourceIds || []),
+    ...(snapshot.summary.memos?.sourceIds || [])
   ])].slice(0, 12);
   const overview = [{
-    text: `本期完成 ${snapshot.summary.completed.count} 项${outcomeRecordCount ? `，记录 ${outcomeRecordCount} 项明确成果` : ''}，当前推进 ${snapshot.summary.active.count} 项${snapshot.summary.overdueRisks.count ? `，另有 ${snapshot.summary.overdueRisks.count} 项逾期风险` : ''}。${snapshot.summary.focus.focusedMinutes ? `记录专注 ${snapshot.summary.focus.focusedMinutes} 分钟。` : ''}`,
+    text: `本期完成 ${snapshot.summary.completed.count} 项${outcomeRecordCount ? `，记录 ${outcomeRecordCount} 项明确成果` : ''}，当前推进 ${snapshot.summary.active.count} 项${snapshot.summary.overdueRisks.count ? `，另有 ${snapshot.summary.overdueRisks.count} 项逾期风险` : ''}。${snapshot.summary.focus.focusedMinutes ? `记录专注 ${snapshot.summary.focus.focusedMinutes} 分钟。` : ''}${memoRecordCount ? `本期另有 ${memoRecordCount} 条备忘作为背景依据。` : ''}`,
     sourceIds: overviewSources
   }];
   const sections = [{ heading: '工作概览', kind: 'facts', items: overview }];
@@ -2352,6 +2361,51 @@ function reportEvidenceCounts(report) {
   return counts;
 }
 
+/* 报告撰写是长输出：思考型模型会先耗尽 token 再写正文，预算和超时都不能沿用快对话那一套。 */
+const REPORT_DISABLED_NOTICE = '模型未启用，已降级为本地事实模板';
+const REPORT_MAX_TOKENS = 8000;
+const REPORT_RETRY_TOKENS = 16000;
+// callLLM 里 timeout 只覆盖“等到响应首包”，readTimeout 覆盖非流式读完整响应体，
+// idleTimeout 覆盖流式两次 chunk 之间的停顿。
+const REPORT_CONNECT_TIMEOUT = 30000;
+const REPORT_READ_TIMEOUT = 150000;
+const REPORT_IDLE_TIMEOUT = 60000;
+
+function isTruncatedReportOutput(error) {
+  const code = String(error && error.code || '');
+  return code === 'REPORT_OUTPUT_INVALID_JSON' || code === 'REPORT_OUTPUT_EMPTY';
+}
+
+function reportDegradeCode(error) {
+  const code = String(error && error.code || '');
+  const message = String(error && error.message || '');
+  if (code === 'LLM_FINAL_CONTENT_EMPTY' || /没有返回最终答案/.test(message)) return 'model-budget';
+  if (code === 'REPORT_OUTPUT_UNKNOWN_SOURCE' || code === 'REPORT_OUTPUT_UNSOURCED_CLAIM') return 'model-fabricated';
+  if (isTruncatedReportOutput(error)) return 'model-truncated';
+  if (code === 'AI_REQUEST_TIMEOUT' || code === 'AI_STREAM_IDLE_TIMEOUT' || /超时/.test(message)) return 'model-timeout';
+  if (/\(401\)|\(403\)/.test(message)) return 'model-auth';
+  if (/\(429\)/.test(message)) return 'model-rate-limit';
+  if (/^REPORT_|模型报告|模型回复|JSON|字段|意图|MODEL_OUTPUT/.test(`${code} ${message}`)) return 'model-output';
+  return 'model-service';
+}
+
+const REPORT_DEGRADE_REASONS = {
+  'model-disabled': ['模型未启用', '设置里没有开启真实模型或 AI 接入配置不完整'],
+  'model-budget': ['模型输出预算不足', '模型思考占满了输出预算，提高预算重试后仍没有正文'],
+  'model-truncated': ['报告没有写完', '正文被输出预算截断，用更大预算重写后仍没有写完'],
+  'model-fabricated': ['模型引用了不存在的事实', '报告引用了事实快照之外的来源，这类内容不会进入报告'],
+  'model-timeout': ['模型响应超时', `模型在 ${Math.round(REPORT_READ_TIMEOUT / 1000)} 秒内没有写完报告`],
+  'model-auth': ['模型授权失败', 'API Key 或访问权限无效，请在设置 → AI 接入中检查'],
+  'model-rate-limit': ['模型请求过于频繁', '模型服务限流，稍后再试'],
+  'model-output': ['模型回复格式异常', '报告结构不符合约定：章节或字段缺失'],
+  'model-service': ['模型服务短暂异常', '模型服务没有正常响应']
+};
+
+function reportDegradeNotice(error) {
+  const reason = REPORT_DEGRADE_REASONS[reportDegradeCode(error)] || REPORT_DEGRADE_REASONS['model-service'];
+  return `${reason[0]}（${reason[1]}），已降级为本地事实模板`;
+}
+
 function reportResult(session, options) {
   const degraded = session.authoredBy !== 'model';
   const visibleSnapshot = visibleReportSnapshot(session.snapshot, session.preferences);
@@ -2369,7 +2423,8 @@ function reportResult(session, options) {
     degraded,
     retryable: !!(options && options.retryable),
     reportSessionActive: true,
-    degradeNotice: degraded ? (options && options.notice || '模型未启用，已降级为本地事实模板') : '',
+    degradeNotice: degraded ? (options && options.notice || REPORT_DISABLED_NOTICE) : '',
+    degradeCode: degraded ? (options && options.code || 'model-disabled') : '',
     message: degraded
       ? `${reportPeriodLabel(session.period, session.offset)}已按本地事实生成。模型恢复后可以重试智能撰写；本轮没有修改任何工作数据。`
       : `${reportPeriodLabel(session.period, session.offset)}已由 Agent 撰写。你可以继续说“给老板看”“突出某项目”或“压缩成五条”，我只会重写预览。`
@@ -2393,8 +2448,9 @@ ${writingStrategy}
 6. excludedSourceIds 中的来源不得出现在报告，也不得影响汇总数字。
 7. 不要照搬固定模板；合并同一项目或同一结果链上的事项，优先写结果和影响，再写动作。任务标题不等于成果时，使用任务说明、子任务进度、计划和复盘补足语境。
 8. worklog 类型是用户主动沉淀的工作事实。优先使用 outcome、blocker、decision 作为成果、风险和关键判断的依据；同一 project 的记录应归并表达，不要退化成逐条任务清单。
-9. executiveSummary 必须是一段有信息量的结论，不能写“详情如下”“本期有若干事项”等套话。
-10. 默认面向团队负责人，语言专业、克制、简洁；用户另有受众或语气要求时服从偏好。没有数据就明确说没有记录，不虚构。
+9. memo 类型是备忘录，属于背景资料与判断依据：可以用它补足任务语境、支撑结论或解释风险，但不要为备忘录单独开章节，也不要把「写了某条备忘」本身当成成果；同一主题的备忘与任务应合并成一条表述。
+10. executiveSummary 必须是一段有信息量的结论，不能写“详情如下”“本期有若干事项”等套话。
+11. 默认面向团队负责人，语言专业、克制、简洁；用户另有受众或语气要求时服从偏好。没有数据就明确说没有记录，不虚构。
 
 输出格式：
 {
@@ -2437,27 +2493,54 @@ async function generateAgentReport(text, params, requestContext, options) {
   };
 
   if (isLLMConfigured() && store.getSettings().aiStage === 'llm') {
+    // 有进度回调就走流式：首包只需等响应头，之后按 chunk 续期，长报告不再被连接超时误杀
+    const streaming = !!(requestContext && requestContext.onProgress);
+    // 服务端可能忽略 stream 直接回整包 JSON，因此按“是否真的推过思考增量”决定是否补发
+    let streamedReasoning = false;
     try {
       reportRequestProgress(requestContext, 'understanding', '正在核对报告事实与写作要求…');
       const previousReport = snapshot.excludedSourceIds.length ? null : (previousSession && previousSession.report);
-      const llmResult = await callLLM([
+      const writerMessages = [
         { role: 'system', content: buildReportWriterPrompt(snapshot, preferences, previousReport) },
         { role: 'user', content: String(text || `撰写${reportPeriodLabel(period, offset)}`) }
-      ], {
+      ];
+      const writerOptions = (maxTokens) => ({
         jsonMode: true,
-        timeout: requestContext && requestContext.timeout || 60000,
-        readTimeout: 90000,
-        maxTokens: 4000,
-        signal: requestContext && requestContext.signal
+        timeout: REPORT_CONNECT_TIMEOUT,
+        readTimeout: REPORT_READ_TIMEOUT,
+        idleTimeout: REPORT_IDLE_TIMEOUT,
+        maxTokens,
+        signal: requestContext && requestContext.signal,
+        stream: streaming,
+        // 报告正文是结构化 JSON，不把 delta 推到对话气泡，只透出思考增量
+        onDelta: (delta, reasoningDelta, flags) => {
+          if (reasoningDelta) streamedReasoning = true;
+          reportRequestProgress(requestContext, 'writing', '正在撰写报告…', null, reasoningDelta, flags);
+        }
       });
-      const content = llmResult && llmResult.content || '';
+      const llmResult = await callLLMResilient(writerMessages, writerOptions(REPORT_MAX_TOKENS), requestContext, REPORT_RETRY_TOKENS);
       const reasoning = llmResult && llmResult.reasoning || '';
       throwIfRequestCancelled(requestContext);
-      if (reasoning) {
+      if (!streamedReasoning && reasoning) {
         reportRequestProgress(requestContext, 'writing', '', null, reasoning, { reasoningDone: true });
       }
       reportRequestProgress(requestContext, 'checking', '正在核对事实引用与安全边界…');
-      const report = normalizeReportModelResponse(content, new Set(snapshot.sources.map((item) => item.id)));
+      const sourceIds = new Set(snapshot.sources.map((item) => item.id));
+      let report = null;
+      try {
+        report = normalizeReportModelResponse(llmResult && llmResult.content || '', sourceIds);
+      } catch (error) {
+        // 正文被输出预算截断时唯一的出路是更大的预算重写一次；引用造假不该重试
+        if (!isTruncatedReportOutput(error)) throw error;
+        reportRequestProgress(requestContext, 'writing', '报告正文没有写完，正在用更大的输出预算重写…');
+        streamedReasoning = false;
+        const rewrite = await callLLM(writerMessages, writerOptions(REPORT_RETRY_TOKENS));
+        if (!streamedReasoning && rewrite && rewrite.reasoning) {
+          reportRequestProgress(requestContext, 'writing', '', null, rewrite.reasoning, { reasoningDone: true });
+        }
+        throwIfRequestCancelled(requestContext);
+        report = normalizeReportModelResponse(rewrite && rewrite.content || '', sourceIds);
+      }
       const session = Object.assign({}, sessionBase, {
         updatedAt: Date.now(),
         report,
@@ -2468,13 +2551,14 @@ async function generateAgentReport(text, params, requestContext, options) {
       return reportResult(session);
     } catch (error) {
       if (isRequestCancelled(error, requestContext)) throw requestCancelledError();
-      console.error('[ai] 报告 Agent 生成失败，降级到本地事实模板:', error.message);
+      const code = reportDegradeCode(error);
+      console.error('[ai] 报告 Agent 生成失败，降级到本地事实模板:', code, error.message);
       const report = localStructuredReport(snapshot, preferences);
       const session = Object.assign({}, sessionBase, {
         updatedAt: Date.now(), report, markdown: reportToMarkdown(report), authoredBy: 'local'
       });
       store.updateAgentState({ reportSession: session });
-      return reportResult(session, { retryable: true, notice: `${modelFailureNotice(error)}，已降级为本地事实模板` });
+      return reportResult(session, { retryable: true, notice: reportDegradeNotice(error), code });
     }
   }
 
@@ -2483,7 +2567,7 @@ async function generateAgentReport(text, params, requestContext, options) {
     updatedAt: Date.now(), report, markdown: reportToMarkdown(report), authoredBy: 'local'
   });
   store.updateAgentState({ reportSession: session });
-  return reportResult(session, { notice: '模型未启用，已降级为本地事实模板' });
+  return reportResult(session, { notice: REPORT_DISABLED_NOTICE, code: 'model-disabled' });
 }
 
 async function generateReport(input, requestContext) {

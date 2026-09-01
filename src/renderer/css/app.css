@@ -287,6 +287,8 @@ html, body {
 .memo-workspace {
   display: grid;
   grid-template-columns: minmax(210px, 260px) minmax(360px, 1fr);
+  /* 行高必须锁死，否则 textarea 会按内容撑到几千像素，被 overflow: hidden 裁掉后长备忘录滚不到底 */
+  grid-template-rows: minmax(0, 1fr);
   min-height: 500px;
   height: calc(100vh - 138px);
   max-height: 760px;
@@ -298,6 +300,7 @@ html, body {
 }
 .memo-sidebar {
   min-width: 0;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   border-right: 1px solid var(--rule);
@@ -369,7 +372,7 @@ html, body {
   cursor: pointer;
 }
 .memo-list-item:hover { background: rgba(var(--accent2-rgb), 0.06); }
-.memo-list-item.active { background: var(--bg2); }
+.memo-list-item.active { background: var(--bg2); padding-right: 16px; }
 .memo-list-item.active::after {
   content: '';
   position: absolute;
@@ -392,7 +395,76 @@ html, body {
 .memo-list-preview { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 11.5px; }
 .memo-list-time { color: var(--muted); font: 10.5px/1.4 var(--font-num); }
 .memo-list-empty { padding: 28px 16px; color: var(--muted); font-size: 12px; text-align: center; }
-.memo-pane { min-width: 0; min-height: 0; }
+/* 备忘录筛选、批量与草稿态 */
+.memo-filter-row { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+.memo-filters {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  gap: 5px;
+  padding-bottom: 2px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  /* 右侧渐隐，让「还能横向滚」这件事看得出来，而不是标签被硬切一刀 */
+  mask-image: linear-gradient(to right, #000 calc(100% - 22px), transparent);
+}
+.memo-filters::-webkit-scrollbar { display: none; }
+.memo-filters .fchip { flex: 0 0 auto; }
+.memo-select-mode {
+  flex: 0 0 auto;
+  padding: 3px 8px;
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--muted);
+  font: 600 11px/1.6 var(--font-ui);
+  cursor: pointer;
+}
+.memo-select-mode[aria-pressed="true"] { border-color: var(--accent2); background: rgba(var(--accent2-rgb), 0.1); color: var(--accent2); }
+.memo-batch-bar {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 5px;
+  margin: 8px 10px 0;
+  padding: 7px 8px;
+  border: 1px solid rgba(var(--accent2-rgb), 0.24);
+  border-radius: 6px;
+  background: rgba(var(--accent2-rgb), 0.05);
+}
+.memo-batch-count { grid-column: 1 / -1; color: var(--muted); font: 600 11px/1.5 var(--font-ui); }
+.memo-batch-bar .btn { width: 100%; justify-content: center; padding-inline: 4px; font-size: 11px; }
+.memo-batch-bar .btn:last-child { grid-column: 1 / -1; }
+.memo-list-item.selectable { grid-template-columns: auto minmax(0, 1fr); align-items: start; }
+.memo-list-body { display: grid; min-width: 0; gap: 3px; }
+.memo-check {
+  display: inline-flex;
+  width: 16px;
+  height: 16px;
+  align-items: center;
+  justify-content: center;
+  margin-top: 2px;
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  background: var(--bg2);
+  color: transparent;
+}
+.memo-check .ui-icon { width: 11px; height: 11px; }
+.memo-list-item.checked .memo-check { border-color: var(--accent2); background: var(--accent2); color: #F4F7FA; }
+.memo-list-meta { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; }
+.memo-list-meta .memo-list-time { margin-left: auto; }
+.memo-list-item.draft { background: rgba(var(--warn-rgb), 0.06); }
+.memo-list-item.draft .memo-list-preview { color: var(--warn); }
+.memo-clear-filter {
+  margin-left: 8px;
+  padding: 2px 8px;
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  background: var(--bg2);
+  color: var(--accent2);
+  font: 600 11px/1.6 var(--font-ui);
+  cursor: pointer;
+}
+.memo-pane { min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
 .memo-load-error { height: 100%; display: flex; align-items: center; padding: 18px; }
 .memo-load-error.hidden { display: none; }
 .memo-load-error .load-state { width: 100%; }
@@ -408,9 +480,9 @@ html, body {
 .memo-empty-mark { color: var(--accent2); opacity: 0.55; }
 .memo-empty-mark .ui-icon { width: 32px; height: 32px; }
 .memo-empty strong { color: var(--ink2); font-size: 14px; }
-.memo-editor { height: 100%; min-height: 0; display: flex; flex-direction: column; }
-.memo-editor-head { display: flex; align-items: center; gap: 12px; padding: 16px 18px 10px; }
-.memo-title { height: 38px; padding: 0 2px; border-width: 0 0 1px; border-radius: 0; font-size: 18px; font-weight: 700; }
+.memo-editor { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.memo-editor-head { display: flex; align-items: center; gap: 10px; padding: 14px 18px 8px; }
+.memo-title { flex: 1 1 auto; min-width: 0; height: 38px; padding: 0 2px; border-width: 0 0 1px; border-radius: 0; background: transparent; font-size: 18px; font-weight: 700; }
 .memo-title:focus { box-shadow: none; border-color: var(--accent2); }
 .memo-actions { display: flex; align-items: center; gap: 7px; flex: 0 0 auto; }
 .memo-action-group {
@@ -463,7 +535,8 @@ html, body {
 #memo-new[aria-busy="true"] .ui-icon {
   animation: buttonBusySpin var(--motion-loop) linear infinite;
 }
-.memo-tool[data-tooltip]::after {
+.memo-tool[data-tooltip]::after,
+.memo-task-action[data-tooltip]::after {
   content: attr(data-tooltip);
   position: absolute;
   z-index: var(--layer-popover);
@@ -483,8 +556,11 @@ html, body {
   transition: opacity var(--motion-fast) var(--ease-standard), transform var(--motion-fast) var(--ease-standard);
 }
 .memo-tool[data-tooltip]:hover::after,
-.memo-tool[data-tooltip]:focus-visible::after { opacity: 1; transform: translateX(-50%) translateY(0); }
+.memo-tool[data-tooltip]:focus-visible::after,
+.memo-task-action[data-tooltip]:hover::after,
+.memo-task-action[data-tooltip]:focus-visible::after { opacity: 1; transform: translateX(-50%) translateY(0); }
 .memo-task-action {
+  position: relative;
   width: 90px;
   flex: 0 0 90px;
   padding: 0 10px;
@@ -504,21 +580,74 @@ html, body {
 .memo-delete-tool { border: 1px solid transparent; }
 .memo-delete-tool:hover,
 .memo-delete-tool:focus-visible { background: rgba(var(--danger-rgb), 0.08); color: var(--danger); border-color: rgba(var(--danger-rgb), 0.16); box-shadow: none; }
-.memo-tags { margin: 0 18px 8px; width: calc(100% - 36px); height: 32px; padding: 0 10px; border-radius: 6px; font-size: 11.5px; color: var(--accent2); }
-.memo-content {
-  flex: 1;
-  min-height: 0;
-  resize: none;
-  padding: 14px 20px;
+.memo-tag-field {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 18px 10px;
+  padding: 5px 8px 5px 9px;
+  border: 1px dashed var(--rule2);
+  border-radius: 7px;
+  background: transparent;
+}
+.memo-tag-field:focus-within { border-color: var(--accent2); border-style: solid; }
+.memo-tag-mark { flex: 0 0 auto; color: var(--muted); font: 700 12px/1 var(--font-ui); }
+.memo-tag-chips { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; min-width: 0; }
+.memo-tag-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 4px 2px 7px;
+  border: 1px solid rgba(var(--accent2-rgb), 0.28);
+  border-radius: 999px;
+  background: rgba(var(--accent2-rgb), 0.09);
+  color: var(--accent2);
+  font: 650 11px/1.5 var(--font-ui);
+  white-space: nowrap;
+}
+.memo-tag-chip button {
+  display: inline-flex;
+  width: 15px;
+  height: 15px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
   border: 0;
-  border-top: 1px solid var(--rule);
-  border-bottom: 1px solid var(--rule);
+  border-radius: 50%;
+  background: transparent;
+  color: inherit;
+  font: 700 12px/1 var(--font-ui);
+  cursor: pointer;
+}
+.memo-tag-chip button:hover { background: rgba(var(--accent2-rgb), 0.18); }
+.memo-tags {
+  flex: 1 1 90px;
+  min-width: 90px;
+  height: 24px;
+  padding: 0 2px;
+  border: 0;
   border-radius: 0;
+  background: transparent;
+  color: var(--ink);
+  font-size: 11.5px;
+}
+.memo-tags:focus { box-shadow: none; }
+.memo-content {
+  flex: 1 1 auto;
+  min-height: 120px;
+  width: calc(100% - 36px);
+  margin: 0 18px 12px;
+  resize: none;
+  padding: 14px 16px;
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  background: var(--bg3);
+  color: var(--ink);
   font-size: 14px;
   line-height: 1.75;
   user-select: text;
 }
-.memo-content:focus { box-shadow: inset 3px 0 0 var(--accent2); }
+.memo-content:focus { border-color: var(--accent2); box-shadow: 0 0 0 3px rgba(var(--accent2-rgb), 0.1); }
 .memo-editor-foot {
   min-height: 34px;
   display: flex;
@@ -1451,6 +1580,15 @@ mark { background: rgba(var(--warn-rgb), 0.25); color: inherit; border-radius: 2
   border-color: rgba(var(--accent2-rgb), 0.28);
   color: var(--accent2);
   background: rgba(var(--accent2-rgb), 0.09);
+}
+.report-degrade-reason {
+  flex: 1 1 100%;
+  min-width: 0;
+  padding: 3px 6px;
+  border-radius: 4px;
+  background: rgba(var(--warn-rgb), 0.1);
+  color: var(--warn);
+  font: 600 10.5px/1.5 var(--font-ui);
 }
 .report-evidence-band { display: flex; min-width: 0; align-items: center; justify-content: flex-end; gap: 5px; flex-wrap: wrap; }
 .report-evidence {
@@ -2619,8 +2757,9 @@ body.dark .memo-workspace,
 body.dark .memo-list-item.active,
 body.dark .memo-search-row input,
 body.dark .memo-title,
-body.dark .memo-tags,
-body.dark .memo-content { background: var(--bg2); }
+body.dark .memo-tags { background: var(--bg2); }
+/* 深色下书写面要更沉一档，才像一张嵌在卡片里的纸 */
+body.dark .memo-content { background: var(--bg); }
 body.dark .memo-sidebar { background: var(--bg3); }
 body.dark .memo-action-group { background: var(--bg3); }
 body.dark .memo-tool:hover,
@@ -2648,9 +2787,12 @@ body.dark .ai-head { background: var(--bg2); }
 }
 
 @container (max-width: 700px) {
-  .memo-workspace { grid-template-columns: 210px minmax(300px, 1fr); }
-  .memo-editor-head { align-items: flex-start; flex-wrap: wrap; }
-  .memo-actions { width: 100%; justify-content: flex-end; }
+  .memo-workspace { grid-template-columns: 200px minmax(0, 1fr); }
+  /* 窄容器里标题与工具条仍留在同一行，只把「转为任务」收成图标，靠 aria-label 与 tooltip 表意 */
+  .memo-editor-head { gap: 8px; }
+  .memo-task-action { width: 30px; flex: 0 0 30px; padding: 0; }
+  .memo-task-action span { display: none; }
+  .memo-actions { gap: 5px; }
 }
 
 @container (min-width: 880px) {

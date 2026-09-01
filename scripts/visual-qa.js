@@ -24,6 +24,12 @@ const outputDir = path.join(os.tmpdir(), `work-helper-visual-qa-${stamp}`);
 const dataDir = path.join(outputDir, 'profile');
 process.argv.push(`--work-helper-data-dir=${dataDir}`);
 
+// 瞬态动画类是在 requestAnimationFrame 回调里加的，而 Chromium 会节流被遮挡/后台窗口的渲染帧；
+// 不关掉后台化，依赖动画的观察会随机拿不到那一帧。
+app.commandLine.appendSwitch('disable-backgrounding-occluded-windows');
+app.commandLine.appendSwitch('disable-renderer-backgrounding');
+app.commandLine.appendSwitch('disable-background-timer-throttling');
+
 require('../src/main');
 
 function wait(milliseconds) {
@@ -590,6 +596,16 @@ app.whenReady().then(async () => {
       (() => {
         switchView('cal');
         const before = document.querySelector('.cal-title').textContent;
+        // 位移类只存在一个动画周期，靠轮询会因 IPC 往返时延漏看，先在点击前挂观察者
+        window.__calShiftSeen = false;
+        const observer = new MutationObserver(() => {
+          const grid = document.querySelector('#cal-body .cal-grid');
+          if (grid && (grid.classList.contains('cal-shift-next') || grid.classList.contains('cal-shift-prev'))) {
+            window.__calShiftSeen = true;
+          }
+        });
+        observer.observe(document.querySelector('#cal-body'), { attributes: true, attributeFilter: ['class'], subtree: true });
+        window.__calShiftObserver = observer;
         document.querySelector('[data-cal="next"]').click();
         return before;
       })()
@@ -597,18 +613,19 @@ app.whenReady().then(async () => {
     let calendarDirectionSeen = false;
     for (let attempt = 0; attempt < 10 && !calendarDirectionSeen; attempt += 1) {
       await wait(20);
-      calendarDirectionSeen = await mainWindow.webContents.executeJavaScript(
-        `document.querySelector('.cal-grid').classList.contains('cal-shift-next')`
-      );
+      calendarDirectionSeen = await mainWindow.webContents.executeJavaScript(`window.__calShiftSeen === true`);
     }
     const calendarShiftCheck = await mainWindow.webContents.executeJavaScript(`
-      (() => ({
-        before: ${JSON.stringify(calendarStart)},
-        after: document.querySelector('.cal-title').textContent,
-        direction: ${JSON.stringify(calendarDirectionSeen)},
-        focusRestored: document.activeElement === document.querySelector('[data-cal="next"]'),
-        selectedCells: document.querySelectorAll('.cal-cell.selected').length
-      }))()
+      (() => {
+        if (window.__calShiftObserver) window.__calShiftObserver.disconnect();
+        return ({
+          before: ${JSON.stringify(calendarStart)},
+          after: document.querySelector('.cal-title').textContent,
+          direction: ${JSON.stringify(calendarDirectionSeen)},
+          focusRestored: document.activeElement === document.querySelector('[data-cal="next"]'),
+          selectedCells: document.querySelectorAll('.cal-cell.selected').length
+        });
+      })()
     `);
     if (calendarShiftCheck.before === calendarShiftCheck.after || !calendarShiftCheck.direction
       || !calendarShiftCheck.focusRestored || calendarShiftCheck.selectedCells !== 0) {
@@ -803,6 +820,8 @@ app.whenReady().then(async () => {
         const after = JSON.stringify(await stableWorkState());
         const chat = document.querySelector('#ai-chat');
         chat.innerHTML = '';
+        // 这里绕过了 runAiTurn 直接铺对话，先补上真实轮次会做的前置：面板必须展开
+        setAiPanelExpanded();
         addMsg('user', '语气正式，压缩成五条');
         const response = addMsg('ai', revised.message);
         response.appendChild(reportCard(revised));

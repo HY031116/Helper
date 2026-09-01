@@ -106,8 +106,20 @@
         <div class="memo-workspace">
           <div class="memo-sidebar">
             <div class="memo-search-row">
-              <input id="memo-search" type="search" aria-label="搜索备忘录" placeholder="搜索标题、正文或标签">
+              <input id="memo-search" type="search" aria-label="搜索备忘录的标题、正文或标签" placeholder="搜索备忘录">
               <button type="button" class="icon-btn memo-new" id="memo-new" title="新建备忘录" aria-label="新建备忘录"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-i-plus"></use></svg></button>
+            </div>
+            <div class="memo-filter-row">
+              <div class="memo-filters" id="memo-filters" role="group" aria-label="备忘录筛选"></div>
+              <button type="button" class="memo-select-mode" id="memo-select-mode" aria-pressed="false" title="批量选择备忘录"><span>选择</span></button>
+            </div>
+            <div class="memo-batch-bar hidden" id="memo-batch-bar" role="group" aria-label="备忘录批量操作">
+              <span class="memo-batch-count" id="memo-batch-count">已选 0 条</span>
+              <button type="button" class="btn mini ghost" id="memo-batch-select-all" disabled>全选当前</button>
+              <button type="button" class="btn mini ghost" id="memo-batch-pin" disabled>置顶</button>
+              <button type="button" class="btn mini ghost" id="memo-batch-unpin" disabled>取消置顶</button>
+              <button type="button" class="btn mini ghost danger-quiet" id="memo-batch-delete" disabled>删除</button>
+              <button type="button" class="btn mini ghost" id="memo-batch-clear" disabled>清除选择</button>
             </div>
             <div class="memo-list" id="memo-list" role="listbox" aria-label="备忘录列表"></div>
           </div>
@@ -120,17 +132,21 @@
             </div>
             <div class="memo-editor hidden" id="memo-editor">
               <div class="memo-editor-head">
-                <input id="memo-title" class="memo-title" maxlength="100" aria-label="备忘录标题" placeholder="无标题备忘录">
+                <input id="memo-title" class="memo-title" maxlength="100" aria-label="备忘录标题，可留空，留空时自动取正文开头" placeholder="标题（可留空）">
                 <div class="memo-actions" role="group" aria-label="备忘录操作">
                   <div class="memo-action-group">
                     <button type="button" class="memo-tool" id="memo-pin" data-tooltip="置顶" aria-label="置顶备忘录" aria-pressed="false"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-i-pin"></use></svg></button>
                     <button type="button" class="memo-tool" id="memo-copy" data-tooltip="复制" aria-label="复制备忘录"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-i-copy"></use></svg></button>
                   </div>
-                  <button type="button" class="memo-task-action" id="memo-to-task"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-i-external"></use></svg><span>转为任务</span></button>
+                  <button type="button" class="memo-task-action" id="memo-to-task" aria-label="转为任务" data-tooltip="转为任务"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-i-external"></use></svg><span>转为任务</span></button>
                   <button type="button" class="memo-tool memo-delete-tool" id="memo-delete" data-tooltip="删除" aria-label="删除备忘录"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-i-trash"></use></svg></button>
                 </div>
               </div>
-              <input id="memo-tags" class="memo-tags" maxlength="120" aria-label="备忘录标签" placeholder="添加标签，用空格或逗号分隔">
+              <div class="memo-tag-field">
+                <span class="memo-tag-mark" aria-hidden="true">#</span>
+                <div class="memo-tag-chips" id="memo-tag-chips"></div>
+                <input id="memo-tags" class="memo-tags" maxlength="120" aria-label="备忘录标签，用空格或逗号分隔" placeholder="添加标签">
+              </div>
               <textarea id="memo-content" class="memo-content" aria-label="备忘录正文" placeholder="写下需要记住的内容…"></textarea>
               <div class="memo-editor-foot">
                 <span id="memo-save-state" data-state="saved" role="status" aria-live="polite">已保存</span>

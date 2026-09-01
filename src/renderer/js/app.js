@@ -45,6 +45,13 @@ let memoCreating = false;
 let memoActionBusy = false;
 let memoActionControlId = '';
 let memoActionLabel = '';
+// 新建先进草稿，用户真的写下内容才落库，避免留下「无标题备忘录」垃圾条目
+const MEMO_DRAFT_ID = -1;
+let memoDraftMemo = null;
+let memoFilter = 'all';
+let memoBatchMode = false;
+let memoSelectedIds = new Set();
+let memoBatchBusy = false;
 let reportPeriod = 'weekly';
 let reportWeek = 0; // 周报选择的周（0=本周, -1=上周, 1=下周）
 let reportDay = 0; // 日报选择的日（0=今天, -1=昨天, 1=明天）
@@ -2219,7 +2226,7 @@ function renderStat() {
       dlBtn.classList.remove('hidden');
       preview.focus({ preventScroll: true });
       preview.scrollIntoView({ block: 'nearest' });
-      toast(result.degraded ? '已生成本地事实版报告' : `${requestedPeriod === 'weekly' ? '周报' : '日报'}已由 Agent 生成`, 3000, null, result.degraded ? 'warn' : 'ok');
+      toast(result.degraded ? `已生成本地事实版报告：${result.degradeNotice || '模型未启用'}` : `${requestedPeriod === 'weekly' ? '周报' : '日报'}已由 Agent 生成`, result.degraded ? 6000 : 3000, null, result.degraded ? 'warn' : 'ok');
     } catch (e) {
       console.error('[report] generation failed:', e);
       if (requestedPeriod === 'weekly') toast('周报生成失败，请稍后重试', 3000, null, 'err');
@@ -3082,25 +3089,73 @@ function memoTime(ts) {
 }
 
 function currentMemo() {
+  if (selectedMemoId === MEMO_DRAFT_ID) return memoDraftMemo;
   return memos.find((memo) => memo.id === selectedMemoId) || null;
 }
 
+function deriveMemoTitle(content) {
+  const firstLine = String(content || '').replace(/\s+/g, ' ').trim();
+  if (!firstLine) return '';
+  return firstLine.length > 24 ? `${firstLine.slice(0, 24)}…` : firstLine;
+}
+
 function memoDraft() {
+  const title = $('#memo-title').value.trim();
+  const content = $('#memo-content').value;
   return {
-    title: $('#memo-title').value.trim() || '无标题备忘录',
-    content: $('#memo-content').value,
-    tags: parseMemoTags($('#memo-tags').value)
+    title: title || deriveMemoTitle(content) || '无标题备忘录',
+    content,
+    tags: memoTagsAll()
   };
+}
+
+// 草稿是否还空着：空草稿不该落库
+function memoEditorIsEmpty() {
+  return !$('#memo-title').value.trim() && !$('#memo-content').value.trim();
+}
+
+function memoFilterActive() {
+  return memoFilter !== 'all';
+}
+
+function memoMatchesFilter(memo) {
+  if (memoFilter === 'all') return true;
+  if (memoFilter === 'pinned') return !!memo.pinned;
+  if (memoFilter.startsWith('tag:')) return (memo.tags || []).includes(memoFilter.slice(4));
+  return true;
+}
+
+function memoTagCounts() {
+  const counts = new Map();
+  memos.forEach((memo) => (memo.tags || []).forEach((tag) => counts.set(tag, (counts.get(tag) || 0) + 1)));
+  return [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], 'zh-CN'));
 }
 
 function visibleMemos() {
   const query = memoSearch.trim().toLowerCase();
   return memos
+    .filter((memo) => memoMatchesFilter(memo))
     .filter((memo) => {
       if (!query) return true;
       return [memo.title, memo.content, ...(memo.tags || [])].join(' ').toLowerCase().includes(query);
     })
     .sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.updatedAt - a.updatedAt);
+}
+
+function renderMemoFilters() {
+  const wrap = $('#memo-filters');
+  if (!wrap) return;
+  const chip = (value, label) => `<button type="button" class="fchip ${memoFilter === value ? 'active' : ''}" aria-pressed="${memoFilter === value}" data-memo-filter="${esc(value)}">${esc(label)}</button>`;
+  const tags = memoTagCounts().slice(0, 8);
+  wrap.innerHTML = [chip('all', '全部'), chip('pinned', '置顶'), ...tags.map(([tag]) => chip(`tag:${tag}`, `#${tag}`))].join(' ');
+}
+
+function syncMemoDraftRow() {
+  if (!memoDraftMemo) return;
+  const title = $('#memo-title').value.trim() || deriveMemoTitle($('#memo-content').value);
+  memoDraftMemo.title = title;
+  const row = document.querySelector(`#memo-list [data-memo-id="${MEMO_DRAFT_ID}"] .memo-list-title`);
+  if (row) row.textContent = title || '新备忘录';
 }
 
 function focusMemoListItem(id) {
@@ -3118,26 +3173,81 @@ function focusMemoListItem(id) {
 function renderMemoList() {
   const list = $('#memo-list');
   if (!list) return;
+  renderMemoFilters();
   const query = memoSearch.trim().toLowerCase();
   const visible = visibleMemos();
-  $('#memos-sub').textContent = `${memos.length} 条${memos.some((memo) => memo.pinned) ? ' · 含置顶' : ''}`;
+  const sub = $('#memos-sub');
+  if (sub) {
+    const pinnedCount = memos.filter((memo) => memo.pinned).length;
+    sub.textContent = memoFilterActive() || query
+      ? `筛选出 ${visible.length} 条 · 共 ${memos.length} 条`
+      : `${memos.length} 条${pinnedCount ? ` · ${pinnedCount} 条置顶` : ''}`;
+  }
+  list.setAttribute('aria-multiselectable', String(memoBatchMode));
+  const draftRow = memoDraftMemo ? `<button type="button" class="memo-list-item draft active" data-memo-id="${MEMO_DRAFT_ID}" role="option" tabindex="0" aria-selected="true">
+      <span class="memo-list-body">
+        <span class="memo-list-title">${esc(memoDraftMemo.title || '新备忘录')}</span>
+        <span class="memo-list-preview">未保存 · 开始输入后自动落库</span>
+        <span class="memo-list-meta"><span class="memo-list-time">草稿</span></span>
+      </span>
+    </button>` : '';
   if (!visible.length) {
-    list.innerHTML = `<div class="memo-list-empty">${query ? '没有匹配的备忘录' : '暂无备忘录'}</div>`;
+    list.innerHTML = `${draftRow}<div class="memo-list-empty">${query || memoFilterActive()
+      ? '没有匹配的备忘录<button type="button" class="memo-clear-filter" id="memo-clear-filter">清除筛选</button>'
+      : '暂无备忘录'}</div>`;
     return;
   }
   const visibleIds = new Set(visible.map((memo) => memo.id));
-  const focusId = visibleIds.has(memoFocusId)
-    ? memoFocusId
-    : visibleIds.has(selectedMemoId) ? selectedMemoId : visible[0].id;
+  const focusId = memoBatchMode
+    ? (visibleIds.has(memoFocusId) ? memoFocusId : visible[0].id)
+    : visibleIds.has(memoFocusId)
+      ? memoFocusId
+      : visibleIds.has(selectedMemoId) ? selectedMemoId : visible[0].id;
   memoFocusId = focusId;
-  list.innerHTML = visible.map((memo) => {
+  list.innerHTML = draftRow + visible.map((memo) => {
     const preview = memo.content.trim().replace(/\s+/g, ' ') || (memo.tags || []).map((tag) => `#${tag}`).join(' ') || '空白备忘录';
-    return `<button type="button" class="memo-list-item${memo.id === selectedMemoId ? ' active' : ''}${memo.pinned ? ' pinned' : ''}" data-memo-id="${memo.id}" role="option" tabindex="${memo.id === focusId ? 0 : -1}" aria-selected="${memo.id === selectedMemoId}">
-      <span class="memo-list-title">${esc(memo.title)}</span>
-      <span class="memo-list-preview">${esc(preview)}</span>
-      <span class="memo-list-time">${memo.pinned ? '置顶 · ' : ''}${esc(memoTime(memo.updatedAt))}</span>
+    const checked = memoSelectedIds.has(memo.id);
+    const tags = (memo.tags || []).slice(0, 3).map((tag) => `<span class="tag-chip">#${esc(tag)}</span>`).join(' ');
+    return `<button type="button" class="memo-list-item${memo.id === selectedMemoId && !memoBatchMode ? ' active' : ''}${memo.pinned ? ' pinned' : ''}${memoBatchMode ? ' selectable' : ''}${checked ? ' checked' : ''}" data-memo-id="${memo.id}" role="option" tabindex="${memo.id === focusId ? 0 : -1}" aria-selected="${memoBatchMode ? checked : memo.id === selectedMemoId}">
+      ${memoBatchMode ? `<span class="memo-check" aria-hidden="true">${uiIcon(checked ? 'check' : 'square')}</span>` : ''}
+      <span class="memo-list-body">
+        <span class="memo-list-title">${esc(memo.title)}</span>
+        <span class="memo-list-preview">${esc(preview)}</span>
+        <span class="memo-list-meta">${tags}<span class="memo-list-time">${memo.pinned ? '置顶 · ' : ''}${esc(memoTime(memo.updatedAt))}</span></span>
+      </span>
     </button>`;
   }).join('');
+}
+
+// 标签：chip 是已提交项，输入框只留在输入中的片段，避免同一标签显示两遍
+let memoTagCommitted = [];
+
+function memoTagsAll() {
+  return [...new Set([...memoTagCommitted, ...parseMemoTags($('#memo-tags').value)])].slice(0, 5);
+}
+
+function removeMemoTag(tag) {
+  memoTagCommitted = memoTagCommitted.filter((item) => item !== tag);
+  $('#memo-tags').value = parseMemoTags($('#memo-tags').value).filter((item) => item !== tag).join(' ');
+  renderMemoTagChips();
+  scheduleMemoSave();
+  $('#memo-tags').focus({ preventScroll: true });
+}
+
+function commitMemoTags() {
+  const pending = parseMemoTags($('#memo-tags').value);
+  if (!pending.length) return false;
+  memoTagCommitted = [...new Set([...memoTagCommitted, ...pending])].slice(0, 5);
+  $('#memo-tags').value = '';
+  renderMemoTagChips();
+  scheduleMemoSave();
+  return true;
+}
+
+function renderMemoTagChips() {
+  const wrap = $('#memo-tag-chips');
+  if (!wrap) return;
+  wrap.innerHTML = memoTagCommitted.map((tag) => `<span class="memo-tag-chip">${esc(tag)}<button type="button" data-memo-tag-remove="${esc(tag)}" aria-label="移除标签 ${esc(tag)}">×</button></span>`).join('');
 }
 
 function renderMemoEditor() {
@@ -3152,13 +3262,22 @@ function renderMemoEditor() {
   copyButton.disabled = memoActionBusy;
   $('#memo-title').value = memo.title;
   $('#memo-content').value = memo.content || '';
-  $('#memo-tags').value = (memo.tags || []).join(' ');
+  $('#memo-tags').value = '';
+  memoTagCommitted = [...(memo.tags || [])];
+  renderMemoTagChips();
   $('#memo-pin').classList.toggle('active', !!memo.pinned);
   $('#memo-pin').setAttribute('aria-pressed', String(!!memo.pinned));
   $('#memo-pin').setAttribute('aria-label', memo.pinned ? '取消置顶备忘录' : '置顶备忘录');
   $('#memo-pin').dataset.tooltip = memo.pinned ? '取消置顶' : '置顶';
-  setMemoSaveState('saved', '已保存');
-  $('#memo-updated').textContent = `最近编辑 ${memoTime(memo.updatedAt)}`;
+  $('#memo-pin').disabled = memoActionBusy || !!memo._draft;
+  $('#memo-to-task').disabled = memoActionBusy || !!memo._draft;
+  if (memo._draft) {
+    setMemoSaveState('waiting', '未保存');
+    $('#memo-updated').textContent = '开始输入后自动落库';
+  } else {
+    setMemoSaveState('saved', '已保存');
+    $('#memo-updated').textContent = `最近编辑 ${memoTime(memo.updatedAt)}`;
+  }
   memoDirty = false;
   memoDraftRevision = 0;
   syncMemoActionBusyState();
@@ -3211,15 +3330,21 @@ function beginMemoAction(control, label) {
 }
 
 function renderMemos() {
-  if (selectedMemoId && !currentMemo()) {
+  if (selectedMemoId === MEMO_DRAFT_ID && !memoDraftMemo) {
     selectedMemoId = null;
     memoFocusId = null;
   }
-  if (!selectedMemoId && memos.length) {
+  if (selectedMemoId && selectedMemoId !== MEMO_DRAFT_ID && !currentMemo()) {
+    selectedMemoId = null;
+    memoFocusId = null;
+  }
+  if (!selectedMemoId && !memoDraftMemo && memos.length) {
     selectedMemoId = memos[0].id;
     memoFocusId = selectedMemoId;
   }
   renderMemoList();
+  renderMemoBatchBar();
+  renderNavBadges();
   if (!memoDirty && memoSavePending === 0) renderMemoEditor();
 }
 
@@ -3229,11 +3354,57 @@ function setMemoSaveState(state, label) {
   element.textContent = label;
 }
 
+function discardMemoDraft() {
+  if (!memoDraftMemo) return;
+  memoDraftMemo = null;
+  memoDirty = false;
+  if (selectedMemoId === MEMO_DRAFT_ID) {
+    selectedMemoId = memos.length ? memos[0].id : null;
+    memoFocusId = selectedMemoId;
+  }
+  renderMemos();
+}
+
+// 草稿落库：只有真的写下内容才创建记录，空草稿直接丢弃
+function saveMemoDraft() {
+  if (!memoDraftMemo) return memoSaveChain;
+  if ($('#memo-editor').classList.contains('hidden')) return memoSaveChain;
+  if (memoEditorIsEmpty()) {
+    discardMemoDraft();
+    return memoSaveChain;
+  }
+  if (memoSavePending) return memoSaveChain;
+  const patch = memoDraft();
+  memoDirty = false;
+  memoSavePending++;
+  setMemoSaveState('saving', '保存中…');
+  memoSaveChain = memoSaveChain.then(async () => {
+    const created = await window.api.memos.create(patch);
+    memos = [created, ...memos].sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.updatedAt - a.updatedAt);
+    memoDraftMemo = null;
+    selectedMemoId = created.id;
+    memoFocusId = created.id;
+    renderMemos();
+    setMemoSaveState('saved', '已保存');
+    $('#memo-updated').textContent = `最近编辑 ${memoTime(created.updatedAt)}`;
+    return true;
+  }).catch((error) => {
+    memoDirty = true;
+    setMemoSaveState('error', '保存失败');
+    toast(`备忘录保存失败：${error.message}`, 4000, null, 'err');
+    return false;
+  }).finally(() => {
+    memoSavePending = Math.max(0, memoSavePending - 1);
+  });
+  return memoSaveChain;
+}
+
 function saveMemoNow() {
   if (memoSaveTimer) {
     clearTimeout(memoSaveTimer);
     memoSaveTimer = null;
   }
+  if (selectedMemoId === MEMO_DRAFT_ID) return saveMemoDraft();
   if (!memoDirty) return memoSaveChain;
   const id = selectedMemoId;
   if (!id || !currentMemo() || $('#memo-editor').classList.contains('hidden')) return memoSaveChain;
@@ -3269,11 +3440,13 @@ function scheduleMemoSave() {
   memoDirty = true;
   memoDraftRevision++;
   setMemoSaveState('waiting', '等待保存…');
+  syncMemoDraftRow();
   if (memoSaveTimer) clearTimeout(memoSaveTimer);
   memoSaveTimer = setTimeout(saveMemoNow, 450);
 }
 
 async function selectMemo(id, restoreFocus) {
+  if (id === selectedMemoId) return true;
   if ((await saveMemoNow()) === false) return false;
   selectedMemoId = id;
   memoFocusId = id;
@@ -3281,6 +3454,115 @@ async function selectMemo(id, restoreFocus) {
   renderMemoEditor();
   if (restoreFocus) focusMemoListItem(id);
   return true;
+}
+
+function toggleMemoSelection(id) {
+  if (memoBatchBusy || id === MEMO_DRAFT_ID) return false;
+  if (memoSelectedIds.has(id)) memoSelectedIds.delete(id);
+  else memoSelectedIds.add(id);
+  renderMemoList();
+  renderMemoBatchBar();
+  focusMemoListItem(id);
+  return true;
+}
+
+// 批量只作用于当前可见且已选中的条目
+function memoBatchIds() {
+  const visible = new Set(visibleMemos().map((memo) => memo.id));
+  return [...memoSelectedIds].filter((id) => visible.has(id));
+}
+
+function renderMemoBatchBar() {
+  const bar = $('#memo-batch-bar');
+  if (!bar) return;
+  bar.classList.toggle('hidden', !memoBatchMode);
+  if (!memoBatchMode) return;
+  const ids = memoBatchIds();
+  const selected = new Set(ids);
+  const visible = visibleMemos();
+  bar.setAttribute('aria-busy', String(memoBatchBusy));
+  const count = $('#memo-batch-count');
+  if (count) count.textContent = memoBatchBusy ? '处理中…' : `已选 ${ids.length} 条`;
+  const allButton = $('#memo-batch-select-all');
+  if (allButton) {
+    const allSelected = visible.length > 0 && visible.every((memo) => selected.has(memo.id));
+    allButton.disabled = memoBatchBusy || !visible.length;
+    allButton.textContent = allSelected ? '取消全选' : '全选当前';
+  }
+  ['#memo-batch-pin', '#memo-batch-unpin', '#memo-batch-delete', '#memo-batch-clear'].forEach((selector) => {
+    const button = $(selector);
+    if (button) button.disabled = memoBatchBusy || !ids.length;
+  });
+}
+
+function setMemoBatchMode(enabled) {
+  memoBatchMode = !!enabled;
+  if (!memoBatchMode) memoSelectedIds = new Set();
+  const toggle = $('#memo-select-mode');
+  if (toggle) {
+    toggle.setAttribute('aria-pressed', String(memoBatchMode));
+    const label = toggle.querySelector('span');
+    if (label) label.textContent = memoBatchMode ? '完成' : '选择';
+  }
+  const editor = $('#memo-editor');
+  if (editor) {
+    editor.toggleAttribute('inert', memoBatchMode);
+    if (memoBatchMode) $('#memo-list').focus({ preventScroll: true });
+  }
+  renderMemoList();
+  renderMemoBatchBar();
+}
+
+async function runMemoBatchMutation(options) {
+  const ids = options.ids && options.ids.length ? options.ids : memoBatchIds();
+  if (memoBatchBusy || !ids.length) return false;
+  memoBatchBusy = true;
+  renderMemoBatchBar();
+  try {
+    const result = await options.action(ids);
+    memoSelectedIds = new Set();
+    setMemoBatchMode(false);
+    const message = typeof options.successMessage === 'function' ? options.successMessage(result) : options.successMessage;
+    toast(message, options.undoActions && options.undoActions.length ? 6000 : 3500, options.undoActions || null, 'ok');
+    await refreshMemos();
+    return true;
+  } catch (error) {
+    toast(`批量操作失败：${error.message}，当前选择已保留`, 4000, null, 'err');
+    return false;
+  } finally {
+    memoBatchBusy = false;
+    renderMemoBatchBar();
+  }
+}
+
+function memoBatchPin(pinned) {
+  const ids = memoBatchIds();
+  if (!ids.length) return;
+  runMemoBatchMutation({
+    ids,
+    action: (batchIds) => window.api.memos.batchUpdate(batchIds, { pinned }),
+    successMessage: (result) => `${pinned ? '已置顶' : '已取消置顶'} ${result.updated} 条备忘录${result.skipped ? `，跳过 ${result.skipped} 条` : ''}`
+  });
+}
+
+function memoBatchDelete() {
+  const ids = memoBatchIds();
+  if (!ids.length) return;
+  confirmDialog(`确定删除选中的 ${ids.length} 条备忘录吗？`, () => {
+    runMemoBatchMutation({
+      ids,
+      action: (batchIds) => window.api.memos.batchDelete(batchIds),
+      successMessage: (result) => `已删除 ${result.deleted} 条备忘录${result.skipped ? `，跳过 ${result.skipped} 条` : ''}`,
+      undoActions: [{
+        label: '撤销',
+        run: async () => {
+          const result = await window.api.memos.batchRestore(ids);
+          await refreshMemos();
+          toast(`已恢复 ${result.restored} 条备忘录`, 2500, null, 'ok');
+        }
+      }]
+    });
+  });
 }
 
 async function onMemoListKeyDown(event) {
@@ -3297,11 +3579,21 @@ async function onMemoListKeyDown(event) {
   else if (event.key === 'ArrowUp') nextIndex = Math.max(0, index - 1);
   else nextIndex = Math.min(items.length - 1, index + 1);
   const targetId = parseInt(items[nextIndex].dataset.memoId, 10);
-  await selectMemo(targetId, true);
+  // 批量模式只用方向键移动焦点，选中靠 Enter/空格
+  if (memoBatchMode) focusMemoListItem(targetId);
+  else await selectMemo(targetId, true);
 }
 
 async function createMemo() {
   if (memoCreating) return false;
+  // 已有草稿就回到草稿，不重复创建
+  if (memoDraftMemo) {
+    selectedMemoId = MEMO_DRAFT_ID;
+    memoFocusId = MEMO_DRAFT_ID;
+    renderMemos();
+    $('#memo-title').focus({ preventScroll: true });
+    return true;
+  }
   memoCreating = true;
   const createButtons = [$('#memo-new'), $('#memo-empty-new')].filter(Boolean);
   createButtons.forEach((button) => {
@@ -3310,12 +3602,21 @@ async function createMemo() {
   });
   try {
     if ((await saveMemoNow()) === false) return false;
-    const memo = await window.api.memos.create({ title: '无标题备忘录', content: '', tags: [] });
-    memos.unshift(memo);
-    selectedMemoId = memo.id;
-    memoFocusId = memo.id;
+    memoDraftMemo = {
+      id: MEMO_DRAFT_ID,
+      title: '',
+      content: '',
+      tags: [],
+      pinned: false,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      _draft: true
+    };
+    memoTagCommitted = [];
+    selectedMemoId = MEMO_DRAFT_ID;
+    memoFocusId = MEMO_DRAFT_ID;
     renderMemos();
-    $('#memo-title').select();
+    $('#memo-title').focus({ preventScroll: true });
     return true;
   } catch (error) {
     toast(`新建备忘录失败：${error.message}`, 4000, null, 'err');
@@ -3396,7 +3697,10 @@ function switchView(view) {
   const previousView = currentView;
   const content = $('.content');
   if (previousView === view) return;
-  if (currentView === 'memos' && view !== 'memos') saveMemoNow();
+  if (currentView === 'memos' && view !== 'memos') {
+    saveMemoNow();
+    if (memoBatchMode) setMemoBatchMode(false);
+  }
   closeTaskMenus(false);
   if (content) viewScrollPositions.set(previousView, content.scrollTop);
   currentView = view;
@@ -3452,6 +3756,36 @@ function updateMaxBtn(maximized) {
   btn.innerHTML = uiIcon(maximized ? 'copy' : 'square');
   btn.title = maximized ? '还原' : '最大化';
   btn.setAttribute('aria-label', maximized ? '还原窗口' : '最大化窗口');
+}
+
+/* 窄窗口下助手面板让位：默认按视口宽度自动收起，用户手动切换后以手动为准，
+   直到视口跨过阈值再交还给自动判断。 */
+const AI_PANEL_AUTO_COLLAPSE_BELOW = 1360;
+let aiPanelMode = 'auto'; // auto | collapsed | expanded
+
+function aiPanelShouldCollapse() {
+  if (aiPanelMode === 'collapsed') return true;
+  if (aiPanelMode === 'expanded') return false;
+  return window.innerWidth < AI_PANEL_AUTO_COLLAPSE_BELOW;
+}
+
+function applyAiPanelMode() {
+  const panel = $('#ai-panel');
+  if (!panel) return aiPanelShouldCollapse();
+  const collapsed = aiPanelShouldCollapse();
+  panel.classList.toggle('collapsed', collapsed);
+  syncAiCollapseControl(collapsed);
+  // 收起时清掉拖拽宽度，避免与窄条样式冲突
+  if (collapsed) {
+    panel.style.width = '';
+    panel.style.flexBasis = '';
+  }
+  return collapsed;
+}
+
+function setAiPanelExpanded() {
+  aiPanelMode = 'expanded';
+  applyAiPanelMode();
 }
 
 function syncAiCollapseControl(collapsed) {
@@ -3961,7 +4295,7 @@ function reportCard(result) {
   const counts = result.evidenceCounts || { facts: 0, analysis: 0, suggestions: 0 };
   const referenced = new Set(report && Array.isArray(report.referencedSourceIds) ? report.referencedSourceIds : []);
   const sources = Array.isArray(result.sources) ? result.sources : [];
-  const sourceLabels = { task: '任务', worklog: '记录', plan: '计划', focus: '专注', review: '复盘' };
+  const sourceLabels = { task: '任务', worklog: '记录', memo: '备忘', plan: '计划', focus: '专注', review: '复盘' };
 
   const head = document.createElement('div');
   head.className = 'report-agent-head';
@@ -3982,6 +4316,12 @@ function reportCard(result) {
     evidence.appendChild(item);
   });
   head.append(authorship, evidence);
+  if (result.degraded) {
+    const reason = document.createElement('span');
+    reason.className = 'report-degrade-reason';
+    reason.textContent = result.degradeNotice || '模型未启用，已降级为本地事实模板';
+    head.appendChild(reason);
+  }
 
   const preview = document.createElement('pre');
   preview.className = 'report-agent-preview';
@@ -4494,6 +4834,8 @@ function appendAssistantTurnControls(container, result, retry, draft) {
 
 async function runAiTurn(request, retry, options) {
   if (aiSending) return;
+  // 本轮结果要写进助手对话，面板就不能停在收起态（窄窗口让位在这里让开）
+  setAiPanelExpanded();
   const cancellable = !!(options && options.cancellable);
   const requestId = cancellable ? nextAiRequestId() : '';
   setAiContext('working');
@@ -4818,10 +5160,73 @@ function bindEvents() {
     target.focus();
   });
   $('#memo-list').addEventListener('click', (event) => {
+    const clear = event.target.closest('#memo-clear-filter');
+    if (clear) {
+      memoFilter = 'all';
+      renderMemoList();
+      document.querySelector('#memo-filters .fchip[data-memo-filter="all"]')?.focus({ preventScroll: true });
+      return;
+    }
     const item = event.target.closest('[data-memo-id]');
-    if (item) selectMemo(parseInt(item.dataset.memoId, 10), true);
+    if (!item) return;
+    const id = parseInt(item.dataset.memoId, 10);
+    if (memoBatchMode) toggleMemoSelection(id);
+    else selectMemo(id, true);
   });
   $('#memo-list').addEventListener('keydown', onMemoListKeyDown);
+  const memoTagChips = $('#memo-tag-chips');
+  if (memoTagChips) {
+    memoTagChips.addEventListener('click', (event) => {
+      const button = event.target.closest('[data-memo-tag-remove]');
+      if (!button) return;
+      removeMemoTag(button.dataset.memoTagRemove);
+    });
+  }
+  $('#memo-tags').addEventListener('keydown', (event) => {
+    if (event.key === 'Enter' || event.key === ',' || event.key === '，' || event.key === ' ' || event.key === 'Tab') {
+      // 分隔符即提交：chip 表示已提交的标签，输入框只留在输入中的片段
+      if (commitMemoTags() && event.key !== 'Tab') event.preventDefault();
+      return;
+    }
+    if (event.key === 'Backspace' && !$('#memo-tags').value && memoTagCommitted.length) {
+      event.preventDefault();
+      removeMemoTag(memoTagCommitted[memoTagCommitted.length - 1]);
+    }
+  });
+  $('#memo-tags').addEventListener('blur', () => commitMemoTags());
+  const memoFilterWrap = $('#memo-filters');
+  if (memoFilterWrap) {
+    memoFilterWrap.addEventListener('click', (event) => {
+      const chip = event.target.closest('.fchip[data-memo-filter]');
+      if (!chip || chip.getAttribute('aria-pressed') === 'true') return;
+      memoFilter = chip.dataset.memoFilter;
+      memoFocusId = null;
+      renderMemoList();
+      const active = memoFilterWrap.querySelector('.fchip.active') || chip;
+      active.focus({ preventScroll: true });
+    });
+    bindPressedGroupKeyboard(memoFilterWrap, '.fchip[data-memo-filter]');
+  }
+  $('#memo-select-mode').addEventListener('click', async () => {
+    if (memoBatchBusy) return;
+    if (!memoBatchMode && (await saveMemoNow()) === false) return;
+    setMemoBatchMode(!memoBatchMode);
+  });
+  $('#memo-batch-select-all').addEventListener('click', () => {
+    const visible = visibleMemos();
+    const allSelected = visible.length > 0 && visible.every((memo) => memoSelectedIds.has(memo.id));
+    memoSelectedIds = allSelected ? new Set() : new Set(visible.map((memo) => memo.id));
+    renderMemoList();
+    renderMemoBatchBar();
+  });
+  $('#memo-batch-pin').addEventListener('click', () => memoBatchPin(true));
+  $('#memo-batch-unpin').addEventListener('click', () => memoBatchPin(false));
+  $('#memo-batch-delete').addEventListener('click', memoBatchDelete);
+  $('#memo-batch-clear').addEventListener('click', () => {
+    memoSelectedIds = new Set();
+    renderMemoList();
+    renderMemoBatchBar();
+  });
   ['memo-title', 'memo-tags', 'memo-content'].forEach((id) => {
     $(`#${id}`).addEventListener('input', scheduleMemoSave);
   });
@@ -4850,9 +5255,10 @@ function bindEvents() {
     const release = beginMemoAction(button, '复制中…');
     if (!release) return;
     try {
-      if ((await saveMemoNow()) === false) return;
+      const editingDraft = !!memoDraftMemo;
+      if (!editingDraft && (await saveMemoNow()) === false) return;
       setMemoSaveState('saving', '复制中…');
-      const memo = currentMemo();
+      const memo = editingDraft ? { title: memoDraft().title, content: $('#memo-content').value, tags: memoDraft().tags } : currentMemo();
       if (!memo) return;
       const text = [memo.title, memo.content, (memo.tags || []).map((tag) => `#${tag}`).join(' ')].filter(Boolean).join('\n\n');
       await navigator.clipboard.writeText(text);
@@ -4899,14 +5305,26 @@ function bindEvents() {
       const memo = currentMemo();
       if (!memo) return;
       confirmDialog(`确定删除备忘录「${memo.title}」吗？`, async () => {
-        await window.api.memos.remove(memo.id);
-        memos = memos.filter((item) => item.id !== memo.id);
+        const removedId = memo.id;
+        await window.api.memos.remove(removedId);
+        memos = memos.filter((item) => item.id !== removedId);
         selectedMemoId = memos.length ? memos[0].id : null;
         memoFocusId = selectedMemoId;
         deletedMemos = await window.api.memos.getDeleted();
         renderMemos();
         renderNavBadges();
-        toast('备忘录已移到回收站', 3000, null, 'ok');
+        toast('备忘录已移到回收站', 5000, [{
+          label: '撤销',
+          run: async () => {
+            await window.api.memos.restore(removedId);
+            memos = await window.api.memos.getAll();
+            deletedMemos = await window.api.memos.getDeleted();
+            selectedMemoId = removedId;
+            memoFocusId = removedId;
+            renderMemos();
+            toast('备忘录已恢复', 2500, null, 'ok');
+          }
+        }], 'ok');
       });
       openedConfirm = true;
     } finally {
@@ -5231,14 +5649,19 @@ function bindEvents() {
   $('#ai-health-action').addEventListener('click', openAiSettings);
   if (window.api.ai.onProgress) window.api.ai.onProgress(updateAiRequestProgress);
   $('#ai-collapse').addEventListener('click', () => {
-    const panel = $('#ai-panel');
-    const collapsed = panel.classList.toggle('collapsed');
-    syncAiCollapseControl(collapsed);
-    // 收起/展开时清除内联宽度，避免与 collapsed 的窄条样式冲突
-    if (collapsed) {
-      panel.style.width = '';
-      panel.style.flexBasis = '';
+    // 手动切换即接管，直到视口跨过阈值才交回自动判断
+    aiPanelMode = $('#ai-panel').classList.contains('collapsed') ? 'expanded' : 'collapsed';
+    applyAiPanelMode();
+  });
+  // 视口跨过阈值时把面板交还给自动判断，避免用户早期的手动选择永久压制让位
+  let aiPanelNarrow = window.innerWidth < AI_PANEL_AUTO_COLLAPSE_BELOW;
+  window.addEventListener('resize', () => {
+    const narrow = window.innerWidth < AI_PANEL_AUTO_COLLAPSE_BELOW;
+    if (narrow !== aiPanelNarrow) {
+      aiPanelNarrow = narrow;
+      aiPanelMode = 'auto';
     }
+    applyAiPanelMode();
   });
   $$('#ai-chips .chip').forEach((chip) => chip.addEventListener('click', () => {
     if (chip.dataset.aiAction === 'new-task') {
@@ -5329,9 +5752,7 @@ function bindEvents() {
   // 主进程事件
   window.api.on('app:new-task', () => { switchView('tasks'); openModal(null); });
   window.api.on('app:focus-ai', () => {
-    const panel = $('#ai-panel');
-    panel.classList.remove('collapsed');
-    syncAiCollapseControl(false);
+    setAiPanelExpanded();
     $('#ai-input').focus();
   });
   window.api.on('app:switch-view', (view) => {
@@ -5409,6 +5830,11 @@ function bindEvents() {
     // Esc 退出批量模式
     if (e.key === 'Escape') {
       if (batchMode) setBatchMode(false);
+      if (memoBatchMode && !memoBatchBusy) {
+        const toggle = $('#memo-select-mode');
+        setMemoBatchMode(false);
+        toggle?.focus({ preventScroll: true });
+      }
     }
   });
 }
@@ -6151,6 +6577,7 @@ async function init() {
       eventsBound = true;
     }
     renderAll();
+    applyAiPanelMode();
     clearInterval(workflowTickTimer);
     workflowTickTimer = setInterval(tickWorkflowClock, 1000);
     updateAiBadge();
@@ -6171,4 +6598,8 @@ async function init() {
   }
 }
 
-document.addEventListener('DOMContentLoaded', init);
+document.addEventListener('DOMContentLoaded', () => {
+  // 先按视口定好面板状态再进 init，避免窄窗口下先闪一帧宽面板
+  applyAiPanelMode();
+  init();
+});

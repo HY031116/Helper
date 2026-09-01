@@ -2126,6 +2126,100 @@ test('报告工作记录：纳入可追溯来源并按项目合并成果与进�
   assert.ok(report.sources.some((item) => item.type === 'worklog'));
 });
 
+test('报告备忘证据：本期备忘进快照、只作背景不单独成章、可被排除', async (context) => {
+  useMorning(context);
+  reset();
+  store.updateSettings({ aiStage: 'mock' });
+  resetMemos();
+  const task = store.createTask({ title: '打通备忘证据', project: '助手体验' });
+  store.completeTask(task.id);
+  const today = store.createMemo({ title: '随机事件规格分级', content: '三条主线各自优先级', tags: ['设计'] });
+  // 上一期的备忘不该混进本期日报
+  const lastWeek = Date.now() - 8 * 24 * 3600 * 1000;
+  store.importMemos([{ title: '旧备忘', content: '不该出现', createdAt: lastWeek, updatedAt: lastWeek }]);
+
+  const snapshot = store.buildReportSnapshot({ period: 'daily', offset: 0, now: Date.now() });
+  const memoSource = snapshot.sources.find((item) => item.type === 'memo' && item.id.includes(today.id));
+  assert.ok(memoSource, '本期备忘应作为来源进入快照');
+  assert.strictEqual(memoSource.detail, '三条主线各自优先级');
+  assert.deepStrictEqual(memoSource.tags, ['设计']);
+  assert.strictEqual(snapshot.summary.memos.count, 1);
+  assert.strictEqual(snapshot.summary.memos.createdCount, 1);
+  assert.ok(!snapshot.sources.some((item) => item.type === 'memo' && item.title === '旧备忘'), '超出时间窗的备忘不进快照');
+
+  const report = await ai.generateReport({ period: 'daily', offset: 0, instruction: '生成今日日报' });
+  assert.ok(report.sources.some((item) => item.type === 'memo'));
+  assert.match(report.markdown, /1 条备忘作为背景依据/);
+  assert.doesNotMatch(report.markdown, /^##+ .*备忘/m, '备忘不单独成章');
+  assert.ok(!report.markdown.includes('不该出现'));
+
+  // 排除某个标签时，备忘来源与概览里的一句说明一起减掉
+  const hidden = await ai.generateReport({ period: 'daily', offset: 0, instruction: '生成今日日报，隐藏设计' });
+  assert.ok(!hidden.sources.some((item) => item.type === 'memo'), '被排除标签下的备忘不应留在来源里');
+  assert.doesNotMatch(hidden.markdown, /备忘作为背景依据/);
+  resetMemos();
+});
+
+test('报告写作提示词：备忘只作依据且引用必须可核对', async (context) => {
+  useMorning(context);
+  reset();
+  resetMemos();
+  const memo = store.createMemo({ title: '召唤物构筑口径', content: '遗物携带构筑入口', tags: ['设计'] });
+  store.updateSettings({
+    aiStage: 'llm', aiProvider: 'custom', aiBaseUrl: 'https://example.invalid/v1', aiApiKey: 'test-key', aiModel: 'test-model'
+  });
+  const originalFetch = global.fetch;
+  let systemPrompt = '';
+  global.fetch = async (url, options) => {
+    systemPrompt = JSON.parse(options.body).messages[0].content;
+    return {
+      ok: true,
+      json: async () => ({ choices: [{ message: { content: JSON.stringify({
+        title: '周报', audience: '团队', tone: '客观', executiveSummary: '备忘口径已并入结论。',
+        sections: [{ heading: '本周成果', kind: 'facts', items: [{ text: '召唤物构筑口径确定。', sourceIds: [`memo-${memo.id}`] }] }]
+      }) } }] })
+    };
+  };
+  try {
+    const result = await ai.handleAuto('生成本周周报');
+    assert.strictEqual(result.authoredBy, 'model');
+    assert.match(systemPrompt, /memo 类型是备忘录/);
+    assert.match(systemPrompt, /不要为备忘录单独开章节/);
+    assert.match(systemPrompt, /worklog 类型是用户主动沉淀的工作事实/);
+  } finally {
+    global.fetch = originalFetch;
+    store.updateSettings({ aiStage: 'mock' });
+    resetMemos();
+    reset();
+  }
+});
+
+test('备忘录批量：去重、跳过不存在的条目，删除后可整批恢复', (context) => {
+  useMorning(context);
+  resetMemos();
+  const first = store.createMemo({ title: '批量甲', content: 'a', tags: ['设计'] });
+  const second = store.createMemo({ title: '批量乙', content: 'b', tags: ['设计'] });
+  const third = store.createMemo({ title: '批量丙', content: 'c' });
+
+  const pinned = store.batchUpdateMemos([first.id, second.id, second.id, 999999], { pinned: true });
+  assert.deepStrictEqual(pinned, { updated: 2, skipped: 1 }, '重复 id 只算一次，不存在的计入跳过');
+  assert.strictEqual(store.getMemo(first.id).pinned, true);
+  assert.strictEqual(store.getMemo(third.id).pinned, false);
+
+  const deleted = store.batchDeleteMemos([first.id, third.id, third.id, 888888]);
+  assert.strictEqual(deleted.deleted, 2);
+  assert.strictEqual(deleted.skipped, 1);
+  assert.strictEqual(store.getAllMemos().length, 1);
+  assert.strictEqual(store.getDeletedMemos().length, 2);
+
+  const restored = store.batchRestoreMemos([first.id, third.id, 777777]);
+  assert.strictEqual(restored.restored, 2);
+  assert.strictEqual(restored.skipped, 1);
+  assert.strictEqual(store.getAllMemos().length, 3);
+  assert.strictEqual(store.getDeletedMemos().length, 0);
+  resetMemos();
+});
+
 test('报告生成 API 在本地模式也输出成果、推进与风险结构', async (context) => {
   useMorning(context);
   reset();
@@ -2168,6 +2262,197 @@ test('真正的报告 Agent：非法模型来源明确降级且可以重试', as
   } finally {
     global.fetch = originalFetch;
     store.updateSettings({ aiStage: 'mock' });
+  }
+});
+
+test('真正的报告 Agent：正文被思考挤掉时提高输出预算重试一次', async (context) => {
+  useMorning(context);
+  reset();
+  const work = store.createTask({ title: '打通报告预算链路', project: '助手 Agent' });
+  store.completeTask(work.id);
+  store.updateSettings({
+    aiStage: 'llm', aiProvider: 'custom', aiBaseUrl: 'https://example.invalid/v1', aiApiKey: 'test-key', aiModel: 'test-model'
+  });
+  const originalFetch = global.fetch;
+  const bodies = [];
+  const beforeTasks = JSON.stringify(store.getAllTasks());
+  global.fetch = async (url, options) => {
+    const body = JSON.parse(options.body);
+    bodies.push(body);
+    // 思考型模型把预算耗尽：只回 reasoning，不回 content
+    if (body.max_tokens <= 8000) {
+      return { ok: true, json: async () => ({ choices: [{ message: { content: '', reasoning_content: '先把项目归并，再写结论……' } }] }) };
+    }
+    return {
+      ok: true,
+      json: async () => ({ choices: [{ message: { content: JSON.stringify({
+        title: '预算重试后的周报', audience: '团队', tone: '客观', executiveSummary: '完成报告预算链路打通。',
+        sections: [{ heading: '本周成果', kind: 'facts', items: [{ text: '打通了报告输出预算链路。', sourceIds: [`task-${work.id}`] }] }]
+      }) } }] })
+    };
+  };
+  try {
+    const result = await ai.handleAuto('生成本周周报');
+    assert.strictEqual(result.type, 'report');
+    assert.strictEqual(result.authoredBy, 'model');
+    assert.strictEqual(bodies.length, 2, '空正文应恰好重试一次');
+    assert.ok(bodies[0].max_tokens >= 8000, '报告首请求就要给足思考与正文的总预算');
+    assert.ok(bodies[1].max_tokens > bodies[0].max_tokens, '空正文重试必须扩大输出预算');
+    assert.strictEqual(bodies[1].response_format.type, 'json_object', '重试仍是结构化输出');
+    assert.match(result.markdown, /打通了报告输出预算链路/);
+    assert.strictEqual(JSON.stringify(store.getAllTasks()), beforeTasks, '报告生成不得修改工作数据');
+  } finally {
+    global.fetch = originalFetch;
+    store.updateSettings({ aiStage: 'mock' });
+    reset();
+  }
+});
+
+test('真正的报告 Agent：流式撰写只透出思考增量，不把 JSON 正文推到界面', async () => {
+  reset();
+  const work = store.createTask({ title: '流式报告撰写', project: '助手 Agent' });
+  store.completeTask(work.id);
+  store.updateSettings({
+    aiStage: 'llm', aiProvider: 'custom', aiBaseUrl: 'https://example.invalid/v1', aiApiKey: 'test-key', aiModel: 'test-model'
+  });
+  const originalFetch = global.fetch;
+  const payload = JSON.stringify({
+    title: '流式周报', audience: '团队', tone: '客观', executiveSummary: '完成流式撰写接入。',
+    sections: [{ heading: '本周成果', kind: 'facts', items: [{ text: '报告撰写改为流式输出。', sourceIds: [`task-${work.id}`] }] }]
+  });
+  let streamRequested = null;
+  global.fetch = async (url, options) => {
+    streamRequested = JSON.parse(options.body).stream;
+    const encoder = new TextEncoder();
+    const chunks = [
+      'data: ' + JSON.stringify({ choices: [{ delta: { reasoning_content: '先归并项目事实…' } }] }) + '\n\n',
+      'data: ' + JSON.stringify({ choices: [{ delta: { content: payload.slice(0, 40) } }] }) + '\n\n',
+      'data: ' + JSON.stringify({ choices: [{ delta: { content: payload.slice(40) } }] }) + '\n\n',
+      'data: [DONE]\n\n'
+    ];
+    return {
+      ok: true,
+      body: new ReadableStream({ start(controller) { chunks.forEach((c) => controller.enqueue(encoder.encode(c))); controller.close(); } })
+    };
+  };
+  const progress = [];
+  try {
+    const result = await ai.generateReport(
+      { period: 'weekly', offset: 0, instruction: '生成本周周报' },
+      { onProgress: (event) => progress.push(event) }
+    );
+    assert.strictEqual(streamRequested, true, '有进度回调时报告应请求流式，避免被首包超时误杀');
+    assert.strictEqual(result.authoredBy, 'model');
+    assert.match(result.markdown, /报告撰写改为流式输出/);
+    assert.ok(progress.some((event) => event.reasoningDelta), '思考增量应照常显示');
+    assert.ok(progress.some((event) => event.stage === 'writing'), '撰写阶段应有进度');
+    assert.ok(!progress.some((event) => event.delta), '报告 JSON 正文不得推到对话气泡');
+  } finally {
+    global.fetch = originalFetch;
+    store.updateSettings({ aiStage: 'mock' });
+    reset();
+  }
+});
+
+test('报告降级原因可区分：未启用、预算耗尽、授权失败与正文没写完各有各的说法', async () => {
+  reset();
+  store.createTask({ title: '被降级的报告', project: '助手 Agent' });
+  const previous = store.getSettings();
+  const llmSettings = {
+    aiStage: 'llm', aiProvider: 'custom', aiBaseUrl: 'https://example.invalid/v1', aiApiKey: 'test-key', aiModel: 'test-model'
+  };
+  const originalFetch = global.fetch;
+  try {
+    store.updateSettings({ aiStage: 'mock' });
+    const disabled = await ai.generateReport({ period: 'weekly', offset: 0, instruction: '生成本周周报' });
+    assert.strictEqual(disabled.degradeCode, 'model-disabled');
+    assert.match(disabled.degradeNotice, /模型未启用/);
+    assert.strictEqual(disabled.retryable, false);
+
+    store.updateSettings(llmSettings);
+    global.fetch = async () => ({ ok: true, json: async () => ({ choices: [{ message: { content: '', reasoning: '一直在思考' } }] }) });
+    const budget = await ai.generateReport({ period: 'weekly', offset: 0, instruction: '生成本周周报' });
+    assert.strictEqual(budget.degradeCode, 'model-budget');
+    assert.match(budget.degradeNotice, /思考占满了输出预算/);
+    assert.strictEqual(budget.retryable, true);
+
+    global.fetch = async () => ({ ok: false, status: 401, text: async () => 'unauthorized' });
+    const auth = await ai.generateReport({ period: 'weekly', offset: 0, instruction: '生成本周周报' });
+    assert.strictEqual(auth.degradeCode, 'model-auth');
+    assert.match(auth.degradeNotice, /API Key/);
+
+    global.fetch = async () => ({ ok: true, json: async () => ({ choices: [{ message: { content: '这是一段散文，不是 JSON' } }] }) });
+    const malformed = await ai.generateReport({ period: 'weekly', offset: 0, instruction: '生成本周周报' });
+    assert.strictEqual(malformed.degradeCode, 'model-truncated');
+    // 解析失败的正文与预算截断在传输层无法区分，一律按“没写完”重写后再降级
+    assert.match(malformed.degradeNotice, /截断/);
+
+    const notices = [disabled, budget, auth, malformed].map((result) => result.degradeNotice);
+    assert.strictEqual(new Set(notices).size, 4, '四种真因的提示文案必须互不相同');
+    [disabled, budget, auth, malformed].forEach((result) => {
+      assert.strictEqual(result.authoredBy, 'local');
+      assert.strictEqual(result.degraded, true);
+      assert.ok(result.markdown.length, '降级后仍要给出本地事实版正文');
+    });
+  } finally {
+    global.fetch = originalFetch;
+    store.updateSettings({
+      aiStage: previous.aiStage, aiProvider: previous.aiProvider, aiBaseUrl: previous.aiBaseUrl,
+      aiApiKey: previous.aiApiKey, aiModel: previous.aiModel
+    });
+    reset();
+  }
+});
+
+test('真正的报告 Agent：正文被截断时只重写一次，引用造假不重试', async () => {
+  reset();
+  const work = store.createTask({ title: '打通截断重试', project: '助手 Agent' });
+  store.completeTask(work.id);
+  const validReport = JSON.stringify({
+    title: '截断重试后的周报', audience: '团队', tone: '客观', executiveSummary: '完成截断重试。',
+    sections: [{ heading: '本周成果', kind: 'facts', items: [{ text: '正文截断后可以重写完成。', sourceIds: [`task-${work.id}`] }] }]
+  });
+  const originalFetch = global.fetch;
+  try {
+    store.updateSettings({
+      aiStage: 'llm', aiProvider: 'custom', aiBaseUrl: 'https://example.invalid/v1', aiApiKey: 'test-key', aiModel: 'test-model'
+    });
+    const truncatedBodies = [];
+    global.fetch = async (url, options) => {
+      const body = JSON.parse(options.body);
+      truncatedBodies.push(body.max_tokens);
+      // 小预算下正文被截断：JSON 不完整
+      return {
+        ok: true,
+        json: async () => ({ choices: [{ message: { content: body.max_tokens <= 8000 ? '{"title":"写到一半' : validReport } }] })
+      };
+    };
+    const retried = await ai.handleAuto('生成本周周报');
+    assert.strictEqual(retried.authoredBy, 'model', '截断后应能以更大预算写完');
+    assert.deepStrictEqual(truncatedBodies, [8000, 16000], '截断只重写一次且必须扩大预算');
+    assert.match(retried.markdown, /正文截断后可以重写完成/);
+
+    store.clearAgentState();
+    const lyingBodies = [];
+    global.fetch = async (url, options) => {
+      lyingBodies.push(JSON.parse(options.body).max_tokens);
+      return {
+        ok: true,
+        json: async () => ({ choices: [{ message: { content: JSON.stringify({
+          title: '造假报告', executiveSummary: '有结论。',
+          sections: [{ heading: '本周成果', kind: 'facts', items: [{ text: '不存在的成果', sourceIds: ['task-999999'] }] }]
+        }) } }] })
+      };
+    };
+    const fabricated = await ai.handleAuto('生成本周周报');
+    assert.strictEqual(fabricated.authoredBy, 'local');
+    assert.strictEqual(fabricated.degradeCode, 'model-fabricated');
+    assert.deepStrictEqual(lyingBodies, [8000], '引用造假不该重试，避免反复端出不存在的成果');
+    assert.ok(!fabricated.markdown.includes('不存在的成果'));
+  } finally {
+    global.fetch = originalFetch;
+    store.updateSettings({ aiStage: 'mock' });
+    reset();
   }
 });
 

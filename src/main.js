@@ -587,6 +587,9 @@ function registerIpc() {
   ipcMain.handle('memos:create', (e, data) => store.createMemo(data));
   ipcMain.handle('memos:update', (e, id, patch) => store.updateMemo(id, patch));
   ipcMain.handle('memos:delete', (e, id) => store.deleteMemo(id));
+  ipcMain.handle('memos:batchUpdate', (e, ids, patch) => store.batchUpdateMemos(ids, patch));
+  ipcMain.handle('memos:batchDelete', (e, ids) => store.batchDeleteMemos(ids));
+  ipcMain.handle('memos:batchRestore', (e, ids) => store.batchRestoreMemos(ids));
   ipcMain.handle('memos:getDeleted', () => store.getDeletedMemos());
   ipcMain.handle('memos:restore', (e, id) => store.restoreMemo(id));
   ipcMain.handle('memos:purge', (e, id) => store.purgeMemo(id));
@@ -666,7 +669,7 @@ function registerIpc() {
     try {
       const result = await ai.generateReport(payload, {
         signal: controller.signal,
-        timeout: 45000,
+        timeout: 150000,
         onProgress: (progress) => sendAiProgress(e.sender, requestId, progress)
       });
       return aiRequestCoordinator.complete(key, result);

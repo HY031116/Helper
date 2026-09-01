@@ -2124,6 +2124,11 @@ test('统计与周报提供准确图表语义、空状态和完整操作反馈',
   assert.match(app, /textContent: '核对来源'/);
   assert.match(app, /sendPrompt\('结束报告修改'\)/);
   assert.match(app, /report: '报告修改中 · 直接说受众、重点、语气或篇幅'/);
+  // 降级时要把真因显示出来，而不是只说“本地事实版”
+  assert.match(renderStatSource, /已生成本地事实版报告：\$\{result\.degradeNotice \|\| '模型未启用'\}/);
+  assert.match(app, /className = 'report-degrade-reason'/);
+  assert.match(app, /result\.degradeNotice \|\| '模型未启用，已降级为本地事实模板'/);
+  assert.match(css, /\.report-degrade-reason \{[^}]*color: var\(--warn\)/);
   assert.match(css, /\.report-agent-head \{[\s\S]*?flex-wrap/);
   assert.match(css, /\.report-evidence-band \{[^}]*flex-wrap: wrap/);
   assert.match(css, /\.report-source-list \{ max-height: 220px; overflow: auto;/);
@@ -2838,14 +2843,14 @@ test('备忘录工具栏从保存前开始互斥并在结束后恢复焦点', ()
   assert.strictEqual(controls['#memo-to-task'].focused, true);
 });
 
-test('新建备忘录在等待旧草稿保存时拒绝重复创建', async () => {
+test('新建备忘录先进草稿：等待旧保存时拒绝重复进入，且不当场落库', async () => {
   const makeButton = () => ({
     attrs: {}, disabled: false,
     setAttribute(name, value) { this.attrs[name] = value; }
   });
   const newButton = makeButton();
   const emptyButton = makeButton();
-  const title = { selectCalled: false, select() { this.selectCalled = true; } };
+  const title = { focusCalled: false, focus() { this.focusCalled = true; } };
   let createCalls = 0;
   const run = loadRendererRuntime({
     '#memo-new': newButton,
@@ -2856,7 +2861,7 @@ test('新建备忘录在等待旧草稿保存时拒绝重复创建', async () =>
         memos: {
           create: async () => {
             createCalls++;
-            return { id: 8, title: '无标题备忘录', content: '', tags: [], pinned: false };
+            return { id: 8, title: '新内容', content: '新内容', tags: [], pinned: false };
           }
         }
       }
@@ -2875,11 +2880,55 @@ test('新建备忘录在等待旧草稿保存时拒绝重复创建', async () =>
   assert.strictEqual(createCalls, 0);
 
   await run('testValues.releaseSave(true); testValues.first');
-  assert.strictEqual(createCalls, 1);
+  // 新建不再直接创建记录，只进入未保存草稿
+  assert.strictEqual(createCalls, 0, '点新建不该立刻落库');
+  assert.strictEqual(run('!!memoDraftMemo'), true);
+  assert.strictEqual(run('selectedMemoId'), run('MEMO_DRAFT_ID'));
   assert.strictEqual(run('memoCreating'), false);
   assert.strictEqual(newButton.disabled, false);
   assert.strictEqual(emptyButton.disabled, false);
-  assert.strictEqual(title.selectCalled, true);
+  assert.strictEqual(title.focusCalled, true);
+  // 已有草稿时再次点新建回到同一份草稿，不产生第二份
+  assert.strictEqual(await run('createMemo()'), true);
+  assert.strictEqual(run('memoDraftMemo ? 1 : 0'), 1);
+});
+
+test('草稿只有写下内容才落库，空草稿切走即丢弃', async () => {
+  const created = [];
+  const title = { value: '' };
+  const content = { value: '' };
+  const tags = { value: '' };
+  const run = loadRendererRuntime({
+    '#memo-title': title,
+    '#memo-content': content,
+    '#memo-tags': tags,
+    '#memo-editor': { classList: fakeClassList([]) },
+    '#memo-save-state': { dataset: {}, textContent: '' },
+    '#memo-updated': { textContent: '' },
+    __window: {
+      api: {
+        memos: {
+          create: async (data) => {
+            created.push(data);
+            return Object.assign({ id: 9, pinned: false, updatedAt: Date.now() }, data);
+          }
+        }
+      }
+    }
+  });
+  run('renderMemos = () => {}; toast = () => {};');
+  run('memos = []; memoDraftMemo = { id: MEMO_DRAFT_ID, title: "", content: "", tags: [], _draft: true }; selectedMemoId = MEMO_DRAFT_ID;');
+  await run('saveMemoNow()');
+  assert.strictEqual(created.length, 0, '空草稿不该落库');
+  assert.strictEqual(run('memoDraftMemo'), null, '空草稿切走时应直接丢弃');
+
+  run('memos = []; memoDraftMemo = { id: MEMO_DRAFT_ID, title: "", content: "", tags: [], _draft: true }; selectedMemoId = MEMO_DRAFT_ID;');
+  content.value = '随机事件规格分级的三条主线，先落文档再排优先级';
+  await run('saveMemoNow()');
+  assert.strictEqual(created.length, 1, '写下内容才创建一条');
+  assert.match(created[0].title, /随机事件规格分级/, '标题留空时应取正文开头');
+  assert.strictEqual(run('selectedMemoId'), 9);
+  assert.strictEqual(run('memoDraftMemo'), null);
 });
 
 test('桌宠跟随应用主题并保留自动主题响应', () => {
@@ -2895,7 +2944,7 @@ test('桌宠跟随应用主题并保留自动主题响应', () => {
 
 test('备忘录支持防串写自动保存、转任务与统一回收站', () => {
   assert.match(app, /const id = selectedMemoId;[\s\S]*memoSaveChain = memoSaveChain\.then/);
-  assert.match(app, /if \(currentView === 'memos' && view !== 'memos'\) saveMemoNow\(\)/);
+  assert.match(app, /if \(currentView === 'memos' && view !== 'memos'\) \{[\s\S]{0,120}saveMemoNow\(\);[\s\S]{0,120}setMemoBatchMode\(false\)/);
   assert.match(app, /window\.api\.tasks\.create\(\{ title: memo\.title, desc: memo\.content, tags: memo\.tags/);
   assert.match(app, /window\.api\.memos\.emptyTrash\(\)/);
   assert.match(css, /\.memo-list-item\.pinned::before/);
@@ -2964,20 +3013,185 @@ test('备忘录只有最新草稿完成后才显示已保存', async () => {
 });
 
 test('备忘录列表在运行时支持置顶排序展示和标签解析', () => {
-  const list = { innerHTML: '' };
+  const list = { innerHTML: '', attrs: {}, setAttribute(name, value) { this.attrs[name] = value; } };
   const sub = { textContent: '' };
-  const run = loadRendererRuntime({ '#memo-list': list, '#memos-sub': sub });
+  const filters = { innerHTML: '' };
+  const run = loadRendererRuntime({ '#memo-list': list, '#memos-sub': sub, '#memo-filters': filters });
   const tags = JSON.parse(run(`JSON.stringify(parseMemoTags('工作， 灵感,产品  复盘'))`));
   assert.deepStrictEqual(tags, ['工作', '灵感', '产品', '复盘']);
   run(`memos = [
     { id: 2, title: '普通记录', content: '稍后处理', tags: [], pinned: false, updatedAt: Date.now() - 1000 },
     { id: 1, title: '重点记录', content: '优先查看', tags: ['工作'], pinned: true, updatedAt: Date.now() }
   ]; selectedMemoId = 1; renderMemoList();`);
-  assert.match(sub.textContent, /2 条 · 含置顶/);
+  assert.match(sub.textContent, /2 条 · 1 条置顶/);
   assert.ok(list.innerHTML.indexOf('重点记录') < list.innerHTML.indexOf('普通记录'));
   assert.match(list.innerHTML, /memo-list-item active pinned/);
   assert.strictEqual((list.innerHTML.match(/tabindex="0"/g) || []).length, 1);
   assert.strictEqual((list.innerHTML.match(/tabindex="-1"/g) || []).length, 1);
+  // 条目上直接可见标签，筛选条给出可点击的标签 chip
+  assert.match(list.innerHTML, /class="tag-chip">#工作<\/span>/);
+  assert.match(filters.innerHTML, /data-memo-filter="tag:工作"/);
+  assert.match(filters.innerHTML, /aria-pressed="true" data-memo-filter="all"/);
+  assert.strictEqual(list.attrs['aria-multiselectable'], 'false');
+});
+
+test('备忘录筛选与批量只作用于当前可见条目', () => {
+  const list = { innerHTML: '', attrs: {}, focus: () => {}, setAttribute(name, value) { this.attrs[name] = value; } };
+  const sub = { textContent: '' };
+  const filters = { innerHTML: '' };
+  const bar = { classList: fakeClassList(['hidden']), attrs: {}, setAttribute(name, value) { this.attrs[name] = value; } };
+  const run = loadRendererRuntime({
+    '#memo-list': list,
+    '#memos-sub': sub,
+    '#memo-filters': filters,
+    '#memo-batch-bar': bar,
+    '#memo-batch-count': { textContent: '' },
+    '#memo-batch-select-all': { disabled: false, textContent: '' },
+    '#memo-batch-pin': { disabled: false },
+    '#memo-batch-unpin': { disabled: false },
+    '#memo-batch-delete': { disabled: false },
+    '#memo-batch-clear': { disabled: false },
+    '#memo-select-mode': { attrs: {}, setAttribute(name, value) { this.attrs[name] = value; }, querySelector: () => null, focus: () => {} },
+    '#memo-editor': { classList: fakeClassList([]), toggleAttribute: () => {} }
+  });
+  run(`memos = [
+    { id: 1, title: '甲', content: 'a', tags: ['工作'], pinned: false, updatedAt: 3 },
+    { id: 2, title: '乙', content: 'b', tags: ['灵感'], pinned: false, updatedAt: 2 },
+    { id: 3, title: '丙', content: 'c', tags: ['工作'], pinned: false, updatedAt: 1 }
+  ]; selectedMemoId = 1; memoFocusId = 1;`);
+  // 标签筛选只留下命中的条目
+  run('memoFilter = "tag:工作"; renderMemoList();');
+  assert.match(list.innerHTML, /甲/);
+  assert.match(list.innerHTML, /丙/);
+  assert.ok(!/乙/.test(list.innerHTML), '未命中标签的条目不应出现');
+  assert.match(sub.textContent, /筛选出 2 条 · 共 3 条/);
+  // 批量选择只统计当前可见且已选中的
+  run('memoFilter = "tag:工作"; memoSelectedIds = new Set([1, 2, 3]); renderMemoList(); renderMemoBatchBar();');
+  assert.deepStrictEqual(JSON.parse(run('JSON.stringify(memoBatchIds().sort())')), [1, 3]);
+  // 进入批量模式后列表允许多选
+  run('memoSearch = ""; setMemoBatchMode(true);');
+  assert.strictEqual(list.attrs['aria-multiselectable'], 'true');
+  assert.strictEqual(bar.classList.contains('hidden'), false);
+  assert.match(list.innerHTML, /memo-list-item selectable/);
+  assert.match(list.innerHTML, /class="memo-check"/);
+  assert.strictEqual(run('memoBatchMode'), true);
+  run('setMemoBatchMode(false);');
+  assert.strictEqual(run('memoSelectedIds.size'), 0, '退出批量应清空选择');
+});
+
+test('草稿行只显示草稿自己的标题，不串用上一条备忘录', () => {
+  const list = { innerHTML: '', attrs: {}, focus: () => {}, setAttribute(name, value) { this.attrs[name] = value; } };
+  const run = loadRendererRuntime({
+    '#memo-list': list,
+    '#memos-sub': { textContent: '' },
+    '#memo-filters': { innerHTML: '' },
+    '#memo-title': { value: '上一条备忘录的标题' },
+    '#memo-content': { value: '' },
+    '#memo-tags': { value: '' },
+    '#memo-save-state': { dataset: {}, textContent: '' }
+  });
+  run('saveMemoNow = () => {};');
+  run(`
+    memos = [{ id: 5, title: '上一条备忘录的标题', content: 'x', tags: [], pinned: false, updatedAt: 1 }];
+    selectedMemoId = MEMO_DRAFT_ID;
+    memoDraftMemo = { id: MEMO_DRAFT_ID, title: '', content: '', tags: [], _draft: true };
+    renderMemoList();
+  `);
+  assert.match(list.innerHTML, /memo-list-item draft active/);
+  assert.match(list.innerHTML, /<span class="memo-list-title">新备忘录<\/span>/);
+  assert.ok(!/上一条备忘录的标题/.test(list.innerHTML.split('memo-list-item draft')[1].split('memo-list-item"')[0]), '草稿行不得沿用编辑器里上一条的标题');
+
+  // 输入时草稿行跟着更新，并同步回草稿状态
+  run(`
+    document.getElementById('memo-title').value = '';
+    document.getElementById('memo-content').value = '召唤物遗物构筑的三条入口';
+    scheduleMemoSave();
+  `);
+  assert.strictEqual(run('memoDraftMemo.title'), '召唤物遗物构筑的三条入口');
+  run('renderMemoList();');
+  assert.match(list.innerHTML, /<span class="memo-list-title">召唤物遗物构筑的三条入口<\/span>/);
+});
+
+test('备忘录标签以 chip 呈现且可移除，编辑器高度链锁死', () => {
+  const chips = { innerHTML: '' };
+  const tagsInput = { value: '', focus: () => {} };
+  const run = loadRendererRuntime({
+    '#memo-tag-chips': chips,
+    '#memo-tags': tagsInput,
+    '#memo-title': { value: '' },
+    '#memo-content': { value: '' },
+    '#memo-save-state': { dataset: {}, textContent: '' }
+  });
+  run('saveMemoNow = () => {}; renderMemoList = () => {}; testValues.saved = 0; scheduleMemoSave = () => { testValues.saved++; };');
+
+  // chip 只渲染已提交的标签，不重复显示输入框里的片段
+  run('memoTagCommitted = ["设计","灵感","召唤物"]; document.getElementById("memo-tags").value = ""; renderMemoTagChips();');
+  assert.strictEqual((chips.innerHTML.match(/memo-tag-chip/g) || []).length, 3);
+  assert.match(chips.innerHTML, /data-memo-tag-remove="灵感"/);
+  assert.match(chips.innerHTML, /aria-label="移除标签 灵感"/);
+
+  run('removeMemoTag("灵感");');
+  assert.deepStrictEqual(JSON.parse(run('JSON.stringify(memoTagCommitted)')), ['设计', '召唤物']);
+  assert.strictEqual(run('testValues.saved'), 1);
+  assert.strictEqual((chips.innerHTML.match(/memo-tag-chip/g) || []).length, 2);
+
+  // 分隔符提交：片段变成 chip，输入框清空，memoDraft 取到全部标签
+  run('document.getElementById("memo-tags").value = "玩法"; commitMemoTags();');
+  assert.deepStrictEqual(JSON.parse(run('JSON.stringify(memoTagCommitted)')), ['设计', '召唤物', '玩法']);
+  assert.strictEqual(tagsInput.value, '');
+  assert.deepStrictEqual(JSON.parse(run('JSON.stringify(memoDraft().tags)')), ['设计', '召唤物', '玩法']);
+  // 已存在的标签不会被重复提交
+  run('document.getElementById("memo-tags").value = "设计"; commitMemoTags();');
+  assert.strictEqual(run('memoTagCommitted.length'), 3);
+
+  // 高度链：行高锁死 + 书写面弹性填充，否则长正文会被 overflow: hidden 裁掉
+  assert.match(css, /\.memo-workspace \{[\s\S]*?grid-template-rows: minmax\(0, 1fr\);/);
+  assert.match(css, /\.memo-pane \{[^}]*display: flex; flex-direction: column; overflow: hidden;/);
+  assert.match(css, /\.memo-editor \{ flex: 1; min-height: 0; display: flex; flex-direction: column; \}/);
+  assert.match(css, /\.memo-content \{[\s\S]*?flex: 1 1 auto;[\s\S]*?min-height: 120px;/);
+  // 窄容器不再把工具条挤到第二行，而是收成图标
+  assert.match(css, /@container \(max-width: 700px\)[\s\S]*?\.memo-task-action span \{ display: none; \}/);
+  assert.doesNotMatch(css, /@container \(max-width: 700px\)[\s\S]*?\.memo-editor-head \{[^}]*flex-wrap: wrap/);
+  assert.match(html, /id="memo-to-task" aria-label="转为任务"/);
+});
+
+test('窄窗口助手面板让位：自动按视口收起，手动优先，跨阈值交还自动', () => {
+  const panel = { classList: fakeClassList([]), style: {} };
+  const control = { innerHTML: '', title: '', attrs: {}, setAttribute(name, value) { this.attrs[name] = value; } };
+  const run = loadRendererRuntime({
+    '#ai-panel': panel,
+    '#ai-collapse': control,
+    __window: { innerWidth: 1180, addEventListener: () => {}, api: {} }
+  });
+
+  // 默认窗口 1180 < 1360：自动让位收起，并同步展开按钮语义
+  run('aiPanelMode = "auto"; applyAiPanelMode();');
+  assert.strictEqual(panel.classList.contains('collapsed'), true);
+  assert.strictEqual(control.attrs['aria-expanded'], 'false');
+  assert.strictEqual(control.title, '展开助手');
+  // 收起时清掉拖拽宽度，避免与窄条样式打架
+  run('document.getElementById("ai-panel").style.width = "480px"; applyAiPanelMode();');
+  assert.strictEqual(panel.style.width, '');
+
+  // 宽窗口自动展开
+  run('window.innerWidth = 1600; aiPanelMode = "auto"; applyAiPanelMode();');
+  assert.strictEqual(panel.classList.contains('collapsed'), false);
+  assert.strictEqual(control.attrs['aria-expanded'], 'true');
+
+  // 手动展开后即使窗口变窄也不再收起；手动收起后即使窗口变宽也保持收起
+  run('window.innerWidth = 1180; aiPanelMode = "expanded"; applyAiPanelMode();');
+  assert.strictEqual(panel.classList.contains('collapsed'), false);
+  run('window.innerWidth = 1600; aiPanelMode = "collapsed"; applyAiPanelMode();');
+  assert.strictEqual(panel.classList.contains('collapsed'), true);
+
+  // 跨过阈值把决定权交还自动：回到窄窗口应再次让位
+  run('aiPanelMode = "auto"; window.innerWidth = 1180; applyAiPanelMode();');
+  assert.strictEqual(panel.classList.contains('collapsed'), true);
+
+  // 发问必须让回复可见：实时轮次的漏斗 runAiTurn 在写入对话前展开（重试同样经过它）
+  assert.match(app, /async function runAiTurn\(request, retry, options\) \{\s*if \(aiSending\) return;\s*\/\/[^\n]*\n\s*setAiPanelExpanded\(\);/);
+  assert.match(app, /window\.api\.on\('app:focus-ai', \(\) => \{\s*setAiPanelExpanded\(\);/);
+  assert.match(app, /document\.addEventListener\('DOMContentLoaded', \(\) => \{[\s\S]{0,120}applyAiPanelMode\(\);\s*init\(\);/);
 });
 
 test('助手进度阶段不再覆盖已流出的回答正文', async () => {

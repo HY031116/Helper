@@ -288,6 +288,51 @@ function purgeMemo(id) {
   return { ok: true, id: memo.id };
 }
 
+function batchUpdateMemos(ids, patch) {
+  const unique = [...new Set(Array.isArray(ids) ? ids : [])].map(Number).filter(Number.isInteger);
+  let updated = 0;
+  let skipped = 0;
+  unique.forEach((id) => {
+    try {
+      updateMemo(id, patch);
+      updated += 1;
+    } catch (error) {
+      skipped += 1;
+    }
+  });
+  return { updated, skipped };
+}
+
+function batchDeleteMemos(ids) {
+  const unique = [...new Set(Array.isArray(ids) ? ids : [])].map(Number).filter(Number.isInteger);
+  const deletedIds = [];
+  let skipped = 0;
+  unique.forEach((id) => {
+    try {
+      deleteMemo(id);
+      deletedIds.push(id);
+    } catch (error) {
+      skipped += 1;
+    }
+  });
+  return { deleted: deletedIds.length, skipped, deletedIds };
+}
+
+function batchRestoreMemos(ids) {
+  const unique = [...new Set(Array.isArray(ids) ? ids : [])].map(Number).filter(Number.isInteger);
+  const restoredIds = [];
+  let skipped = 0;
+  unique.forEach((id) => {
+    try {
+      restoreMemo(id);
+      restoredIds.push(id);
+    } catch (error) {
+      skipped += 1;
+    }
+  });
+  return { restored: restoredIds.length, skipped, restoredIds };
+}
+
 function importMemos(list) {
   if (!Array.isArray(list)) throw new Error('备忘录导入格式不正确');
   const imported = list.filter((item) => item && (item.title || item.content)).map((item) => {
@@ -1433,6 +1478,8 @@ function saveMemos() {
 }
 
 /* ---------- 报告事实快照 ---------- */
+const REPORT_MEMO_LIMIT = 30;
+
 function reportDateRange(periodValue, offsetValue, nowValue) {
   const period = periodValue === 'daily' ? 'daily' : 'weekly';
   const offset = Math.max(-366, Math.min(366, Math.round(Number(offsetValue) || 0)));
@@ -1632,6 +1679,29 @@ function buildReportSnapshot(input) {
     });
   }
 
+  // 备忘录是背景依据，不是成果本体：只取本期新建或改动过的，并限制条数与正文长度，
+  // 避免长文本把报告写作的输出预算挤爆。
+  const periodMemos = memos
+    .filter((memo) => memo && !memo._deleted && (inRange(memo.createdAt) || inRange(memo.updatedAt)))
+    .sort((a, b) => Number(b.updatedAt) - Number(a.updatedAt))
+    .slice(0, REPORT_MEMO_LIMIT);
+  const memoSourceIds = [];
+  periodMemos.forEach((memo) => {
+    const id = `memo-${reportSourceIdPart(memo.id)}`;
+    memoSourceIds.push(id);
+    sources.push({
+      id,
+      type: 'memo',
+      title: memo.title,
+      detail: String(memo.content || '').replace(/\s+/g, ' ').trim().slice(0, 600),
+      tags: Array.isArray(memo.tags) ? memo.tags.slice(0, 5) : [],
+      createdAt: memo.createdAt || null,
+      updatedAt: memo.updatedAt || null,
+      createdInPeriod: inRange(memo.createdAt),
+      pinned: !!memo.pinned
+    });
+  });
+
   const idsFor = (list) => list.map((task) => taskSourceIds.get(task.id)).filter(Boolean);
   const projectMap = new Map();
   const tagMap = new Map();
@@ -1715,6 +1785,12 @@ function buildReportSnapshot(input) {
         count: workLogSourceIds.length,
         sourceIds: workLogSourceIds,
         byKind: Object.fromEntries(Object.entries(workLogKinds).map(([kind, ids]) => [kind, { count: ids.length, sourceIds: ids }]))
+      },
+      memos: {
+        count: memoSourceIds.length,
+        createdCount: periodMemos.filter((memo) => inRange(memo.createdAt)).length,
+        updatedCount: periodMemos.filter((memo) => !inRange(memo.createdAt)).length,
+        sourceIds: memoSourceIds
       }
     },
     projects: [...projectMap.values()].sort((a, b) => b.completedCount - a.completedCount || a.name.localeCompare(b.name, 'zh-CN')),
@@ -2031,6 +2107,9 @@ module.exports = {
   restoreMemo,
   purgeMemo,
   emptyMemoTrash,
+  batchUpdateMemos,
+  batchDeleteMemos,
+  batchRestoreMemos,
   importMemos,
   getSettings,
   updateSettings,
