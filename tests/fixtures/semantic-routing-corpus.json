@@ -23,8 +23,6 @@
   { "text": "查看客户偏好备忘录", "intent": "memo_query", "protected": true, "entityType": "memo", "timeScope": "unspecified", "questionCue": false },
   { "text": "把客户偏好备忘录置顶", "intent": "memo_pin", "protected": true, "entityType": "memo", "timeScope": "unspecified", "questionCue": false },
   { "text": "把客户偏好备忘录拆成任务", "intent": "memo_split", "protected": true, "entityType": "memo", "timeScope": "unspecified", "questionCue": false },
-  { "text": "帮我安排今天的工作", "intent": "daily_plan", "protected": true, "entityType": "workflow", "timeScope": "today", "questionCue": false },
-  { "text": "今天来不及了，重新排一下", "intent": "daily_replan", "protected": true, "entityType": "workflow", "timeScope": "today", "questionCue": false },
   { "text": "今天先做什么？", "intent": "suggest", "protected": true, "entityType": "unknown", "timeScope": "today", "questionCue": true },
   { "text": "生成今日日报", "intent": "report", "protected": true, "entityType": "unknown", "timeScope": "today", "questionCue": false },
   { "text": "看看上周周报", "intent": "report", "protected": true, "entityType": "unknown", "timeScope": "previous_week", "questionCue": false },

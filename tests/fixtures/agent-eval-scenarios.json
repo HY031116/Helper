@@ -502,35 +502,6 @@
       ]
     },
     {
-      "id": "daily-plan-requires-confirmation",
-      "category": "daily-workflow",
-      "dangerous": true,
-      "setup": {
-        "tasks": [
-          { "title": "回复重点客户", "status": "doing", "pri": 3, "estimatedMinutes": 35 },
-          { "title": "整理发布说明", "status": "todo", "pri": 4, "estimatedMinutes": 50 }
-        ]
-      },
-      "turns": [
-        {
-          "input": "按两个小时帮我安排今天的工作",
-          "expect": {
-            "result": { "intent": "daily_plan", "type": "confirm" },
-            "noDataMutation": true,
-            "pendingKind": "confirmation"
-          }
-        },
-        {
-          "input": "取消",
-          "expect": {
-            "result": { "type": "info" },
-            "noDataMutation": true,
-            "pendingKind": null
-          }
-        }
-      ]
-    },
-    {
       "id": "contextual-chat-uses-memo-and-task",
       "category": "contextual-answer",
       "setup": {

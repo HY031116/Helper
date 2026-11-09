@@ -12,14 +12,12 @@ const latestButton = $('#pet-chat-latest');
 const systemTheme = window.matchMedia('(prefers-color-scheme: dark)');
 
 let themePreference = 'auto';
-let workflow = { activeFocus: null };
 let nextTaskId = null;
 let pendingReminder = null;
 let activeRequest = null;
 let requestSequence = 0;
 let followingLatest = true;
 let overviewBusy = false;
-let focusClock = null;
 
 function applyTheme(theme) {
   // 桌宠小窗只有浅色/暗色两套外观；液态玻璃与极简单色都按浅色处理
@@ -77,35 +75,12 @@ function formatDue(value) {
   return `${date === today ? '今天' : date}${time ? ` ${time}` : ''}`;
 }
 
-function focusElapsedMs() {
-  const focus = workflow.activeFocus;
-  if (!focus) return 0;
-  return (Number(focus.accumulatedMs) || 0)
-    + (focus.state === 'running' ? Math.max(0, Date.now() - Number(focus.resumedAt || Date.now())) : 0);
-}
-
-function renderFocus() {
-  const focus = workflow.activeFocus;
-  $('#overview-focus').classList.toggle('hidden', !focus);
-  if (!focus) return;
-  $('#overview-focus-label').textContent = focus.state === 'paused' ? '专注已暂停' : '正在专注';
-  $('#overview-focus-title').textContent = focus.title;
-  const paused = focus.state === 'paused';
-  $('#overview-focus-toggle').innerHTML = uiIcon(paused ? 'play' : 'pause');
-  $('#overview-focus-toggle').setAttribute('aria-label', paused ? '继续专注' : '暂停专注');
-  $('#overview-focus-toggle').title = paused ? '继续专注' : '暂停专注';
-  const seconds = Math.floor(focusElapsedMs() / 1000);
-  $('#overview-focus-time').textContent = `${String(Math.floor(seconds / 60)).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`;
-}
-
 async function refreshOverview() {
   try {
-    const [tasks, nextWorkflow, config] = await Promise.all([
+    const [tasks, config] = await Promise.all([
       window.api.tasks.getAll(),
-      window.api.workflow.get(),
       window.api.ai.config()
     ]);
-    workflow = nextWorkflow || { activeFocus: null };
     const today = localDateKey(new Date());
     const active = tasks.filter((task) => !['done', 'archived'].includes(task.status));
     const overdue = active.filter((task) => task.due && task.due.slice(0, 10) < today);
@@ -126,7 +101,6 @@ async function refreshOverview() {
     $('#overview-next-meta').textContent = next ? (formatDue(next.due) || '尚未安排时间') : '可以记录新任务或整理备忘录';
     $('#overview-next').disabled = !nextTaskId;
     $('#panel-model').textContent = config.configured && config.model ? `真实模型 · ${config.model}` : '本地工作状态';
-    renderFocus();
   } catch (error) {
     $('#overview-next-title').textContent = '工作状态暂时无法读取';
     $('#overview-next-meta').textContent = '稍后重新打开即可重试';
@@ -146,31 +120,6 @@ $('#overview-next').addEventListener('click', async () => {
     button.disabled = false;
   }
 });
-
-async function updateFocus(action) {
-  const controls = $$('.overview-focus-actions button');
-  controls.forEach((button) => { button.disabled = true; });
-  try {
-    if (action === 'toggle') {
-      workflow = workflow.activeFocus?.state === 'paused'
-        ? await window.api.workflow.resumeFocus({})
-        : await window.api.workflow.pauseFocus({});
-    } else {
-      const result = await window.api.workflow.finishFocus({ completeTask: true });
-      workflow = result.workflow;
-    }
-    renderFocus();
-    await refreshOverview();
-  } catch (error) {
-    $('#overview-feedback').textContent = error.message || '专注状态更新失败，请重试。';
-    $('#overview-feedback').classList.remove('hidden');
-  } finally {
-    controls.forEach((button) => { button.disabled = false; });
-  }
-}
-
-$('#overview-focus-toggle').addEventListener('click', () => updateFocus('toggle'));
-$('#overview-focus-complete').addEventListener('click', () => updateFocus('complete'));
 
 function setOverviewBusy(busy, activeControl) {
   overviewBusy = busy;
@@ -506,10 +455,7 @@ window.api.on('pet-panel:shown', async (mode) => {
   if (mode !== 'chat') $('#panel-tab-overview').focus();
 });
 window.api.on('pet:theme', applyTheme);
-window.api.on('workflow:changed', (state) => {
-  workflow = state || workflow;
-  renderFocus();
-});
+window.api.on('tasks:changed', () => refreshOverview());
 window.api.on('pet:remind', (reminder) => {
   pendingReminder = reminder || null;
   refreshOverview();
@@ -523,5 +469,4 @@ window.api.on('pet:remind', (reminder) => {
     applyTheme('auto');
   }
   await Promise.all([refreshOverview(), loadChatHistory()]);
-  focusClock = setInterval(renderFocus, 1000);
 })();

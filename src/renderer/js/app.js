@@ -71,18 +71,6 @@ let aiChatFollowing = true;
 let aiRuntimeState = null; // null | ready | degraded
 let aiRuntimeNotice = '';
 const settingsActionScopes = new Set();
-let workflowState = { preferences: {}, dailyPlans: {}, activeFocus: null, focusSessions: [] };
-let workflowDraft = null;
-let workflowDraftMeta = null;
-let workflowSmartMode = false;
-let workflowSmartText = '';
-let workflowReview = null;
-let workflowTickTimer = null;
-let workflowBusy = false;
-let dailyCopilot = null;
-let copilotBusy = false;
-let copilotSourcesOpen = false;
-let copilotWakeTimer = null;
 let eventsBound = false;
 const dataLoadErrors = { tasks: null, memos: null };
 const taskMutationLocks = new Set();
@@ -205,7 +193,6 @@ function renderStartupError(error) {
 
 const PRI_NAME = { 4: '紧急', 3: '高', 2: '中', 1: '低' };
 const STATE_NAME = { todo: '待办', doing: '进行中', done: '已完成', archived: '已归档' };
-const WORK_LOG_NAME = { outcome: '成果', progress: '进展', blocker: '阻塞', decision: '决策', next: '下一步' };
 const STATE_NEXT = { todo: 'doing', doing: 'done', done: 'todo' };
 const BOARD_COLUMNS = [
   { k: 'todo', name: '待办' },
@@ -606,20 +593,6 @@ function rowHTML(t) {
       ${menuItems.map(([act, icon, label, kind]) => `<button type="button" class="task-menu-item${kind ? ` ${kind}` : ''}" data-act="${act}" role="menuitem" tabindex="-1"><span class="task-menu-icon">${uiIcon(icon)}</span><span>${label}</span></button>`).join('')}
     </span>
   </span>`;
-  const agentAction = t.status === 'archived' ? '' : `<button type="button" class="task-agent-btn" title="和 Agent 一起修改" aria-label="和 Agent 一起修改任务「${esc(t.title)}」" aria-expanded="false">${uiIcon('message')}</button>`;
-  const workLogs = (Array.isArray(t.workLogs) ? t.workLogs : []).slice().sort((a, b) => Number(b.createdAt) - Number(a.createdAt)).slice(0, 4);
-  const workLogHtml = `<section class="task-worklog" aria-label="工作记录">
-    <div class="task-worklog-head"><strong>工作记录</strong><button type="button" class="task-log-add" data-worklog-add="${t.id}" aria-label="记录「${esc(t.title)}」的工作进展">${uiIcon('plus')}<span>记录</span></button></div>
-    ${workLogs.length ? `<div class="task-worklog-list">${workLogs.map((log) => `<article class="task-worklog-item ${esc(log.kind)}">
-      <span class="task-worklog-kind">${WORK_LOG_NAME[log.kind] || '进展'}</span>
-      <p>${esc(log.text)}</p>
-      <time>${fmtTime(log.createdAt)}</time>
-      <span class="task-worklog-tools">
-        <button type="button" data-worklog-edit="${esc(log.id)}" aria-label="编辑这条工作记录" title="编辑">${uiIcon('pencil')}</button>
-        <button type="button" data-worklog-remove="${esc(log.id)}" aria-label="删除这条工作记录" title="删除">${uiIcon('trash')}</button>
-      </span>
-    </article>`).join('')}</div>` : '<p class="task-worklog-empty">还没有记录进展、成果或阻塞</p>'}
-  </section>`;
   // 详情展开区
   const detailOpen = expandedIds.has('d' + t.id);
   const detailHtml = detailOpen ? `<div class="task-detail">
@@ -631,7 +604,6 @@ function rowHTML(t) {
     ${t.estimatedMinutes ? `<div class="td-row"><span class="td-label">预计</span><span class="td-val">${t.estimatedMinutes} 分钟</span></div>` : ''}
     <div class="td-row"><span class="td-label">创建</span><span class="td-val">${fmtTime(t.createdAt)}</span></div>
     ${t.status === 'done' && t.completedAt ? `<div class="td-row"><span class="td-label">完成</span><span class="td-val">${fmtTime(t.completedAt)}</span></div>` : ''}
-    ${workLogHtml}
   </div>` : '';
   const checkLabel = batchMode
     ? `${isSelected ? '取消选择' : '选择'}任务「${t.title}」`
@@ -657,7 +629,6 @@ function rowHTML(t) {
       ${dueHtml}
       ${doneTime}
       <button type="button" class="statectl s-${t.status}" title="切换任务状态" aria-label="当前状态：${STATE_NAME[t.status]}，点击切换">${STATE_NAME[t.status]}</button>
-      ${agentAction}
       ${quickActions}
     </div>
   </div>`;
@@ -837,578 +808,8 @@ function renderList(container, list) {
   list.forEach((t) => container.insertAdjacentHTML('beforeend', rowHTML(t)));
 }
 
-/* ---------- 每日工作闭环 ---------- */
-function todayWorkflowKey() {
-  return localDateKey(Date.now());
-}
-
-function workflowPlan() {
-  return workflowState && workflowState.dailyPlans ? workflowState.dailyPlans[todayWorkflowKey()] || null : null;
-}
-
-function formatWorkflowDuration(minutes) {
-  const value = Math.max(0, Math.round(Number(minutes) || 0));
-  if (value < 60) return `${value} 分钟`;
-  const hours = Math.floor(value / 60);
-  const rest = value % 60;
-  return rest ? `${hours} 小时 ${rest} 分钟` : `${hours} 小时`;
-}
-
-function formatWorkflowClock(milliseconds) {
-  const totalSeconds = Math.max(0, Math.floor((Number(milliseconds) || 0) / 1000));
-  const hours = Math.floor(totalSeconds / 3600);
-  const minutes = Math.floor(totalSeconds % 3600 / 60);
-  const seconds = totalSeconds % 60;
-  return hours
-    ? `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`
-    : `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
-}
-
-function workflowItemHtml(item, editable, index, count) {
-  const task = tasks.find((entry) => entry.id === item.taskId);
-  const status = task && task.status === 'done' ? 'done' : item.status;
-  const controls = editable
-    ? `<div class="workflow-item-controls">
-        <label class="sr-only" for="workflow-minutes-${index}">「${esc(item.title)}」计划分钟数</label>
-        <input class="workflow-minutes" id="workflow-minutes-${index}" data-workflow-minutes="${index}" type="number" min="5" max="480" step="5" value="${item.plannedMinutes}">
-        <span class="workflow-order">
-          <button type="button" class="workflow-icon-btn" data-workflow="move-up" data-index="${index}" title="上移" aria-label="上移「${esc(item.title)}」"${index === 0 ? ' disabled' : ''}>${uiIcon('chevron-up')}</button>
-          <button type="button" class="workflow-icon-btn" data-workflow="move-down" data-index="${index}" title="下移" aria-label="下移「${esc(item.title)}」"${index === count - 1 ? ' disabled' : ''}>${uiIcon('chevron-down')}</button>
-          <button type="button" class="workflow-icon-btn" data-workflow="remove-item" data-index="${index}" title="从计划移除" aria-label="从计划移除「${esc(item.title)}」">${uiIcon('x')}</button>
-        </span>
-      </div>`
-    : `<div class="workflow-item-controls">${status === 'done'
-      ? '<span class="quick-preview-chip">已完成</span>'
-      : `<button type="button" class="btn mini${status === 'active' ? ' ghost' : ''}" data-workflow="start" data-task-id="${item.taskId}">${status === 'active' ? '专注中' : '开始'}</button>`}</div>`;
-  return `<div class="workflow-item ${esc(status)}" data-plan-task-id="${item.taskId}">
-    <span class="workflow-time">${esc(item.plannedStart || '')}${item.plannedEnd ? ` - ${esc(item.plannedEnd)}` : ''}</span>
-    <span class="workflow-task"><strong>${esc(item.title)}</strong><span>${esc(item.reason || '')}${item.partial ? ' · 本次先推进一部分' : ''}</span></span>
-    ${controls}
-  </div>`;
-}
-
-function syncWorkflowBusyState() {
-  const panel = $('#workflow-panel');
-  if (!panel) return;
-  panel.classList.toggle('is-busy', workflowBusy);
-  panel.setAttribute('aria-busy', String(workflowBusy));
-  panel.querySelectorAll('[data-workflow], [data-workflow-minutes], #workflow-review-note').forEach((control) => {
-    if (workflowBusy) {
-      if (control.dataset.workflowWasDisabled === undefined) {
-        control.dataset.workflowWasDisabled = String(control.disabled);
-      }
-      control.disabled = true;
-    } else if (control.dataset.workflowWasDisabled !== undefined) {
-      control.disabled = control.dataset.workflowWasDisabled === 'true';
-      delete control.dataset.workflowWasDisabled;
-    }
-  });
-}
-
-function setWorkflowBusy(busy, control, action) {
-  workflowBusy = busy;
-  syncWorkflowBusyState();
-  if (!control || !control.setAttribute) return;
-  control.setAttribute('aria-busy', String(busy));
-  if (busy && control.classList.contains('btn')) {
-    control.dataset.workflowIdleLabel = control.textContent;
-    const labels = {
-      preview: '生成中…', replan: '规划中…', 'apply-plan': '保存中…', start: '开始中…',
-      pause: '暂停中…', resume: '继续中…', interrupt: '记录中…', finish: '保存中…',
-      'complete-focus': '完成中…', review: '读取中…', 'save-review': '保存中…',
-      'smart-preview': '理解中…'
-    };
-    control.textContent = labels[action] || '处理中…';
-  } else if (!busy && control.dataset.workflowIdleLabel !== undefined) {
-    control.textContent = control.dataset.workflowIdleLabel;
-    delete control.dataset.workflowIdleLabel;
-  }
-}
-
-function focusWorkflowAfterAction(action, succeeded, context) {
-  const panel = $('#workflow-panel');
-  if (!panel || typeof panel.querySelector !== 'function') return false;
-  const successSelectors = {
-    preview: '[data-workflow="apply-plan"]:not([disabled]), [data-workflow="cancel-draft"]',
-    replan: '[data-workflow="apply-plan"]:not([disabled]), [data-workflow="cancel-draft"]',
-    'apply-plan': '[data-workflow="start"]:not([disabled]), [data-workflow="replan"]',
-    start: '[data-workflow="pause"], [data-workflow="resume"]',
-    pause: '[data-workflow="resume"]',
-    resume: '[data-workflow="pause"]',
-    interrupt: '#workflow-interrupt-reason',
-    finish: '[data-workflow="start"]:not([disabled]), [data-workflow="review"]',
-    'complete-focus': '[data-workflow="start"]:not([disabled]), [data-workflow="review"]',
-    review: '#workflow-review-note',
-    'save-review': '[data-workflow="review"]',
-    'smart-toggle': '#workflow-smart-input',
-    'smart-preview': '[data-workflow="apply-plan"]'
-  };
-  let target = null;
-  if (succeeded && successSelectors[action]) target = panel.querySelector(successSelectors[action]);
-  if (!target && context && context.taskId) {
-    const item = panel.querySelector(`[data-plan-task-id="${context.taskId}"]`);
-    if (item) {
-      target = item.querySelector(`[data-workflow="${action}"]:not([disabled]), [data-workflow]:not([disabled]), [data-workflow-minutes]:not([disabled])`);
-    }
-  }
-  if (!target && !succeeded) target = panel.querySelector(`[data-workflow="${action}"]:not([disabled])`);
-  if (!target) target = panel.querySelector('[data-workflow]:not([disabled]), [data-workflow-minutes]:not([disabled]), textarea:not([disabled])');
-  if (!target || typeof target.focus !== 'function') return false;
-  target.focus({ preventScroll: true });
-  return true;
-}
-
-function dailyCopilotSummary(summary) {
-  const value = summary && typeof summary === 'object' ? summary : {};
-  const parts = [];
-  if (value.overdueCount) parts.push(`${value.overdueCount} 项逾期`);
-  if (value.dueTodayCount) parts.push(`${value.dueTodayCount} 项今天截止`);
-  if (value.plannedCount) parts.push(`计划完成 ${value.completedPlanCount}/${value.plannedCount}`);
-  if (!parts.length) parts.push(`${value.openCount || 0} 项待处理`);
-  return parts.join(' · ');
-}
-
-function nextCopilotWakeDelay(briefing) {
-  if (!briefing || !briefing.suppressedBy) return 0;
-  const now = new Date();
-  let target = 0;
-  if (briefing.suppressedBy === 'snoozed') {
-    target = Number(briefing.snoozedUntil) || 0;
-  } else if (briefing.suppressedBy === 'quiet') {
-    const end = String(briefing.quietHours || '').split('-')[1] || '08:00';
-    const parts = end.split(':').map(Number);
-    const wake = new Date(now);
-    wake.setHours(parts[0] || 0, parts[1] || 0, 0, 50);
-    if (wake.getTime() <= now.getTime()) wake.setDate(wake.getDate() + 1);
-    target = wake.getTime();
-  } else if (briefing.suppressedBy === 'muted') {
-    const wake = new Date(now);
-    wake.setDate(wake.getDate() + 1);
-    wake.setHours(0, 0, 0, 50);
-    target = wake.getTime();
-  }
-  return target > now.getTime() ? Math.min(2147483000, target - now.getTime()) : 0;
-}
-
-function scheduleDailyCopilotWake(briefing) {
-  clearTimeout(copilotWakeTimer);
-  copilotWakeTimer = null;
-  const delay = nextCopilotWakeDelay(briefing);
-  if (!delay) return;
-  copilotWakeTimer = setTimeout(() => {
-    copilotWakeTimer = null;
-    refreshDailyCopilot();
-  }, delay);
-}
-
-function renderDailyCopilot() {
-  const panel = $('#daily-copilot');
-  if (!panel) return;
-  const briefing = dailyCopilot;
-  scheduleDailyCopilotWake(briefing);
-  if (!briefing || !briefing.visible || !briefing.suggestion) {
-    panel.classList.add('hidden');
-    panel.replaceChildren();
-    return;
-  }
-  const item = briefing.suggestion;
-  const generated = new Date(briefing.generatedAt || Date.now());
-  const time = `${String(generated.getHours()).padStart(2, '0')}:${String(generated.getMinutes()).padStart(2, '0')}`;
-  const sources = Array.isArray(item.sources) ? item.sources : [];
-  const sourceHtml = sources.length ? `<div class="copilot-sources${copilotSourcesOpen ? '' : ' hidden'}" id="copilot-sources">
-    ${sources.map((source) => `<div class="copilot-source"><span>${esc(source.type === 'plan' ? '计划' : source.type === 'focus' ? '专注' : '任务')}</span><div><strong>${esc(source.label)}</strong><small>${esc(source.detail)}</small></div></div>`).join('')}
-  </div>` : '';
-  panel.className = `daily-copilot urgency-${esc(item.urgency || 'normal')}${copilotBusy ? ' is-busy' : ''}`;
-  panel.innerHTML = `<div class="copilot-rail" aria-hidden="true"><span></span><strong>${time}</strong></div>
-    <div class="copilot-main">
-      <div class="copilot-kicker"><span class="copilot-agent-mark">Agent</span><span>${esc(briefing.heading)}</span><span class="copilot-summary">${esc(dailyCopilotSummary(briefing.summary))}</span></div>
-      <h3>${esc(item.title)}</h3>
-      <p>${esc(item.detail)}</p>
-      <div class="copilot-why"><strong>为什么现在</strong><span>${esc(item.reason)}</span></div>
-      ${sourceHtml}
-      <div class="copilot-foot">
-        <div class="copilot-secondary">
-          ${sources.length ? `<button type="button" class="text-action" data-copilot="sources" aria-expanded="${copilotSourcesOpen}" aria-controls="copilot-sources">${copilotSourcesOpen ? '收起依据' : `查看依据 ${sources.length}`}</button>` : ''}
-          <button type="button" class="text-action" data-copilot="snooze">30 分钟后提醒</button>
-          <button type="button" class="text-action" data-copilot="mute">今天不再提示</button>
-        </div>
-        <button type="button" class="btn mini copilot-primary" data-copilot="primary"${copilotBusy ? ' disabled aria-busy="true"' : ''}>${copilotBusy ? '处理中…' : esc(item.action && item.action.label || '查看')}</button>
-      </div>
-    </div>`;
-  panel.classList.remove('hidden');
-}
-
-async function refreshDailyCopilot() {
-  if (!window.api.workflow || !window.api.workflow.getCopilot) return null;
-  try {
-    dailyCopilot = await window.api.workflow.getCopilot();
-    renderDailyCopilot();
-    return dailyCopilot;
-  } catch (error) {
-    console.error('[copilot] briefing failed:', error);
-    return null;
-  }
-}
-
-async function previewCopilotPlan(replan) {
-  workflowDraft = await window.api.workflow.previewPlan({});
-  workflowDraftMeta = { mode: 'copilot', constraints: {} };
-  workflowReview = null;
-  if (!workflowDraft.items.length) {
-    workflowDraft = null;
-    workflowDraftMeta = null;
-    throw new Error('当前没有可安排的未完成任务');
-  }
-  renderWorkflowPanel();
-  toast(replan ? '调整方案已生成，确认后才会替换今日计划' : '今日计划草案已生成，确认后才会保存', 3500, null, 'ok');
-  $('#workflow-panel [data-workflow="apply-plan"]')?.focus({ preventScroll: true });
-}
-
-async function runDailyCopilotPrimary() {
-  const item = dailyCopilot && dailyCopilot.suggestion;
-  const action = item && item.action;
-  if (!action) return;
-  if (action.kind === 'preview_plan') await previewCopilotPlan(false);
-  else if (action.kind === 'preview_replan') await previewCopilotPlan(true);
-  else if (action.kind === 'start_focus') {
-    workflowState = await window.api.workflow.startFocus(item.targetId, { targetMinutes: action.targetMinutes });
-    await refreshTasksAfterMutation('专注已经开始，但任务列表刷新失败');
-  } else if (action.kind === 'resume_focus') {
-    workflowState = await window.api.workflow.resumeFocus({});
-    renderWorkflowPanel();
-    $('#workflow-panel [data-workflow="pause"]')?.focus({ preventScroll: true });
-  } else if (action.kind === 'view_focus') {
-    $('#workflow-panel')?.scrollIntoView({ block: 'nearest' });
-    $('#workflow-panel [data-workflow="pause"], #workflow-panel [data-workflow="resume"]')?.focus({ preventScroll: true });
-  } else if (action.kind === 'review_day') {
-    workflowReview = await window.api.workflow.getReview(todayWorkflowKey());
-    renderWorkflowPanel();
-    $('#workflow-review-note')?.focus({ preventScroll: true });
-  } else if (action.kind === 'new_task') {
-    switchView('tasks');
-    openModal(null);
-  } else if (action.kind === 'open_daily_report') {
-    reportPeriod = 'daily';
-    reportDay = 0;
-    switchView('stat');
-    renderStat();
-    $('#btn-report-gen')?.focus({ preventScroll: true });
-  }
-  await refreshDailyCopilot();
-}
-
-async function handleDailyCopilotAction(event) {
-  const button = event.target.closest('[data-copilot]');
-  if (!button || copilotBusy) return;
-  const action = button.dataset.copilot;
-  if (action === 'sources') {
-    copilotSourcesOpen = !copilotSourcesOpen;
-    renderDailyCopilot();
-    $('#daily-copilot [data-copilot="sources"]')?.focus({ preventScroll: true });
-    return;
-  }
-  copilotBusy = true;
-  renderDailyCopilot();
-  try {
-    if (action === 'snooze' || action === 'mute') {
-      dailyCopilot = await window.api.workflow.updateCopilot({ action: action === 'snooze' ? 'snooze' : 'mute-today', minutes: 30 });
-      renderDailyCopilot();
-      toast(action === 'snooze' ? '30 分钟内不再显示这条建议' : '今天不再显示主动建议', 5000, [{
-        label: '恢复',
-        run: async () => {
-          dailyCopilot = await window.api.workflow.updateCopilot({ action: 'restore' });
-          renderDailyCopilot();
-        }
-      }], 'ok');
-    } else if (action === 'primary') {
-      await runDailyCopilotPrimary();
-    }
-  } catch (error) {
-    toast(error.message || '每日助手操作失败，请重试', 4500, null, 'err');
-  } finally {
-    copilotBusy = false;
-    renderDailyCopilot();
-  }
-}
-
-function renderWorkflowPanel() {
-  const panel = $('#workflow-panel');
-  if (!panel) return;
-  const focus = workflowState && workflowState.activeFocus;
-  const plan = workflowDraft || workflowPlan();
-  const editable = !!workflowDraft;
-  if (!focus && !plan) {
-    const actionable = tasks.filter((task) => !task._deleted && ['todo', 'doing'].includes(task.status));
-    const fallbackMinutes = Number(workflowState.preferences && workflowState.preferences.defaultTaskMinutes) || 30;
-    const estimatedMinutes = actionable.reduce((total, task) => total + (Number(task.estimatedMinutes) || fallbackMinutes), 0);
-    panel.innerHTML = `<div class="workflow-empty">
-      <div class="workflow-empty-head">
-        <span class="workflow-empty-mark" aria-hidden="true">${uiIcon('today')}</span>
-        <div class="workflow-title"><strong>安排今天</strong><span>${actionable.length} 项待处理${actionable.length ? ` · 预计 ${formatWorkflowDuration(estimatedMinutes)}` : ''}</span></div>
-      </div>
-      ${workflowSmartMode ? `<div class="workflow-smart-entry">
-        <label for="workflow-smart-input">告诉助手今天的限制或重点</label>
-        <textarea id="workflow-smart-input" rows="2" maxlength="240" placeholder="例如：今天只有 3 小时，先做发布相关，14:00-15:00 开会">${esc(workflowSmartText)}</textarea>
-        <div class="workflow-smart-foot"><span>只生成草案，确认后才会保存</span><div class="workflow-actions"><button type="button" class="btn mini ghost" data-workflow="smart-cancel">取消</button><button type="button" class="btn mini" data-workflow="smart-preview">生成智能计划</button></div></div>
-      </div>` : `<div class="workflow-empty-actions"><button type="button" class="btn mini" data-workflow="preview">生成今日计划</button><button type="button" class="btn mini ghost" data-workflow="smart-toggle">智能安排</button></div>`}
-    </div>`;
-    syncWorkflowBusyState();
-    return;
-  }
-
-  let html = '';
-  if (focus) {
-    const elapsed = Number(focus.elapsedMs) || 0;
-    html += `<div class="workflow-focus">
-      <div class="workflow-title"><strong>${focus.state === 'paused' ? '已暂停' : '正在专注'} · ${esc(focus.title)}</strong>
-        <div class="workflow-clock" id="workflow-clock" data-started="${focus.resumedAt || ''}" data-accumulated="${focus.accumulatedMs || 0}">${formatWorkflowClock(elapsed)}</div>
-        <div class="workflow-focus-meta">目标 ${focus.targetMinutes} 分钟 · ${focus.interruptions.length} 次打断</div>
-        ${focus.state === 'paused' ? '<div class="workflow-interrupt"><input id="workflow-interrupt-reason" maxlength="160" placeholder="记录这次为什么被打断"><button type="button" class="btn mini ghost" data-workflow="interrupt">记录</button></div>' : ''}
-      </div>
-      <div class="workflow-actions">
-        ${focus.state === 'paused'
-          ? '<button type="button" class="btn mini" data-workflow="resume">继续</button>'
-          : '<button type="button" class="btn mini ghost" data-workflow="pause">暂停</button>'}
-        <button type="button" class="btn mini ghost" data-workflow="finish">结束专注</button>
-        <button type="button" class="btn mini" data-workflow="complete-focus">完成任务</button>
-      </div>
-    </div>`;
-  }
-
-  if (plan) {
-    const overCapacity = plan.scheduledMinutes > plan.capacityMinutes;
-    const smartSummary = workflowDraftMeta && workflowDraftMeta.mode === 'smart'
-      ? `<div class="workflow-constraint-summary" role="status"><span class="workflow-constraint-label">智能约束</span><span>${esc(formatWorkflowConstraints(workflowDraftMeta.constraints))}</span></div>`
-      : '';
-    html += `<div class="workflow-head">
-      <div class="workflow-title"><strong>${editable ? '计划预览' : '今日计划'} · ${plan.items.length} 项</strong><span class="${overCapacity ? 'workflow-over' : ''}">${formatWorkflowDuration(plan.scheduledMinutes)} / 可用 ${formatWorkflowDuration(plan.capacityMinutes)}${overCapacity ? ` · 超出 ${formatWorkflowDuration(plan.scheduledMinutes - plan.capacityMinutes)}` : ''}${plan.omittedCount ? ` · 另有 ${plan.omittedCount} 项未排入` : ''}</span></div>
-      <div class="workflow-actions">${editable
-        ? `<button type="button" class="btn mini ghost" data-workflow="cancel-draft">取消</button><button type="button" class="btn mini" data-workflow="apply-plan"${overCapacity ? ' disabled title="请先缩短计划时长"' : ''}>确认计划</button>`
-        : '<button type="button" class="btn mini ghost" data-workflow="replan">重新规划</button><button type="button" class="btn mini" data-workflow="review">结束今天</button>'}</div>
-    </div>`;
-    html += smartSummary;
-    html += `<div class="workflow-list">${plan.items.map((item, index) => workflowItemHtml(item, editable, index, plan.items.length)).join('')}</div>`;
-  }
-
-  if (workflowReview) {
-    html += `<div class="workflow-review">
-      <div class="workflow-title"><strong>今日复盘</strong><span>基于计划、任务完成状态和专注记录生成。</span></div>
-      <div class="workflow-review-metrics"><span>完成 ${workflowReview.completedCount}/${workflowReview.plannedCount}</span><span>完成率 ${workflowReview.completionRate}%</span><span>专注 ${workflowReview.focusedMinutes} 分钟</span><span>打断 ${workflowReview.interruptionCount} 次</span></div>
-      <p class="workflow-suggestion">${esc(workflowReview.suggestion)}</p>
-      <label class="sr-only" for="workflow-review-note">复盘备注</label><textarea id="workflow-review-note" maxlength="1000" placeholder="补充今天有效的方法、卡点或明天需要注意的事"></textarea>
-      <div class="workflow-actions"><button type="button" class="btn mini ghost" data-workflow="cancel-review">取消</button><button type="button" class="btn mini" data-workflow="save-review">保存复盘</button></div>
-    </div>`;
-  }
-  panel.innerHTML = html;
-  syncWorkflowBusyState();
-}
-
-function formatWorkflowConstraints(constraints) {
-  const value = constraints && typeof constraints === 'object' ? constraints : {};
-  const parts = [];
-  if (value.availableMinutes) parts.push(`可用 ${formatWorkflowDuration(value.availableMinutes)}`);
-  if (value.startTime && value.endTime) parts.push(`${value.startTime}-${value.endTime}`);
-  else if (value.startTime) parts.push(`${value.startTime} 开始`);
-  if (value.focus) parts.push(`重点：${value.focus}`);
-  if (Array.isArray(value.include) && value.include.length) parts.push(`优先 ${value.include.join('、')}`);
-  if (Array.isArray(value.exclude) && value.exclude.length) parts.push(`暂不安排 ${value.exclude.join('、')}`);
-  if (Array.isArray(value.blockedTimes) && value.blockedTimes.length) parts.push(`占用 ${value.blockedTimes.join('、')}`);
-  return parts.join(' · ') || '已按你的描述生成';
-}
-
-function recalculateWorkflowDraft() {
-  if (!workflowDraft) return;
-  let cursor = workflowDraft.items.length && workflowDraft.items[0].plannedStart
-    ? workflowDraft.items[0].plannedStart.split(':').reduce((total, value, index) => total + Number(value) * (index ? 1 : 60), 0)
-    : 9 * 60;
-  const breakMinutes = Number(workflowState.preferences && workflowState.preferences.shortBreakMinutes) || 5;
-  const blocked = (Array.isArray(workflowDraft.blockedTimes) ? workflowDraft.blockedTimes : [])
-    .map((value) => String(value).match(/^((?:[01]\d|2[0-3]):[0-5]\d)-((?:[01]\d|2[0-3]):[0-5]\d)$/))
-    .filter(Boolean)
-    .map((match) => ({ start: match[1].split(':').map(Number).reduce((h, m) => h * 60 + m), end: match[2].split(':').map(Number).reduce((h, m) => h * 60 + m) }));
-  const skipBlocked = (start, duration) => {
-    let next = start;
-    blocked.forEach((range) => {
-      if (next < range.end && next + duration > range.start) next = range.end;
-    });
-    return next;
-  };
-  workflowDraft.items.forEach((item, index) => {
-    item.order = index;
-    item.plannedMinutes = Math.max(5, Math.min(480, Math.round(Number(item.plannedMinutes) || 30)));
-    cursor = skipBlocked(cursor, item.plannedMinutes);
-    item.plannedStart = `${String(Math.floor(cursor / 60) % 24).padStart(2, '0')}:${String(cursor % 60).padStart(2, '0')}`;
-    cursor += item.plannedMinutes;
-    item.plannedEnd = `${String(Math.floor(cursor / 60) % 24).padStart(2, '0')}:${String(cursor % 60).padStart(2, '0')}`;
-    cursor += breakMinutes;
-  });
-  workflowDraft.scheduledMinutes = workflowDraft.items.reduce((sum, item) => sum + item.plannedMinutes, 0);
-}
-
-async function refreshWorkflow() {
-  if (!window.api.workflow) return;
-  const [workflow, copilot] = await Promise.all([
-    window.api.workflow.get(),
-    window.api.workflow.getCopilot ? window.api.workflow.getCopilot() : Promise.resolve(dailyCopilot)
-  ]);
-  workflowState = workflow;
-  dailyCopilot = copilot;
-  renderDailyCopilot();
-  renderWorkflowPanel();
-}
-
-async function handleWorkflowAction(event) {
-  const actionButton = event.target.closest('[data-workflow]');
-  const minutesInput = event.target.closest('[data-workflow-minutes]');
-  if (minutesInput && workflowDraft) {
-    if (workflowBusy) return false;
-    workflowDraft.items[Number(minutesInput.dataset.workflowMinutes)].plannedMinutes = Number(minutesInput.value);
-    recalculateWorkflowDraft();
-    renderWorkflowPanel();
-    return true;
-  }
-  if (!actionButton || !window.api.workflow) return;
-  if (workflowBusy) return false;
-  const action = actionButton.dataset.workflow;
-  const item = actionButton.closest('.workflow-item');
-  const focusContext = { taskId: item ? item.dataset.planTaskId : null };
-  setWorkflowBusy(true, actionButton, action);
-  let succeeded = false;
-  try {
-    if (action === 'smart-toggle') {
-      workflowSmartMode = true;
-      workflowSmartText = '';
-    } else if (action === 'smart-cancel') {
-      workflowSmartMode = false;
-      workflowSmartText = '';
-    } else if (action === 'smart-preview') {
-      const input = $('#workflow-smart-input');
-      const text = input ? input.value.trim() : workflowSmartText.trim();
-      if (!text) throw new Error('请先填写今天的限制或重点');
-      workflowSmartText = text;
-      workflowSmartMode = true;
-      const result = await window.api.workflow.previewSmartPlan(text, nextAiRequestId());
-      if (!result || result.type === 'error') throw new Error(result && result.message || '智能安排暂时不可用，请稍后重试');
-      workflowDraft = result.plan;
-      workflowDraftMeta = { mode: 'smart', constraints: result.constraints || {} };
-      workflowReview = null;
-      workflowSmartMode = false;
-      workflowSmartText = '';
-      if (result.notice) toast(result.notice, 5000, null, 'warn');
-      if (!workflowDraft.items.length) {
-        const omitted = workflowDraft.omittedCount;
-        workflowDraft = null;
-        workflowDraftMeta = null;
-        workflowSmartMode = true;
-        toast(
-          omitted ? '今天剩余工作时间不足，未安排任务' : '当前没有符合条件的未完成任务',
-          3500,
-          null,
-          'warn'
-        );
-      }
-    } else if (action === 'preview' || action === 'replan') {
-      workflowDraft = await window.api.workflow.previewPlan({});
-      workflowDraftMeta = null;
-      workflowReview = null;
-      workflowSmartMode = false;
-      workflowSmartText = '';
-      if (!workflowDraft.items.length) {
-        toast(
-          workflowDraft.omittedCount ? '今天剩余工作时间不足，未继续安排任务' : '当前没有可安排的未完成任务',
-          3500,
-          null,
-          'warn'
-        );
-      }
-    } else if (action === 'cancel-draft') {
-      workflowDraft = null;
-      workflowDraftMeta = null;
-      workflowSmartMode = false;
-      workflowSmartText = '';
-    } else if (action === 'move-up' || action === 'move-down') {
-      const index = Number(actionButton.dataset.index);
-      const next = action === 'move-up' ? index - 1 : index + 1;
-      if (workflowDraft && next >= 0 && next < workflowDraft.items.length) {
-        [workflowDraft.items[index], workflowDraft.items[next]] = [workflowDraft.items[next], workflowDraft.items[index]];
-        recalculateWorkflowDraft();
-      }
-    } else if (action === 'remove-item') {
-      workflowDraft.items.splice(Number(actionButton.dataset.index), 1);
-      recalculateWorkflowDraft();
-    } else if (action === 'apply-plan') {
-      if (!workflowDraft.items.length) throw new Error('计划中至少保留一项任务');
-      const result = await window.api.workflow.applyPlan(workflowDraft);
-      workflowState = await window.api.workflow.get();
-      workflowDraft = null;
-      workflowDraftMeta = null;
-      toast('今日计划已确认', 5000, [{ label: '撤销', run: async () => {
-        const undone = await window.api.workflow.restorePlan({ date: result.plan.date, expectedRevision: result.plan.revision, previousPlan: result.previousPlan });
-        if (!undone.ok) throw new Error(undone.message);
-        await refreshWorkflow();
-      } }], 'ok');
-    } else if (action === 'start') {
-      workflowState = await window.api.workflow.startFocus(Number(actionButton.dataset.taskId), {});
-      await refreshTasksAfterMutation('任务已开始，但列表刷新失败');
-    } else if (action === 'pause') {
-      workflowState = await window.api.workflow.pauseFocus({});
-    } else if (action === 'resume') {
-      workflowState = await window.api.workflow.resumeFocus({});
-    } else if (action === 'interrupt') {
-      const input = $('#workflow-interrupt-reason');
-      if (!input.value.trim()) throw new Error('请先填写打断原因');
-      workflowState = await window.api.workflow.interrupt(input.value.trim(), {});
-    } else if (action === 'finish' || action === 'complete-focus') {
-      const result = await window.api.workflow.finishFocus({ completeTask: action === 'complete-focus' });
-      workflowState = result.workflow;
-      await refreshTasksAfterMutation(action === 'complete-focus' ? '任务已完成，但列表刷新失败' : '专注已结束，但列表刷新失败');
-      toast(action === 'complete-focus' ? '任务已完成，专注记录已保存' : '专注记录已保存', 3500, null, 'ok');
-    } else if (action === 'review') {
-      workflowReview = await window.api.workflow.getReview(todayWorkflowKey());
-    } else if (action === 'cancel-review') {
-      workflowReview = null;
-    } else if (action === 'save-review') {
-      const note = $('#workflow-review-note')?.value || '';
-      const result = await window.api.workflow.saveReview(todayWorkflowKey(), { note });
-      workflowReview = null;
-      await refreshWorkflow();
-      toast('今日复盘已保存', 5000, [{ label: '撤销', run: async () => {
-        const undone = await window.api.workflow.restorePlan({
-          date: result.plan.date,
-          expectedRevision: result.plan.revision,
-          previousPlan: result.previousPlan
-        });
-        if (!undone.ok) throw new Error(undone.message);
-        await refreshWorkflow();
-      } }], 'ok');
-    }
-    succeeded = true;
-    return true;
-  } catch (error) {
-    toast(error.message || '工作流操作失败，请重试', 4500, null, 'err');
-    return false;
-  } finally {
-    setWorkflowBusy(false, actionButton, action);
-    renderWorkflowPanel();
-    focusWorkflowAfterAction(action, succeeded, focusContext);
-    if (action === 'smart-preview' && succeeded) {
-      setTimeout(() => focusWorkflowAfterAction(action, true, focusContext), 0);
-    }
-  }
-}
-
-function tickWorkflowClock() {
-  const clock = $('#workflow-clock');
-  if (!clock || !workflowState.activeFocus || workflowState.activeFocus.state !== 'running') return;
-  const accumulated = Number(clock.dataset.accumulated) || 0;
-  const started = Number(clock.dataset.started) || Date.now();
-  clock.textContent = formatWorkflowClock(accumulated + Math.max(0, Date.now() - started));
-}
-
 /* ---------- 视图：今日 ---------- */
 function renderToday() {
-  renderDailyCopilot();
-  renderWorkflowPanel();
   const all = tasks.filter((t) => !t._deleted);
   const overdue = all.filter((t) => t.status !== 'done' && t.status !== 'archived' && isOverdue(t.due, t.status));
   const todays = all.filter((t) => t.status !== 'done' && t.status !== 'archived' && isToday(t.due) && !isOverdue(t.due, t.status));
@@ -2323,7 +1724,6 @@ async function refreshMcpStatus() {
 
 function renderSettings() {
   const s = settings;
-  const copilot = workflowState.copilot || { enabled: true, quietStart: '20:00', quietEnd: '08:00' };
   const sw = (key, label, desc) => `
     <div class="set-row">
       <div><div class="sr-t">${label}</div><div class="sr-d">${desc}</div></div>
@@ -2407,18 +1807,6 @@ function renderSettings() {
   <!-- AI 接入配置 -->
   <section class="set-group" id="settings-assistant" tabindex="-1" aria-labelledby="settings-assistant-title">
     <h3 class="set-group-title" id="settings-assistant-title">助手接入</h3>
-    <div class="set-row">
-      <div><div class="sr-t">主动工作建议</div><div class="sr-d">只在今日页展示一条建议；所有修改仍需点击确认</div></div>
-      <button type="button" class="switch ${copilot.enabled !== false ? 'on' : ''}" id="copilot-enabled" role="switch" aria-checked="${copilot.enabled !== false}" aria-label="主动工作建议" data-settings-scope="copilot"></button>
-    </div>
-    <div class="set-row copilot-settings-row">
-      <div><div class="sr-t">安静时段</div><div class="sr-d" id="copilot-quiet-desc">这段时间不主动显示晨间简报或工作建议</div></div>
-      <div class="quiet-time-controls" aria-describedby="copilot-quiet-desc">
-        <label><span>开始</span><input id="copilot-quiet-start" type="time" value="${esc(copilot.quietStart || '20:00')}" data-settings-scope="copilot"></label>
-        <label><span>结束</span><input id="copilot-quiet-end" type="time" value="${esc(copilot.quietEnd || '08:00')}" data-settings-scope="copilot"></label>
-        <button type="button" class="btn mini ghost" id="btn-copilot-save" data-settings-scope="copilot">保存</button>
-      </div>
-    </div>
     <div class="set-row">
       <div><div class="sr-t">AI 助手引擎</div><div class="sr-d">本地助手无需配置；真实模型负责理解意图，任务操作仍由本地执行</div></div>
       <div class="seg" id="ai-stage-seg" role="radiogroup" aria-label="AI 助手引擎">
@@ -2639,43 +2027,6 @@ function bindSettingsEvents() {
     }, { passive: true });
   }
   syncSettingsNavFromScroll();
-
-  $('#copilot-enabled')?.addEventListener('click', async (event) => {
-    const control = event.currentTarget;
-    const previous = control.classList.contains('on');
-    const enabled = !previous;
-    control.disabled = true;
-    control.setAttribute('aria-busy', 'true');
-    try {
-      dailyCopilot = await window.api.workflow.updateCopilot({ action: 'preferences', enabled });
-      workflowState.copilot = dailyCopilot.preferences;
-      control.classList.toggle('on', enabled);
-      control.setAttribute('aria-checked', String(enabled));
-      renderDailyCopilot();
-      toast(enabled ? '已开启主动工作建议' : '已关闭主动工作建议');
-    } catch (error) {
-      control.classList.toggle('on', previous);
-      control.setAttribute('aria-checked', String(previous));
-      toast('主动建议设置保存失败', 3500, null, 'err');
-    } finally {
-      control.disabled = false;
-      control.setAttribute('aria-busy', 'false');
-    }
-  });
-
-  $('#btn-copilot-save')?.addEventListener('click', () => {
-    const button = $('#btn-copilot-save');
-    runSettingsAction(button, '保存中…', async () => {
-      const quietStart = $('#copilot-quiet-start').value;
-      const quietEnd = $('#copilot-quiet-end').value;
-      if (!quietStart || !quietEnd || quietStart === quietEnd) throw new Error('安静时段的开始和结束时间不能相同');
-      dailyCopilot = await window.api.workflow.updateCopilot({ action: 'preferences', quietStart, quietEnd });
-      workflowState.copilot = dailyCopilot.preferences;
-      renderDailyCopilot();
-      toast(`安静时段已设为 ${quietStart}-${quietEnd}`);
-      return true;
-    }, '安静时段保存失败，请检查时间', 'copilot');
-  });
 
   // 工作时间保存
   $('#btn-wh-save')?.addEventListener('click', () => {
@@ -3972,7 +3323,6 @@ function openModal(task) {
   };
   editingTask = task || null;
   $('#modal-title').textContent = task ? '编辑任务' : '新建任务';
-  $('#m-agent').classList.toggle('hidden', !task);
   $('#m-title').value = task ? task.title : '';
   $('#m-desc').value = task ? task.desc || '' : '';
   $('#m-pri').value = task ? String(task.pri) : '2';
@@ -4436,7 +3786,7 @@ function opCard(result) {
           undo.remove();
           return;
         }
-        await Promise.all([refreshTasks(), refreshMemos(), refreshWorkflow()]);
+        await Promise.all([refreshTasks(), refreshMemos()]);
         toast('已撤销');
         card.remove();
       } catch (e) {
@@ -5022,7 +4372,7 @@ async function runAiTurn(request, retry, options) {
     }
 
     try {
-      const operationTypes = ['create', 'memo_create', 'memo_delete', 'memo_pin', 'memo_to_task', 'memo_split', 'complete', 'start', 'delete', 'archive', 'split', 'update', 'child', 'postpone', 'restore', 'plan', 'daily_plan', 'daily_replan', 'focus_start', 'focus_pause', 'focus_resume', 'focus_interrupt', 'focus_finish', 'daily_review'];
+      const operationTypes = ['create', 'memo_create', 'memo_delete', 'memo_pin', 'memo_to_task', 'memo_split', 'complete', 'start', 'delete', 'archive', 'split', 'update', 'child', 'postpone', 'restore', 'plan'];
       const reportTypes = ['report'];
       pending.classList.remove('pending', 'error');
       settleAiReasoningBlock(pending);
@@ -5054,7 +4404,6 @@ async function runAiTurn(request, retry, options) {
       if (operationTypes.includes(result.type)) pending.appendChild(opCard(result));
       if (reportTypes.includes(result.type)) pending.appendChild(reportCard(result));
       if (String(result.type).startsWith('memo_') || result.type === 'plan') await refreshMemos();
-      if (operationTypes.includes(result.type)) await refreshWorkflow();
 
       appendAssistantTurnControls(pending, result, retry, options && options.draft);
     } catch (e) {
@@ -5264,7 +4613,6 @@ function bindEvents() {
   });
   // 导航
   $$('.nav-item').forEach((n) => n.addEventListener('click', () => switchView(n.dataset.view)));
-  $('#daily-copilot').addEventListener('click', handleDailyCopilotAction);
   $('#sidebar-new').addEventListener('click', () => {
     switchView('tasks');
     openModal(null);
@@ -5286,11 +4634,6 @@ function bindEvents() {
   });
 
   // 任务列表点击（事件委托）
-  $('#workflow-panel').addEventListener('click', handleWorkflowAction);
-  $('#workflow-panel').addEventListener('change', handleWorkflowAction);
-  $('#workflow-panel').addEventListener('input', (event) => {
-    if (event.target && event.target.id === 'workflow-smart-input') workflowSmartText = event.target.value;
-  });
   $('#today-list').addEventListener('click', onTaskClick);
   $('#tasks-list').addEventListener('click', onTaskClick);
   $('#cal-body').addEventListener('click', onCalClick);
@@ -5884,9 +5227,6 @@ function bindEvents() {
   // 弹窗
   $('#m-cancel').addEventListener('click', requestCloseModal);
   $('#m-close').addEventListener('click', requestCloseModal);
-  $('#m-agent').addEventListener('click', (event) => {
-    if (editingTask) openTaskAgent(editingTask, event.currentTarget);
-  });
   $('#task-form').addEventListener('submit', saveModal);
   $('#m-title').addEventListener('input', () => {
     if ($('#m-title').value.trim()) setTitleError('');
@@ -5930,11 +5270,6 @@ function bindEvents() {
       busyLabel: '打开中…',
       run: () => openReminderTask(data)
     }], 'warn');
-  });
-  window.api.on('workflow:changed', (state) => {
-    workflowState = state || workflowState;
-    renderWorkflowPanel();
-    refreshDailyCopilot();
   });
   // 任务对话小窗、MCP 等外部入口修改任务后，主窗口同步刷新列表与编辑弹窗
   window.api.on('tasks:changed', async () => {
@@ -6148,21 +5483,6 @@ async function loadTrash() {
   list.setAttribute('aria-busy', 'false');
 }
 
-// 任务 Agent 已升级为独立悬浮对话小窗（task-agent:open），主窗口只负责唤起
-function openTaskAgent(task, trigger, options) {
-  if (!task || task.status === 'archived') return;
-  closeTaskMenus(false);
-  const workLog = options && options.workLog || null;
-  window.api.taskAgent.open({
-    taskId: task.id,
-    title: workLog ? `编辑记录 · ${task.title}` : task.title,
-    draft: workLog ? workLog.text : String(options && options.draft || ''),
-    workLogId: workLog && workLog.id || '',
-    workLogKind: workLog && workLog.kind || ''
-  }).catch(() => toast('打开任务对话失败'));
-  if (trigger && trigger.isConnected) trigger.focus({ preventScroll: true });
-}
-
 async function onTaskClick(e) {
   // 顺延按钮
   const postponeBtn = e.target.closest('[data-postpone]');
@@ -6182,41 +5502,6 @@ async function onTaskClick(e) {
   const selectionRow = e.target.closest('.task-row');
   if (batchMode && currentView === 'tasks' && selectionRow) {
     toggleSelect(parseInt(selectionRow.dataset.id, 10));
-    return;
-  }
-  const workLogAdd = e.target.closest('[data-worklog-add]');
-  if (workLogAdd) {
-    const task = tasks.find((item) => item.id === Number(workLogAdd.dataset.worklogAdd));
-    if (task) openTaskAgent(task, workLogAdd, { draft: '进展：' });
-    return;
-  }
-  const workLogEdit = e.target.closest('[data-worklog-edit]');
-  if (workLogEdit) {
-    const row = workLogEdit.closest('.task-row');
-    const task = tasks.find((item) => item.id === Number(row && row.dataset.id));
-    const log = task && (task.workLogs || []).find((item) => item.id === workLogEdit.dataset.worklogEdit);
-    if (task && log) openTaskAgent(task, workLogEdit, { workLog: log });
-    return;
-  }
-  const workLogRemove = e.target.closest('[data-worklog-remove]');
-  if (workLogRemove) {
-    const row = workLogRemove.closest('.task-row');
-    const task = tasks.find((item) => item.id === Number(row && row.dataset.id));
-    const log = task && (task.workLogs || []).find((item) => item.id === workLogRemove.dataset.worklogRemove);
-    if (task && log) confirmDialog(`删除这条${WORK_LOG_NAME[log.kind] || '工作'}记录吗？`, async () => {
-      await window.api.tasks.removeWorkLog(task.id, log.id);
-      await refreshTasksAfterMutation('工作记录已删除，但列表刷新失败');
-      expandedIds.add('d' + task.id);
-      renderAll();
-      return { focusTarget: `.task-row[data-id="${task.id}"] [data-worklog-add]` };
-    }, '删除');
-    return;
-  }
-  const agentButton = e.target.closest('.task-agent-btn');
-  if (agentButton) {
-    const row = agentButton.closest('.task-row');
-    const task = tasks.find((item) => item.id === parseInt(row.dataset.id, 10));
-    if (task) openTaskAgent(task, agentButton);
     return;
   }
   const more = e.target.closest('.task-more');
@@ -6546,29 +5831,17 @@ async function toggleDone(t) {
   }
   // 使用 completeTask：重复任务自动生成下一次
   const res = await window.api.tasks.complete(t.id);
-  let markOutcomeReady;
-  const outcomeReady = new Promise((resolve) => { markOutcomeReady = resolve; });
   const message = res.next
     ? `「${t.title}」已完成，已自动安排下一次（${res.next.due}）`
     : `已完成「${t.title}」`;
-  toast(message, 7000, [{
-    label: '记录成果',
-    run: async () => {
-      await outcomeReady;
-      openCompletionOutcome(t.id);
-    }
-  }], 'ok');
+  toast(message, 7000, [], 'ok');
   // 完成动画：找到对应行添加动画类
-  try {
-    const row = document.querySelector(`.task-row[data-id="${t.id}"]`);
-    if (row) {
-      row.classList.add('just-done');
-      await motionDelay(MOTION_MS.base);
-    }
-    await refreshTasksAfterMutation('任务已完成，但列表刷新失败');
-  } finally {
-    markOutcomeReady();
+  const row = document.querySelector(`.task-row[data-id="${t.id}"]`);
+  if (row) {
+    row.classList.add('just-done');
+    await motionDelay(MOTION_MS.base);
   }
+  await refreshTasksAfterMutation('任务已完成，但列表刷新失败');
 }
 
 function taskMatchesFilter(t) {
@@ -6593,23 +5866,6 @@ function taskMatchesFilter(t) {
   if (currentFilter.startsWith('proj:')) return (t.project || '') === currentFilter.slice(5);
   if (currentFilter.startsWith('tag:')) return (t.tags || []).includes(currentFilter.slice(4));
   return true;
-}
-
-function openCompletionOutcome(taskId) {
-  const task = tasks.find((item) => item.id === Number(taskId) && !item._deleted);
-  if (!task) throw new Error('已完成的任务暂时无法打开');
-  // 保持上下文：刚完成的任务在「已完成」筛选下可见，避免跳到所有任务
-  const visibleNow = tasks.some((item) => item.id === Number(taskId) && !item._deleted && taskMatchesFilter(item));
-  if (!visibleNow) currentFilter = task.status === 'done' ? 'done' : 'all';
-  currentSearch = '';
-  const search = $('#search-input');
-  if (search) search.value = '';
-  expandedIds.add('d' + task.id);
-  if (currentView === 'tasks') renderTasks();
-  else switchView('tasks');
-  const trigger = document.querySelector(`.task-row[data-id="${task.id}"] [data-worklog-add]`);
-  if (!trigger) throw new Error('任务记录入口暂时不可用');
-  openTaskAgent(task, trigger, { draft: '成果：' });
 }
 
 async function postponeTask(id, days) {
@@ -6711,15 +5967,13 @@ async function init() {
   document.body.setAttribute('aria-busy', 'true');
   $('#ai-chat').setAttribute('aria-busy', 'true');
   try {
-    const [settingsResult, tasksResult, memosResult, taskTrashResult, memoTrashResult, dirResult, workflowResult, copilotResult] = await Promise.allSettled([
+    const [settingsResult, tasksResult, memosResult, taskTrashResult, memoTrashResult, dirResult] = await Promise.allSettled([
       window.api.settings.get(),
       window.api.tasks.getAll(),
       window.api.memos.getAll(),
       window.api.tasks.getDeleted(),
       window.api.memos.getDeleted(),
-      window.api.data.getDir(),
-      window.api.workflow ? window.api.workflow.get() : Promise.resolve(workflowState),
-      window.api.workflow && window.api.workflow.getCopilot ? window.api.workflow.getCopilot() : Promise.resolve(null)
+      window.api.data.getDir()
     ]);
 
     settings = settingsResult.status === 'fulfilled'
@@ -6730,8 +5984,6 @@ async function init() {
     trashList = taskTrashResult.status === 'fulfilled' ? taskTrashResult.value : [];
     deletedMemos = memoTrashResult.status === 'fulfilled' ? memoTrashResult.value : [];
     settings.dataDir = dirResult.status === 'fulfilled' ? dirResult.value : '暂时无法读取';
-    workflowState = workflowResult.status === 'fulfilled' ? workflowResult.value : workflowState;
-    dailyCopilot = copilotResult.status === 'fulfilled' ? copilotResult.value : null;
     dataLoadErrors.tasks = tasksResult.status === 'rejected' ? tasksResult.reason : null;
     dataLoadErrors.memos = memosResult.status === 'rejected' ? memosResult.reason : null;
 
@@ -6742,8 +5994,6 @@ async function init() {
     }
     renderAll();
     applyAiPanelMode();
-    clearInterval(workflowTickTimer);
-    workflowTickTimer = setInterval(tickWorkflowClock, 1000);
     updateAiBadge();
     await loadChatHistory();
 

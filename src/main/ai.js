@@ -11,7 +11,6 @@ const store = require('./store');
 const { MODEL_CONTRACT_VERSION, normalizeModelResponse } = require('./agent/model-contract');
 const { normalizeReportModelResponse, reportToMarkdown } = require('./agent/report-contract');
 const { serializeWorkspaceSnapshot } = require('./agent/context');
-const { normalizeBlockedTimes } = require('./workflow-planner');
 const { decideModelAction, decideFallbackAction } = require('./agent/decision');
 const { TOOL_DEFINITIONS, getToolDefinition, createToolRegistry } = require('./agent/tool-registry');
 const { routeSemanticInput, reconcileModelRoute } = require('./agent/semantic-router');
@@ -42,7 +41,7 @@ const CROSS_TYPE_INTENTS = {
 };
 
 /* ---------- 意图定义 ---------- */
-const INTENTS = ['create', 'memo_create', 'memo_query', 'memo_delete', 'memo_pin', 'memo_to_task', 'memo_split', 'query', 'complete', 'start', 'delete', 'archive', 'split', 'suggest', 'summary', 'stats', 'report', 'batch', 'update', 'child', 'postpone', 'restore', 'daily_plan', 'daily_replan', 'focus_start', 'focus_pause', 'focus_resume', 'focus_interrupt', 'focus_finish', 'daily_review', 'chat', 'unknown'];
+const INTENTS = ['create', 'memo_create', 'memo_query', 'memo_delete', 'memo_pin', 'memo_to_task', 'memo_split', 'query', 'complete', 'start', 'delete', 'archive', 'split', 'suggest', 'summary', 'stats', 'report', 'batch', 'update', 'child', 'postpone', 'restore', 'chat', 'unknown'];
 
 /* ---------- 优先级词 ---------- */
 const PRI_WORDS = {
@@ -939,14 +938,6 @@ const toolRegistry = createToolRegistry({
   postpone: doPostpone,
   restore: doRestore,
   plan: doPlan,
-  daily_plan: doDailyPlan,
-  daily_replan: doDailyReplan,
-  focus_start: doFocusStart,
-  focus_pause: doFocusPause,
-  focus_resume: doFocusResume,
-  focus_interrupt: doFocusInterrupt,
-  focus_finish: doFocusFinish,
-  daily_review: doDailyReview,
   greeting: doGreeting,
   thanks: () => ({ type: 'info', message: '不客气。需要继续时，直接告诉我下一步。' }),
   chat: doChat
@@ -1374,297 +1365,6 @@ function doPlan(params) {
     message: `已按计划完成 ${operations.length} 项操作：\n${operations.map((result) => `· ${result.message}`).join('\n')}`,
     undoable: true,
     undo: { action: 'restoreAgentTransaction', transactionId: transaction.transactionId }
-  };
-}
-
-function dailyPlanLines(plan) {
-  return (plan.items || []).map((item, index) =>
-    `${index + 1}. ${item.plannedStart}-${item.plannedEnd} ${item.title}（${item.plannedMinutes} 分钟）\n   ${item.reason}${item.partial ? '，本次先推进一部分' : ''}`
-  );
-}
-
-function dailyPlanPreviewMessage(plan, intro) {
-  const lines = dailyPlanLines(plan);
-  if (!lines.length) {
-    return plan.omittedCount
-      ? '今天剩余的工作时间不足，未再安排新任务。你可以调整工作时间，或改为安排明天。'
-      : '当前没有可安排的未完成任务。先创建任务后，我再帮你生成今日计划。';
-  }
-  const omitted = plan.omittedCount ? `\n另有 ${plan.omittedCount} 项没有塞进今天，避免计划过载。` : '';
-  return `${intro}\n${lines.join('\n')}${omitted}\n\n合计 ${plan.scheduledMinutes}/${plan.capacityMinutes} 分钟。确认后才会保存。`;
-}
-
-function planOptionsFromParams(params) {
-  const source = params && typeof params === 'object' ? params : {};
-  return {
-    availableMinutes: source.availableMinutes,
-    startTime: source.startTime,
-    endTime: source.endTime,
-    focus: source.focus,
-    include: Array.isArray(source.include) ? source.include : [],
-    exclude: Array.isArray(source.exclude) ? source.exclude : [],
-    blockedTimes: normalizeBlockedTimes(source.blockedTimes).map((range) => range.label)
-  };
-}
-
-function naturalHour(value) {
-  const text = String(value || '').trim();
-  if (/^\d{1,2}$/.test(text)) return Number(text);
-  const values = { 一: 1, 二: 2, 两: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9, 十: 10, 十一: 11, 十二: 12 };
-  return values[text];
-}
-
-function periodHour(period, hour) {
-  if (!Number.isFinite(hour) || hour < 0 || hour > 23) return undefined;
-  if (/(下午|晚上|傍晚|夜里)/.test(period || '') && hour < 12) return hour + 12;
-  if (/(凌晨|早上)/.test(period || '') && hour === 12) return 0;
-  return hour;
-}
-
-function parsePlanTimeWindow(text) {
-  const raw = String(text || '');
-  const token = '[一二两三四五六七八九十]{1,2}|\\d{1,2}';
-  const match = raw.match(new RegExp(`(凌晨|早上|上午|中午|下午|晚上|傍晚|夜里)?\\s*(${token})\\s*点(半)?\\s*(?:到|至|[-~])\\s*(凌晨|早上|上午|中午|下午|晚上|傍晚|夜里)?\\s*(${token})\\s*点(半)?`));
-  if (!match) return null;
-  const startPeriod = match[1] || '';
-  const endPeriod = match[4] || startPeriod;
-  const startHour = periodHour(startPeriod, naturalHour(match[2]));
-  const endHour = periodHour(endPeriod, naturalHour(match[5]));
-  if (!Number.isFinite(startHour) || !Number.isFinite(endHour)) return null;
-  const startMinutes = startHour * 60 + (match[3] ? 30 : 0);
-  const endMinutes = endHour * 60 + (match[6] ? 30 : 0);
-  if (endMinutes <= startMinutes) return null;
-  const format = (minutes) => `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`;
-  return { startTime: format(startMinutes), endTime: format(endMinutes), availableMinutes: endMinutes - startMinutes };
-}
-
-function localPlanPreviewParams(text) {
-  const raw = String(text || '').trim();
-  const parsed = parse(`安排今天的工作：${raw}`);
-  const params = Object.assign({}, parsed.params || {});
-  const timeWindow = parsePlanTimeWindow(raw);
-  if (timeWindow) Object.assign(params, timeWindow);
-  const start = raw.match(/(?:从|于|在)\s*((?:[01]\d|2[0-3])[:：][0-5]\d|(?:上午|下午|晚上)?\s*\d{1,2}\s*点(?:半)?)/);
-  if (start && !timeWindow) {
-    const value = start[1].replace(/\s+/g, '');
-    const hourMatch = value.match(/(上午|下午|晚上)?(\d{1,2})点(半)?/);
-    if (hourMatch) {
-      let hour = Number(hourMatch[2]);
-      if (/(下午|晚上)/.test(hourMatch[1] || '') && hour < 12) hour += 12;
-      params.startTime = `${String(hour).padStart(2, '0')}:${hourMatch[3] ? '30' : '00'}`;
-    } else {
-      params.startTime = value.replace('：', ':');
-    }
-  }
-  const blocked = [...raw.matchAll(/((?:[01]\d|2[0-3])[:：][0-5]\d)\s*[-~至到]\s*((?:[01]\d|2[0-3])[:：][0-5]\d)/g)]
-    .map((match) => `${match[1].replace('：', ':')}-${match[2].replace('：', ':')}`);
-  if (blocked.length) params.blockedTimes = blocked;
-  const excluded = raw.match(/(?:先不安排|暂不安排|不要排|不安排)\s*([^，。；;]+)/);
-  if (excluded) params.exclude = excluded[1].split(/[、,，\s]+/).map((value) => value.trim()).filter(Boolean);
-  if (!params.focus && raw) {
-    const focusMatch = raw.match(/(?:先做|优先(?:做|处理)?|重点(?:是|做)?)([^，。；;]+)/);
-    params.focus = (focusMatch ? focusMatch[1] : raw).trim().slice(0, 160);
-  }
-  return { intent: parsed.intent, params };
-}
-
-async function previewDailyPlan(text, requestContext) {
-  const raw = String(text || '').trim();
-  if (!raw) return { intent: 'daily_plan', type: 'error', message: '请先说说今天的限制或优先方向。' };
-  const settings = store.getSettings();
-  let parsed;
-  let notice = '';
-  if (settings.aiStage === 'llm' && isLLMConfigured()) {
-    try {
-      parsed = await parseWithLLM(raw, false, requestContext, {
-        expectedIntent: 'daily_plan',
-        contextEntityType: 'workflow',
-        localResult: localPlanPreviewParams(raw)
-      });
-    } catch (error) {
-      if (isRequestCancelled(error, requestContext)) throw error;
-      console.warn('[ai] 智能安排模型解析失败，使用本地计划器:', error.message);
-      parsed = localPlanPreviewParams(raw);
-      notice = `${modelFailureNotice(error)}，已使用本地计划器生成草案。`;
-    }
-  } else {
-    parsed = localPlanPreviewParams(raw);
-  }
-  if (!parsed || !['daily_plan', 'daily_replan'].includes(parsed.intent)) {
-    return { intent: parsed && parsed.intent || 'daily_plan', type: 'error', message: '这句话里的安排条件还不够明确，请补充可用时间或优先方向。' };
-  }
-  const options = planOptionsFromParams(parsed.params);
-  const plan = store.previewDailyPlan(options);
-  const constraints = {
-    availableMinutes: options.availableMinutes || plan.capacityMinutes,
-    startTime: options.startTime || '',
-    endTime: options.endTime || '',
-    focus: String(options.focus || '').trim(),
-    include: options.include,
-    exclude: options.exclude,
-    blockedTimes: options.blockedTimes
-  };
-  const intro = parsed.intent === 'daily_replan'
-    ? '我按你刚补充的限制重新排了这版今日计划：'
-    : '我按你给的限制排了这版今日计划：';
-  return {
-    intent: parsed.intent,
-    type: 'daily_plan_preview',
-    plan,
-    constraints,
-    notice,
-    message: dailyPlanPreviewMessage(plan, intro)
-  };
-}
-
-function applyDailyPlanFromAgent(intent, params, intro) {
-  const draft = params.plan || store.previewDailyPlan(planOptionsFromParams(params));
-  if (!draft.items.length) return { type: 'info', message: dailyPlanPreviewMessage(draft, intro) };
-  if (!params.confirmed) {
-    return confirmation(
-      intent,
-      Object.assign({}, params, { plan: draft }),
-      dailyPlanPreviewMessage(draft, intro),
-      `${draft.items.length} 项，${draft.scheduledMinutes} 分钟`
-    );
-  }
-  const applied = store.applyDailyPlan(draft);
-  return {
-    type: intent,
-    plan: applied.plan,
-    message: `今日计划已保存，共 ${applied.plan.items.length} 项、${applied.plan.scheduledMinutes} 分钟。可以说“开始下一项”进入专注。`,
-    undoable: true,
-    undo: {
-      action: 'restoreDailyPlan',
-      date: applied.plan.date,
-      expectedRevision: applied.plan.revision,
-      previousPlan: applied.previousPlan
-    }
-  };
-}
-
-function doDailyPlan(params) {
-  return applyDailyPlanFromAgent('daily_plan', params, '我按进行状态、截止时间、优先级和预计用时排了这版今日计划：');
-}
-
-function doDailyReplan(params) {
-  const reason = String(params.reason || '').trim();
-  const intro = reason
-    ? `计划需要调整：${reason}\n我按剩余任务和当前可用时间重新排了：`
-    : '我按剩余任务和当前可用时间重新排了今日计划：';
-  return applyDailyPlanFromAgent('daily_replan', params, intro);
-}
-
-function nextPlannedTask() {
-  const workflow = store.getWorkflowState();
-  const today = currentDateKey();
-  const plan = workflow.dailyPlans && workflow.dailyPlans[today];
-  if (!plan) return null;
-  for (const item of plan.items || []) {
-    if (!['planned', 'paused'].includes(item.status)) continue;
-    const task = store.getTask(item.taskId);
-    if (task && ['todo', 'doing'].includes(task.status)) return { task, item };
-  }
-  return null;
-}
-
-function doFocusStart(params) {
-  let task = null;
-  let planned = null;
-  if (params.taskId || params.target) {
-    const hits = matchTasks(params.target, params.taskId).filter((item) => ['todo', 'doing'].includes(item.status));
-    if (!hits.length) return taskNotFound(params);
-    if (hits.length > 1) return { type: 'ask', message: '你想专注哪一项？', candidates: hits.map(toCandidate) };
-    task = hits[0];
-  } else {
-    planned = nextPlannedTask();
-    task = planned && planned.task;
-  }
-  if (!task) return clarification('focus_start', params, 'target', '今天的计划里没有下一项。你想专注哪个任务？');
-  const workflow = store.startFocus(task.id, {
-    targetMinutes: params.targetMinutes || planned && planned.item.plannedMinutes
-  });
-  const focus = workflow.activeFocus;
-  return {
-    type: 'focus_start', task, workflow,
-    message: `已开始专注「${task.title}」，目标 ${focus.targetMinutes} 分钟。计时会在主界面和桌宠同步。`
-  };
-}
-
-function doFocusPause(params) {
-  const current = store.getWorkflowState().activeFocus;
-  if (!current) return { type: 'info', message: '当前没有进行中的专注。' };
-  if (current.state === 'paused') return { type: 'info', message: `「${current.title}」已经暂停。` };
-  const workflow = store.pauseFocus({ reason: params.reason });
-  return { type: 'focus_pause', workflow, message: `已暂停「${current.title}」，进度已保存。` };
-}
-
-function doFocusResume() {
-  const current = store.getWorkflowState().activeFocus;
-  if (!current) return { type: 'info', message: '当前没有可继续的专注。' };
-  if (current.state === 'running') return { type: 'info', message: `「${current.title}」正在计时。` };
-  const workflow = store.resumeFocus();
-  return { type: 'focus_resume', workflow, message: `已继续专注「${current.title}」。` };
-}
-
-function doFocusInterrupt(params) {
-  const current = store.getWorkflowState().activeFocus;
-  if (!current) return { type: 'info', message: '当前没有进行中的专注，暂时无需记录打断。' };
-  if (!String(params.reason || '').trim()) {
-    return clarification('focus_interrupt', params, 'reason', '是什么打断了你？简单记一句，我会暂停计时并保留原因。');
-  }
-  const workflow = store.recordInterruption(params.reason);
-  return { type: 'focus_interrupt', workflow, message: `已记录打断“${params.reason}”，并暂停「${current.title}」。` };
-}
-
-function doFocusFinish(params) {
-  const current = store.getWorkflowState().activeFocus;
-  if (!current) return { type: 'info', message: '当前没有进行中的专注。' };
-  const result = store.finishFocus({ completeTask: !!params.completeTask });
-  const minutes = Math.max(1, Math.round(result.session.focusedMs / 60000));
-  return {
-    type: 'focus_finish',
-    task: result.completion && result.completion.task || store.getTask(current.taskId),
-    workflow: result.workflow,
-    session: result.session,
-    message: params.completeTask
-      ? `已结束专注并完成「${current.title}」，本次专注 ${minutes} 分钟。`
-      : `已结束「${current.title}」的本次专注，共 ${minutes} 分钟；任务仍保留为未完成。`
-  };
-}
-
-function dailyReviewMessage(review) {
-  const unfinished = review.unfinished.length
-    ? `\n未完成：${review.unfinished.map((item) => item.title).join('、')}`
-    : '\n今日计划已全部完成。';
-  return `今日计划完成 ${review.completedCount}/${review.plannedCount} 项（${review.completionRate}%），专注 ${review.focusedMinutes} 分钟，记录 ${review.interruptionCount} 次打断。${unfinished}\n建议：${review.suggestion}`;
-}
-
-function doDailyReview(params) {
-  const activeFocus = store.getWorkflowState().activeFocus;
-  if (activeFocus) return { type: 'info', message: `还在专注「${activeFocus.title}」。先结束本次专注，再复盘今天。` };
-  const review = params.review || store.getDailyReview(currentDateKey());
-  if (!review.plannedCount) return { type: 'info', message: '今天还没有已保存的计划，暂时没有可复盘的数据。' };
-  if (!params.confirmed) {
-    return confirmation(
-      'daily_review',
-      Object.assign({}, params, { review }),
-      `${dailyReviewMessage(review)}\n\n确认后会把今天标记为已复盘。`,
-      `完成率 ${review.completionRate}%`
-    );
-  }
-  const saved = store.saveDailyReview(review.date, { note: params.note });
-  return {
-    type: 'daily_review',
-    review: saved.review,
-    message: `${dailyReviewMessage(saved.review)}\n今日复盘已保存。`,
-    undoable: true,
-    undo: {
-      action: 'restoreDailyPlan',
-      date: saved.plan.date,
-      expectedRevision: saved.plan.revision,
-      previousPlan: saved.previousPlan
-    }
   };
 }
 
@@ -2271,19 +1971,24 @@ function visibleReportSnapshot(snapshot, preferences) {
     copy.summary[key].sourceIds = copy.summary[key].sourceIds.filter((id) => !excluded.has(id));
     copy.summary[key].count = copy.summary[key].sourceIds.length;
   });
-  const planIds = copy.summary.planExecution.sourceIds.filter((id) => !excluded.has(id));
-  copy.summary.planExecution.sourceIds = planIds;
-  copy.summary.planExecution.plannedCount = planIds.length;
-  copy.summary.planExecution.completedCount = planIds.filter((id) => sourceMap.get(id)?.status === 'done').length;
-  copy.summary.planExecution.skippedCount = planIds.filter((id) => sourceMap.get(id)?.status === 'skipped').length;
-  copy.summary.planExecution.completionRate = planIds.length
-    ? Math.round(copy.summary.planExecution.completedCount / planIds.length * 100) : 0;
-  copy.summary.planExecution.scheduledMinutes = planIds.reduce((sum, id) => sum + Number(sourceMap.get(id)?.plannedMinutes || 0), 0);
-  const focusIds = copy.summary.focus.sourceIds.filter((id) => !excluded.has(id));
-  copy.summary.focus.sourceIds = focusIds;
-  copy.summary.focus.sessionCount = focusIds.length;
-  copy.summary.focus.focusedMinutes = focusIds.reduce((sum, id) => sum + Number(sourceMap.get(id)?.focusedMinutes || 0), 0);
-  copy.summary.focus.interruptionCount = focusIds.reduce((sum, id) => sum + Number(sourceMap.get(id)?.interruptionCount || 0), 0);
+  // 阶段 1 已下线工作流规划与专注，快照可能不含 planExecution/focus；保留兼容旧快照的读取。
+  if (copy.summary.planExecution) {
+    const planIds = copy.summary.planExecution.sourceIds.filter((id) => !excluded.has(id));
+    copy.summary.planExecution.sourceIds = planIds;
+    copy.summary.planExecution.plannedCount = planIds.length;
+    copy.summary.planExecution.completedCount = planIds.filter((id) => sourceMap.get(id)?.status === 'done').length;
+    copy.summary.planExecution.skippedCount = planIds.filter((id) => sourceMap.get(id)?.status === 'skipped').length;
+    copy.summary.planExecution.completionRate = planIds.length
+      ? Math.round(copy.summary.planExecution.completedCount / planIds.length * 100) : 0;
+    copy.summary.planExecution.scheduledMinutes = planIds.reduce((sum, id) => sum + Number(sourceMap.get(id)?.plannedMinutes || 0), 0);
+  }
+  if (copy.summary.focus) {
+    const focusIds = copy.summary.focus.sourceIds.filter((id) => !excluded.has(id));
+    copy.summary.focus.sourceIds = focusIds;
+    copy.summary.focus.sessionCount = focusIds.length;
+    copy.summary.focus.focusedMinutes = focusIds.reduce((sum, id) => sum + Number(sourceMap.get(id)?.focusedMinutes || 0), 0);
+    copy.summary.focus.interruptionCount = focusIds.reduce((sum, id) => sum + Number(sourceMap.get(id)?.interruptionCount || 0), 0);
+  }
   if (copy.summary.workLogs) {
     const workLogIds = copy.summary.workLogs.sourceIds.filter((id) => !excluded.has(id));
     copy.summary.workLogs.sourceIds = workLogIds;
@@ -2364,13 +2069,13 @@ function localStructuredReport(snapshot, preferences) {
     ...snapshot.summary.completed.sourceIds,
     ...snapshot.summary.active.sourceIds,
     ...snapshot.summary.overdueRisks.sourceIds,
-    ...snapshot.summary.planExecution.sourceIds,
-    ...snapshot.summary.focus.sourceIds,
+    ...(snapshot.summary.planExecution?.sourceIds || []),
+    ...(snapshot.summary.focus?.sourceIds || []),
     ...(snapshot.summary.workLogs?.sourceIds || []),
     ...(snapshot.summary.memos?.sourceIds || [])
   ])].slice(0, 12);
   const overview = [{
-    text: `本期完成 ${snapshot.summary.completed.count} 项${outcomeRecordCount ? `，记录 ${outcomeRecordCount} 项明确成果` : ''}，当前推进 ${snapshot.summary.active.count} 项${snapshot.summary.overdueRisks.count ? `，另有 ${snapshot.summary.overdueRisks.count} 项逾期风险` : ''}。${snapshot.summary.focus.focusedMinutes ? `记录专注 ${snapshot.summary.focus.focusedMinutes} 分钟。` : ''}${memoRecordCount ? `本期另有 ${memoRecordCount} 条备忘作为背景依据。` : ''}`,
+    text: `本期完成 ${snapshot.summary.completed.count} 项${outcomeRecordCount ? `，记录 ${outcomeRecordCount} 项明确成果` : ''}，当前推进 ${snapshot.summary.active.count} 项${snapshot.summary.overdueRisks.count ? `，另有 ${snapshot.summary.overdueRisks.count} 项逾期风险` : ''}。${snapshot.summary.focus?.focusedMinutes ? `记录专注 ${snapshot.summary.focus.focusedMinutes} 分钟。` : ''}${memoRecordCount ? `本期另有 ${memoRecordCount} 条备忘作为背景依据。` : ''}`,
     sourceIds: overviewSources
   }];
   const sections = [{ heading: '工作概览', kind: 'facts', items: overview }];
@@ -2856,31 +2561,6 @@ function buildContextualFollowUps(result, activeTasks) {
     case 'stats':
       if (activeTasks.length) add('安排剩余任务', '怎么安排今天的优先级');
       break;
-    case 'daily_plan':
-    case 'daily_replan':
-      add('开始下一项', '开始下一项');
-      add('查看今日任务', '今天我要做什么');
-      break;
-    case 'focus_start':
-      add('暂停专注', '暂停专注');
-      add('记录打断', '记录打断');
-      break;
-    case 'focus_pause':
-    case 'focus_interrupt':
-      add('继续专注', '继续专注');
-      add('重新安排', '今天来不及了，重新排一下');
-      break;
-    case 'focus_resume':
-      add('结束本次专注', '结束专注');
-      add('完成当前任务', '完成当前任务');
-      break;
-    case 'focus_finish':
-      if (activeTasks.length) add('开始下一项', '开始下一项');
-      add('复盘今天', '复盘一下今天');
-      break;
-    case 'daily_review':
-      if (activeTasks.length) add('安排明天', '查看明天的任务');
-      break;
     default:
       break;
   }
@@ -3020,32 +2700,11 @@ function parse(text) {
   if (mentionedMinutes && /预计|估计|大概|需要/.test(raw)) params.estimatedMinutes = mentionedMinutes;
 
   // 按意图抽取标题/目标
-  if (intent === 'daily_plan' || intent === 'daily_replan') {
-    if (mentionedMinutes) params.availableMinutes = Math.max(30, Math.min(720, mentionedMinutes));
-    if (intent === 'daily_replan') params.reason = raw.slice(0, 240);
-  } else if (intent === 'report') {
+  if (intent === 'report') {
     params.period = /日报|日总结|今天.*报告|昨天.*报告|明天.*报告/.test(raw) ? 'daily' : 'weekly';
     if (/上周|上个星期|昨天/.test(raw)) params.offset = -1;
     else if (/下周|下个星期|明天/.test(raw)) params.offset = 1;
     else params.offset = 0;
-  } else if (intent === 'focus_start') {
-    if (mentionedMinutes) params.targetMinutes = Math.max(5, Math.min(240, mentionedMinutes));
-    params.target = raw
-      .replace(/^(请)?(帮我)?\s*/g, '')
-      .replace(/开始(一次|一个)?专注|专注(做|处理|开始)|开始下一项/g, '')
-      .replace(/(?:预计|目标|先)?\s*\d+(?:\.\d+)?\s*(小时|分钟)/g, '')
-      .replace(/^(任务|处理)\s*/g, '')
-      .trim();
-  } else if (intent === 'focus_pause' || intent === 'focus_resume') {
-    params.reason = '';
-  } else if (intent === 'focus_interrupt') {
-    const interruption = raw.match(/被\s*(.+?)\s*打断/) || raw.match(/(?:记录(?:一次)?打断|临时有事|插进来一件事)\s*[:：]?\s*(.*)$/);
-    params.reason = interruption && String(interruption[1] || '').trim() || '';
-  } else if (intent === 'focus_finish') {
-    params.completeTask = /完成当前任务|完成任务|任务也完成|并完成/.test(raw);
-  } else if (intent === 'daily_review') {
-    const note = raw.match(/(?:备注|记录)\s*[:：]\s*(.+)$/);
-    if (note) params.note = note[1].trim();
   } else if (intent === 'memo_create') {
     const content = raw
       .replace(/^(请)?(帮我)?\s*(把)?\s*/g, '')
@@ -3612,7 +3271,7 @@ ${workspaceSnapshot}
 请把用户输入解析为结构化 JSON，只输出 JSON，不要输出其他内容。必须遵循版本 ${MODEL_CONTRACT_VERSION} 的格式：
 {
   "schemaVersion": ${MODEL_CONTRACT_VERSION},
-  "intent": "create|memo_create|memo_query|memo_delete|memo_pin|memo_to_task|memo_split|query|complete|start|delete|archive|split|suggest|summary|stats|report|batch|update|child|postpone|restore|daily_plan|daily_replan|focus_start|focus_pause|focus_resume|focus_interrupt|focus_finish|daily_review|unknown",
+  "intent": "create|memo_create|memo_query|memo_delete|memo_pin|memo_to_task|memo_split|query|complete|start|delete|archive|split|suggest|summary|stats|report|batch|update|child|postpone|restore|unknown",
   "confidence": "high|medium|low",
   "clarification": "只有信息不足或实体类型不明确时填写的一个简短追问",
   "title": "任务标题（create 时必填，去掉时间/优先级/标签等修饰）",
@@ -3630,19 +3289,8 @@ ${workspaceSnapshot}
   "childTitle": "子任务标题（child 加子任务时填）",
   "days": 顺延天数（postpone 时填，默认 1）,
   "estimatedMinutes": 任务预计用时分钟数（create 或 update 时用户明确提及时填，5-480）,
-  "availableMinutes": 今天可用于计划的分钟数（daily_plan 或 daily_replan 时用户明确提及时填，30-720）,
-  "startTime": "计划开始时间 HH:mm（用户明确指定时填）",
-  "endTime": "计划结束时间 HH:mm（用户明确说‘到/至某时’时填）",
-  "focus": "今天优先方向或主题（daily_plan 或 daily_replan 时填）",
-  "include": ["希望优先安排的任务关键词"],
-  "exclude": ["今天暂不安排的任务关键词"],
-  "blockedTimes": ["占用时间段，统一格式 HH:mm-HH:mm"],
-  "targetMinutes": 本次专注目标分钟数（focus_start 时填，5-240）,
-  "reason": 重排原因或打断原因（daily_replan 或 focus_interrupt 时填）,
-  "note": 复盘备注（daily_review 时用户明确提及时填）,
   "period": "daily|weekly（report 时填，日报或周报）",
   "offset": -1|0|1（report 时填，昨天/上周=-1，今天/本周=0，明天/下周=1）,
-  "completeTask": true|false（focus_finish 时，只有用户明确说任务也完成才为 true）,
   "status": "todo|doing|done（按状态筛选时填）",
   "range": "today|tomorrow|week|overdue|all（query 时填）",
   "reply": "仅在 intent 为 unknown 时填写，直接回答用户的非任务问题"
@@ -3683,14 +3331,6 @@ actions 包含 2 到 5 项，可使用 create、memo_create、memo_pin、complet
 - 加子任务（child）：如「给 写方案 加子任务 搭框架」「给 写方案 加个步骤 写初稿」
 - 顺延（postpone）：如「把 交周报 顺延到明天」「把 写方案 推迟 3 天」
 - 恢复（restore）：如「恢复 交周报」（从回收站或归档恢复）
-- 今日计划（daily_plan）：如「帮我安排今天的工作」「按 4 小时生成今日计划」；只生成待确认草案，不要用 suggest
-- 今日重排（daily_replan）：如「今天来不及了，重新排一下」「计划有变，剩下只有两小时」；reason 保留用户给出的原因
-- 今日计划约束：用户提到“先做/优先/重点”时填 focus 或 include；提到“先不安排/不要排”时填 exclude；提到“从某时到某时”时分别填 startTime 和 endTime；提到明确会议或固定占用时段时填 blockedTimes；无法确认具体时间不要猜测
-- 开始专注（focus_start）：如「开始专注写方案」「开始下一项」「专注 45 分钟处理交周报」；没有指定任务时允许使用今日计划下一项
-- 暂停/继续专注：使用 focus_pause 或 focus_resume
-- 记录打断（focus_interrupt）：如「被电话打断了」，reason 填“电话”；原因不清楚时追问
-- 结束专注（focus_finish）：如「结束专注」仅停止计时，completeTask=false；「完成当前任务」才为 true
-- 今日复盘（daily_review）：如「复盘一下今天」「结束今天」，先展示复盘并等待确认
 - 问候、感谢、知识问答、闲聊或工作建议等非任务内容：intent 填 unknown，并在 reply 中直接回答用户
 - reply 要自然承接最近对话，先回应用户真正关心的事；默认简洁，复杂问题可适当展开，不强制使用 emoji 或固定句数
 - 只有用户目标、实体类型和关键参数都明确时 confidence 才是 high
@@ -3742,10 +3382,7 @@ const AGENT_TOOL_LABELS = {
   child: '添加子任务', postpone: '顺延任务', delete: '删除任务', archive: '归档任务',
   split: '拆分任务', batch: '批量操作',
   memo_create: '创建备忘录', memo_query: '查询备忘录', memo_pin: '置顶备忘录',
-  memo_to_task: '备忘转任务', memo_split: '拆分备忘录', memo_delete: '删除备忘录',
-  daily_plan: '生成今日计划', daily_replan: '重排今日计划', daily_review: '生成今日复盘',
-  focus_start: '开始专注', focus_pause: '暂停专注', focus_resume: '继续专注',
-  focus_interrupt: '记录打断', focus_finish: '结束专注'
+  memo_to_task: '备忘转任务', memo_split: '拆分备忘录', memo_delete: '删除备忘录'
 };
 const AGENT_TOOL_PROMPT_SUFFIX = `
 
@@ -4084,10 +3721,7 @@ function localFallbackLabel(intent, params) {
     create: '创建任务', memo_create: '创建备忘录', memo_delete: '删除备忘录', memo_pin: '修改备忘录置顶状态',
     memo_to_task: '把备忘录转为任务', memo_split: '拆分备忘录', complete: '完成任务', start: '开始任务',
     delete: '删除任务', archive: '归档任务', split: '拆分任务', batch: '批量处理任务', update: '修改任务',
-    child: '添加子任务', postpone: '顺延任务', restore: '恢复内容',
-    daily_plan: '生成今日计划', daily_replan: '重新安排今日计划', report: '生成工作报告', focus_start: '开始专注',
-    focus_pause: '暂停专注', focus_resume: '继续专注', focus_interrupt: '记录专注打断',
-    focus_finish: '结束专注', daily_review: '保存今日复盘'
+    child: '添加子任务', postpone: '顺延任务', restore: '恢复内容', report: '生成工作报告'
   };
   return `${labels[intent] || '执行本地操作'}${target ? `「${target}」` : ''}`;
 }
@@ -4874,4 +4508,4 @@ function applyTaskAction(action) {
   return Object.assign({ ok: true }, result);
 }
 
-module.exports = { handle, handleAuto, resolve, executeExternalTool, parse, parseWithLLM, generateReport, previewDailyPlan, previewTaskAction, applyTaskAction, taskActionFingerprint, undoAction, getSessionState, testConnection, isLLMConfigured, getLLMConfig, callLLM, INTENTS, PROVIDERS };
+module.exports = { handle, handleAuto, resolve, executeExternalTool, parse, parseWithLLM, generateReport, previewTaskAction, applyTaskAction, taskActionFingerprint, undoAction, getSessionState, testConnection, isLLMConfigured, getLLMConfig, callLLM, INTENTS, PROVIDERS };

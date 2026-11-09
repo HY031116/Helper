@@ -15,8 +15,7 @@ const packageJson = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 
 function state(taskPatch) {
   return {
     tasks: [Object.assign({ id: 101, title: '核对清单', status: 'todo', pri: 2, due: null }, taskPatch || {})],
-    memos: [],
-    workflow: { dailyPlans: {}, activeFocus: null }
+    memos: []
   };
 }
 
@@ -34,7 +33,7 @@ test('Agent 评测器：按结果、数据状态和待处理状态给出可读�
   assert.deepStrictEqual(failures, []);
 
   const unsafe = evaluator.evaluateTurn({ noDataMutation: true }, { type: 'confirm' }, before, after, store);
-  assert.deepStrictEqual(unsafe, ['本轮不应修改任务、备忘录或工作流']);
+  assert.deepStrictEqual(unsafe, ['本轮不应修改任务或备忘录']);
 });
 
 test('Agent 请求协调器：活动重复、完成重放和取消都不会创建第二次执行', () => {

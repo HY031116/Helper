@@ -8,12 +8,11 @@ const { app, BrowserWindow, screen } = require('electron');
 
 const UX_ACCEPTANCE_REQUIREMENTS = Object.freeze([
   { area: '导航与视图', checks: ['calendar-direction-and-focus', 'reduced-motion-main'] },
-  { area: '今日工作流', checks: ['daily-copilot-advice-and-suppression', 'workflow-panel-lock-and-focus', 'workflow-smart-preview-and-focus'] },
-  { area: '任务写入与弹窗', checks: ['task-row-lock-and-focus', 'task-modal-lock-and-confirm', 'task-agent-context-dialog', 'task-worklog-report-loop'] },
+  { area: '任务写入与弹窗', checks: ['task-row-lock-and-focus', 'task-modal-lock-and-confirm'] },
   { area: '筛选、批量与排序', checks: ['filter-empty-clear-and-focus', 'batch-lock-and-stable-layout', 'board-order-drop-and-focus'] },
   { area: '统计日报与周报', checks: ['report-lock-and-stable-layout', 'report-agent-daily', 'report-agent-evidence-source'] },
   { area: '备忘录', checks: ['memo-toolbar-lock-and-focus'] },
-  { area: '设置与危险确认', checks: ['daily-copilot-settings', 'settings-scope-and-focus', 'settings-confirm-retry-and-redraw-focus'] },
+  { area: '设置与危险确认', checks: ['settings-scope-and-focus', 'settings-confirm-retry-and-redraw-focus'] },
   { area: '通知与撤销', checks: ['notification-action-retry'] },
   { area: '助手对话', checks: ['cancel-without-mutation', 'duplicate-request-idempotency', 'assistant-busy-and-cancel', 'assistant-reading-position', 'assistant-edit-retry'] },
   { area: '桌宠', checks: ['pet-free-position-and-panel-anchor', 'pet-reminder-opens-task', 'pet-navigation-lock-error-and-focus', 'pet-inline-agent-chat', 'reduced-motion-pet'] }
@@ -101,7 +100,7 @@ app.whenReady().then(async () => {
       aiApiKey: 'visual-qa-key', aiModel: 'visual-qa-model'
     });
     const stateBeforeCancel = JSON.stringify({
-      tasks: store.getAllTasks(), memos: store.getAllMemos(), workflow: store.getWorkflowState()
+      tasks: store.getAllTasks(), memos: store.getAllMemos()
     });
     const cancelCheck = await mainWindow.webContents.executeJavaScript(`
       (async () => {
@@ -121,7 +120,7 @@ app.whenReady().then(async () => {
       })()
     `);
     const stateAfterCancel = JSON.stringify({
-      tasks: store.getAllTasks(), memos: store.getAllMemos(), workflow: store.getWorkflowState()
+      tasks: store.getAllTasks(), memos: store.getAllMemos()
     });
     await new Promise((resolve) => cancelServer.close(resolve));
     if (!cancelCheck.cancel.ok || cancelCheck.result.type !== 'cancelled' || stateBeforeCancel !== stateAfterCancel) {
@@ -147,7 +146,6 @@ app.whenReady().then(async () => {
 
     store.resetTasks();
     store.clearChat();
-    store.updateWorkPreferences({ workdayStart: '09:00', workdayEnd: '23:59' });
     store.getAllTasks().forEach((task, index) => {
       store.updateTask(task.id, { estimatedMinutes: 25 + index * 10 });
     });
@@ -157,149 +155,9 @@ app.whenReady().then(async () => {
     await mainWindow.webContents.executeJavaScript("document.body.classList.remove('dark')");
     const results = [await capture(mainWindow, 'main-empty-light.png')];
 
-    const fixedBriefing = store.getDailyCopilot(new Date('2026-08-25T09:15:00').getTime());
-    const copilotCheck = await mainWindow.webContents.executeJavaScript(`
-      (async () => {
-        dailyCopilot = ${JSON.stringify(fixedBriefing)};
-        copilotSourcesOpen = false;
-        switchView('today');
-        renderDailyCopilot();
-        const panel = document.querySelector('#daily-copilot');
-        const primary = panel.querySelector('[data-copilot="primary"]');
-        const sourceToggle = panel.querySelector('[data-copilot="sources"]');
-        sourceToggle?.click();
-        const sourceVisible = !!panel.querySelector('.copilot-sources:not(.hidden)');
-        const singlePrimary = panel.querySelectorAll('[data-copilot="primary"]').length === 1;
-        document.querySelector('[data-copilot="snooze"]').click();
-        for (let attempt = 0; attempt < 30; attempt++) {
-          await new Promise((resolve) => setTimeout(resolve, 30));
-          if (panel.classList.contains('hidden')) break;
-        }
-        const snoozed = panel.classList.contains('hidden');
-        await window.api.workflow.updateCopilot({ action: 'restore' });
-        dailyCopilot = ${JSON.stringify(fixedBriefing)};
-        copilotSourcesOpen = true;
-        renderDailyCopilot();
-        document.querySelector('[data-copilot="primary"]').click();
-        for (let attempt = 0; attempt < 30; attempt++) {
-          await new Promise((resolve) => setTimeout(resolve, 30));
-          if (document.querySelector('[data-workflow="apply-plan"]')) break;
-        }
-        const previewReady = !!document.querySelector('[data-workflow="apply-plan"]');
-        const previewFocused = document.activeElement === document.querySelector('[data-workflow="apply-plan"]');
-        workflowDraft = null;
-        workflowDraftMeta = null;
-        renderWorkflowPanel();
-        dailyCopilot = ${JSON.stringify(fixedBriefing)};
-        renderDailyCopilot();
-        return {
-          visible: !panel.classList.contains('hidden'),
-          why: panel.textContent.includes('为什么现在'),
-          sourceVisible,
-          singlePrimary,
-          snoozed,
-          previewReady,
-          previewFocused,
-          primaryLabel: primary?.textContent.trim() || ''
-        };
-      })()
-    `);
-    if (!copilotCheck.visible || !copilotCheck.why || !copilotCheck.sourceVisible || !copilotCheck.singlePrimary
-      || !copilotCheck.snoozed || !copilotCheck.previewReady || !copilotCheck.previewFocused) {
-      throw new Error(`每日 Agent 建议验证失败：${JSON.stringify(copilotCheck)}`);
-    }
-    interactionChecks.push({ id: 'daily-copilot-advice-and-suppression', passed: true });
-    results.push(await capture(mainWindow, 'daily-copilot-light.png'));
-
-    const plan = store.previewDailyPlan({ availableMinutes: 150 });
-    if (plan.items.length) {
-      store.applyDailyPlan(plan);
-      store.startFocus(plan.items[0].taskId, { targetMinutes: 25 });
-    } else {
-      const fallbackTask = store.getAllTasks().find((task) => ['todo', 'doing'].includes(task.status));
-      if (!fallbackTask) throw new Error('视觉回归缺少可专注任务');
-      store.startFocus(fallbackTask.id, { targetMinutes: 25 });
-    }
     store.createMemo({ title: '发布前核对', content: '确认版本号、更新说明和回滚方案。', tags: ['发布'] });
     await Promise.all([reloadWindow(mainWindow), reloadWindow(petWindow), reloadWindow(petPanelWindow)]);
     results.push(await capture(mainWindow, 'main-light.png'));
-
-    const workflowBusyCheck = await mainWindow.webContents.executeJavaScript(`
-      (() => {
-        switchView('today');
-        const panel = document.querySelector('#workflow-panel');
-        const control = panel.querySelector('.btn[data-workflow]');
-        window.__visualWorkflowControl = control;
-        window.__visualWorkflowAction = control.dataset.workflow;
-        const height = panel.getBoundingClientRect().height;
-        setWorkflowBusy(true, control, control.dataset.workflow);
-        return {
-          busy: workflowBusy && panel.classList.contains('is-busy') && panel.getAttribute('aria-busy') === 'true',
-          controlsLocked: Array.from(panel.querySelectorAll('[data-workflow], [data-workflow-minutes], #workflow-review-note')).every((item) => item.disabled),
-          label: control.textContent.trim(),
-          height
-        };
-      })()
-    `);
-    if (!workflowBusyCheck.busy || !workflowBusyCheck.controlsLocked || !workflowBusyCheck.label.endsWith('中…')) {
-      throw new Error(`今日计划写入锁验证失败：${JSON.stringify(workflowBusyCheck)}`);
-    }
-    results.push(await capture(mainWindow, 'workflow-busy-light.png'));
-    const workflowReleaseCheck = await mainWindow.webContents.executeJavaScript(`
-      (() => {
-        setWorkflowBusy(false, window.__visualWorkflowControl, window.__visualWorkflowAction);
-        renderWorkflowPanel();
-        focusWorkflowAfterAction(window.__visualWorkflowAction, false, {});
-        const panel = document.querySelector('#workflow-panel');
-        return {
-          busy: workflowBusy || panel.classList.contains('is-busy'),
-          controlsReady: Array.from(panel.querySelectorAll('[data-workflow], [data-workflow-minutes], #workflow-review-note')).some((item) => !item.disabled),
-          height: panel.getBoundingClientRect().height,
-          focusRestored: panel.contains(document.activeElement)
-        };
-      })()
-    `);
-    if (workflowReleaseCheck.busy || !workflowReleaseCheck.controlsReady || !workflowReleaseCheck.focusRestored
-      || workflowReleaseCheck.height !== workflowBusyCheck.height) {
-      throw new Error(`今日计划写入恢复验证失败：${JSON.stringify(workflowReleaseCheck)}`);
-    }
-    interactionChecks.push({ id: 'workflow-panel-lock-and-focus', passed: true });
-
-    const workflowSmartCheck = await mainWindow.webContents.executeJavaScript(`
-      (async () => {
-        workflowState = { preferences: workflowState.preferences || {}, dailyPlans: {}, activeFocus: null, focusSessions: [] };
-        workflowDraft = null;
-        workflowDraftMeta = null;
-        workflowSmartMode = false;
-        workflowSmartText = '';
-        switchView('today');
-        renderWorkflowPanel();
-        document.querySelector('[data-workflow="smart-toggle"]').click();
-        const input = document.querySelector('#workflow-smart-input');
-        input.value = '今天只有 2 小时，先做发布相关，14:00-15:00 开会';
-        input.dispatchEvent(new Event('input', { bubbles: true }));
-        document.querySelector('[data-workflow="smart-preview"]').click();
-        for (let attempt = 0; attempt < 40; attempt++) {
-          await new Promise((resolve) => setTimeout(resolve, 40));
-          if (document.querySelector('.workflow-constraint-summary')) break;
-        }
-        const summary = document.querySelector('.workflow-constraint-summary');
-        return {
-          summaryVisible: !!summary,
-          summaryText: summary?.textContent || '',
-          draftVisible: !!document.querySelector('[data-workflow="apply-plan"]'),
-          inputFocus: document.activeElement === document.querySelector('[data-workflow="apply-plan"]'),
-          activeWorkflow: document.activeElement?.dataset?.workflow || ''
-        };
-      })()
-    `);
-    if (!workflowSmartCheck.summaryVisible || !workflowSmartCheck.draftVisible
-      || !workflowSmartCheck.summaryText.includes('2 小时') || !workflowSmartCheck.summaryText.includes('14:00-15:00')
-      || !workflowSmartCheck.inputFocus) {
-      throw new Error(`智能安排草案与焦点验证失败：${JSON.stringify(workflowSmartCheck)}`);
-    }
-    interactionChecks.push({ id: 'workflow-smart-preview-and-focus', passed: true });
-    results.push(await capture(mainWindow, 'workflow-smart-preview-light.png'));
 
     const taskRowBusyCheck = await mainWindow.webContents.executeJavaScript(`
       (() => {
@@ -355,205 +213,6 @@ app.whenReady().then(async () => {
       throw new Error(`任务行写入恢复验证失败：${JSON.stringify(taskRowReleaseCheck)}`);
     }
     interactionChecks.push({ id: 'task-row-lock-and-focus', passed: true });
-
-    // 任务上下文 Agent：独立对话小窗（task-agent window，跨窗口驱动）
-    const agentTaskRef = await mainWindow.webContents.executeJavaScript(`
-      (() => {
-        switchView('tasks');
-        const row = document.querySelector('#tasks-list .task-row:not(.archived)');
-        const task = tasks.find((item) => item.id === Number(row.dataset.id));
-        const trigger = row.querySelector('.task-agent-btn');
-        openTaskAgent(task, trigger);
-        return { taskId: task.id, title: task.title };
-      })()
-    `);
-    const agentWindow = await waitForWindow('任务对话');
-    await wait(300);
-    const taskAgentTypingSetup = await agentWindow.webContents.executeJavaScript(`
-      ({
-        enabled: !document.querySelector('#ta-input').disabled,
-        focused: document.activeElement === document.querySelector('#ta-input'),
-        title: document.querySelector('#ta-title').textContent
-      })
-    `);
-    agentWindow.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'X' });
-    agentWindow.webContents.sendInputEvent({ type: 'char', keyCode: 'x' });
-    agentWindow.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'X' });
-    await wait(80);
-    const taskAgentTypedValue = await agentWindow.webContents.executeJavaScript(`document.querySelector('#ta-input').value`);
-    if (!taskAgentTypingSetup.enabled || !taskAgentTypingSetup.focused || !taskAgentTypedValue.includes('x')
-      || taskAgentTypingSetup.title !== agentTaskRef.title) {
-      throw new Error(`任务上下文 Agent 键盘输入验证失败：${JSON.stringify({ ...taskAgentTypingSetup, value: taskAgentTypedValue })}`);
-    }
-
-    const agentWorkArea = screen.getPrimaryDisplay().workArea;
-    const lastAgentPreviewNow = `
-      (function () {
-        const list = document.querySelectorAll('#ta-thread .ta-preview');
-        if (!list.length) return '';
-        const nows = list[list.length - 1].querySelectorAll('.ta-preview-field-value .now');
-        return Array.from(nows).map((n) => n.textContent).join('|');
-      })()
-    `;
-    const confirmLastAgentPreview = `
-      (function () {
-        const list = document.querySelectorAll('#ta-thread .ta-preview');
-        list[list.length - 1].querySelector('.ta-preview-actions .primary').click();
-        return true;
-      })()
-    `;
-    const taskAgentContext = await mainWindow.webContents.executeJavaScript(`
-      (() => {
-        switchView('tasks');
-        const row = document.querySelector('#tasks-list .task-row:not(.archived)');
-        const taskId = Number(row.dataset.id);
-        const task = tasks.find((item) => item.id === taskId);
-        openTaskAgent(task, row.querySelector('.task-agent-btn'));
-        return { taskId, beforeDue: task.due || null };
-      })()
-    `);
-    await wait(300);
-    const submitAgentPrompt = async (text) => {
-      await agentWindow.webContents.executeJavaScript(`
-        (function () {
-          const input = document.querySelector('#ta-input');
-          input.value = ${JSON.stringify(text)};
-          document.querySelector('#ta-form').requestSubmit();
-          return true;
-        })()
-      `);
-    };
-    // 第一轮：改到明天 → 预览 → 确认（确认后才会建立续接上下文）
-    await submitAgentPrompt('改到明天');
-    let firstDue = '';
-    for (let attempt = 0; attempt < 60; attempt += 1) {
-      await wait(40);
-      firstDue = await agentWindow.webContents.executeJavaScript(lastAgentPreviewNow);
-      if (firstDue.includes(':')) break;
-    }
-    await agentWindow.webContents.executeJavaScript(confirmLastAgentPreview);
-    let appliedDue = null;
-    for (let attempt = 0; attempt < 60; attempt += 1) {
-      await wait(40);
-      appliedDue = await mainWindow.webContents.executeJavaScript(`(tasks.find((item) => item.id === ${taskAgentContext.taskId}) || {}).due || null`);
-      if (appliedDue && appliedDue !== taskAgentContext.beforeDue) break;
-    }
-    // 第二轮：续接「下午三点」→ 同一天 15:00 → 预览 → 确认
-    await submitAgentPrompt('下午三点');
-    let secondDue = '';
-    for (let attempt = 0; attempt < 60; attempt += 1) {
-      await wait(40);
-      secondDue = await agentWindow.webContents.executeJavaScript(lastAgentPreviewNow);
-      if (secondDue.includes('15:00')) break;
-    }
-    await agentWindow.webContents.executeJavaScript(confirmLastAgentPreview);
-    let afterDue = null;
-    for (let attempt = 0; attempt < 60; attempt += 1) {
-      await wait(40);
-      afterDue = await mainWindow.webContents.executeJavaScript(`(tasks.find((item) => item.id === ${taskAgentContext.taskId}) || {}).due || null`);
-      if (afterDue && afterDue.endsWith('15:00')) break;
-    }
-    const taskAgentCheck = {
-      beforeDue: taskAgentContext.beforeDue,
-      appliedDue,
-      afterDue,
-      firstDue,
-      secondDue,
-      threadText: await agentWindow.webContents.executeJavaScript(`document.querySelector('#ta-thread').textContent`),
-      focusOnInput: await agentWindow.webContents.executeJavaScript(`document.activeElement === document.querySelector('#ta-input')`),
-      agentBounds: agentWindow.getBounds()
-    };
-    const agentInView = taskAgentCheck.agentBounds.x >= agentWorkArea.x && taskAgentCheck.agentBounds.y >= agentWorkArea.y
-      && taskAgentCheck.agentBounds.x + taskAgentCheck.agentBounds.width <= agentWorkArea.x + agentWorkArea.width
-      && taskAgentCheck.agentBounds.y + taskAgentCheck.agentBounds.height <= agentWorkArea.y + agentWorkArea.height;
-    if (taskAgentCheck.beforeDue === taskAgentCheck.afterDue || !appliedDue || !appliedDue.endsWith('18:00')
-      || !firstDue || !secondDue.endsWith('15:00')
-      || firstDue.slice(0, 10) !== secondDue.slice(0, 10) || firstDue.slice(0, 10) !== (appliedDue || '').slice(0, 10)
-      || (afterDue || '').slice(0, 10) !== firstDue.slice(0, 10)
-      || !taskAgentCheck.threadText.includes('改到明天') || !taskAgentCheck.threadText.includes('下午三点')
-      || !taskAgentCheck.focusOnInput || !agentInView) {
-      throw new Error(`任务上下文 Agent 连续预览验证失败：${JSON.stringify(taskAgentCheck)}`);
-    }
-    results.push(await capture(agentWindow, 'task-agent-continuation-light.png'));
-    await agentWindow.webContents.executeJavaScript(`document.querySelector('#ta-close').click(); true;`);
-    await wait(300);
-    if (agentWindow.isVisible()) {
-      throw new Error('任务上下文 Agent 关闭验证失败：小窗仍然可见');
-    }
-
-    const taskWorkLogTarget = await mainWindow.webContents.executeJavaScript(`
-      (() => {
-        switchView('tasks');
-        currentFilter = 'all';
-        currentSearch = '';
-        const task = tasks.find((item) => !item._deleted && item.status !== 'archived');
-        expandedIds.add('d' + task.id);
-        renderTasks();
-        const add = document.querySelector('.task-row[data-id="' + task.id + '"] [data-worklog-add]');
-        add.click();
-        return { taskId: task.id };
-      })()
-    `);
-    await wait(350);
-    const workLogDraft = await agentWindow.webContents.executeJavaScript(`document.querySelector('#ta-input').value`);
-    await agentWindow.webContents.executeJavaScript(`
-      (function () {
-        const input = document.querySelector('#ta-input');
-        input.value = '成果：完成真实窗口工作记录闭环';
-        document.querySelector('#ta-form').requestSubmit();
-        return true;
-      })()
-    `);
-    let workLogPreviewReady = false;
-    for (let attempt = 0; attempt < 60; attempt += 1) {
-      await wait(40);
-      const previewText = await agentWindow.webContents.executeJavaScript(lastAgentPreviewNow);
-      if (previewText.includes('完成真实窗口工作记录闭环')) { workLogPreviewReady = true; break; }
-    }
-    await agentWindow.webContents.executeJavaScript(`
-      (function () {
-        const list = document.querySelectorAll('#ta-thread .ta-preview');
-        list[list.length - 1].querySelector('.ta-preview-actions .primary').click();
-        return true;
-      })()
-    `);
-    let workLogSaved = false;
-    for (let attempt = 0; attempt < 60; attempt += 1) {
-      await wait(40);
-      workLogSaved = await mainWindow.webContents.executeJavaScript(`(tasks.find((item) => item.id === ${taskWorkLogTarget.taskId}) || { workLogs: [] }).workLogs.some((log) => log.text === '完成真实窗口工作记录闭环')`);
-      if (workLogSaved) break;
-    }
-    const workLogVisibleCheck = await mainWindow.webContents.executeJavaScript(`
-      (async () => {
-        const task = tasks.find((item) => item.id === ${taskWorkLogTarget.taskId});
-        expandedIds.add('d' + task.id);
-        renderTasks();
-        const row = document.querySelector('.task-row[data-id="' + task.id + '"]');
-        const visibleRecord = row.querySelector('.task-worklog-list')?.textContent.includes('完成真实窗口工作记录闭环');
-        const report = await window.api.ai.report({ period: 'daily', offset: 0, instruction: '生成今日日报' }, 'visual-worklog-report');
-        const sourceReady = report.sources.some((source) => source.type === 'worklog'
-          && source.text === '完成真实窗口工作记录闭环' && source.taskId === task.id);
-        const edit = row.querySelector('[data-worklog-edit]');
-        edit.click();
-        return {
-          visibleRecord,
-          reportReady: report.markdown.includes('完成真实窗口工作记录闭环'),
-          sourceReady
-        };
-      })()
-    `);
-    await wait(350);
-    const workLogEditPrefilled = await agentWindow.webContents.executeJavaScript(`document.querySelector('#ta-input').value`);
-    const workLogEditFocused = await agentWindow.webContents.executeJavaScript(`document.activeElement === document.querySelector('#ta-input')`);
-    if (!workLogDraft.includes('进展：') || !workLogPreviewReady || !workLogSaved
-      || !workLogVisibleCheck.visibleRecord || !workLogVisibleCheck.reportReady || !workLogVisibleCheck.sourceReady
-      || workLogEditPrefilled !== '完成真实窗口工作记录闭环' || !workLogEditFocused) {
-      throw new Error(`任务工作记录与报告闭环验证失败：${JSON.stringify({ workLogDraft, workLogPreviewReady, workLogSaved, workLogVisibleCheck, workLogEditPrefilled, workLogEditFocused })}`);
-    }
-    interactionChecks.push({ id: 'task-worklog-report-loop', passed: true });
-    results.push(await capture(mainWindow, 'task-worklog-agent-light.png'));
-    await agentWindow.webContents.executeJavaScript(`document.querySelector('#ta-close').click(); true;`);
-    await wait(300);
 
     const boardOrderCheck = await mainWindow.webContents.executeJavaScript(`
       (async () => {
@@ -670,57 +329,6 @@ app.whenReady().then(async () => {
     results.push(await capture(mainWindow, 'assistant-plan.png'));
 
     mainWindow.setSize(900, 650);
-    const copilotNarrowCheck = await mainWindow.webContents.executeJavaScript(`
-      (() => {
-        switchView('today');
-        dailyCopilot = ${JSON.stringify(fixedBriefing)};
-        copilotSourcesOpen = true;
-        renderDailyCopilot();
-        const panel = document.querySelector('#daily-copilot');
-        const content = document.querySelector('.content');
-        const panelRect = panel.getBoundingClientRect();
-        const contentRect = content.getBoundingClientRect();
-        return {
-          visible: !panel.classList.contains('hidden'),
-          inViewport: panelRect.left >= contentRect.left && panelRect.right <= contentRect.right + 1,
-          noHorizontalOverflow: panel.scrollWidth <= panel.clientWidth,
-          primaryVisible: document.querySelector('[data-copilot="primary"]')?.getBoundingClientRect().width > 0
-        };
-      })()
-    `);
-    if (!copilotNarrowCheck.visible || !copilotNarrowCheck.inViewport || !copilotNarrowCheck.noHorizontalOverflow || !copilotNarrowCheck.primaryVisible) {
-      throw new Error(`每日 Agent 窄窗口验证失败：${JSON.stringify(copilotNarrowCheck)}`);
-    }
-    results.push(await capture(mainWindow, 'daily-copilot-narrow.png'));
-    await mainWindow.webContents.executeJavaScript(`
-      (() => {
-        switchView('tasks');
-        const task = tasks.find((item) => !item._deleted && item.status !== 'archived');
-        openModal(task);
-        document.querySelector('#m-agent').click();
-        return true;
-      })()
-    `);
-    await wait(350);
-    const taskAgentModalBounds = agentWindow.getBounds();
-    const taskAgentModalCheck = {
-      visible: agentWindow.isVisible(),
-      title: await agentWindow.webContents.executeJavaScript(`document.querySelector('#ta-title').textContent`),
-      modalVisible: await mainWindow.webContents.executeJavaScript(`!document.querySelector('#modal-mask').classList.contains('hidden')`),
-      inWorkArea: taskAgentModalBounds.x >= agentWorkArea.x && taskAgentModalBounds.y >= agentWorkArea.y
-        && taskAgentModalBounds.x + taskAgentModalBounds.width <= agentWorkArea.x + agentWorkArea.width
-        && taskAgentModalBounds.y + taskAgentModalBounds.height <= agentWorkArea.y + agentWorkArea.height,
-      width: taskAgentModalBounds.width
-    };
-    if (!taskAgentModalCheck.visible || !taskAgentModalCheck.modalVisible || !taskAgentModalCheck.title
-      || !taskAgentModalCheck.inWorkArea || taskAgentModalCheck.width > 420) {
-      throw new Error(`任务详情 Agent 窄窗口验证失败：${JSON.stringify(taskAgentModalCheck)}`);
-    }
-    results.push(await capture(agentWindow, 'task-agent-modal-narrow.png'));
-    await agentWindow.webContents.executeJavaScript(`document.querySelector('#ta-close').click(); true;`);
-    await wait(250);
-    await mainWindow.webContents.executeJavaScript(`closeModal(false); true;`);
-    interactionChecks.push({ id: 'task-agent-context-dialog', passed: true });
     results.push(await capture(mainWindow, 'main-narrow.png'));
 
     await mainWindow.webContents.executeJavaScript(`
@@ -800,12 +408,7 @@ app.whenReady().then(async () => {
     const reportAgentCheck = await mainWindow.webContents.executeJavaScript(`
       (async () => {
         const stableWorkState = async () => {
-          const workflow = await window.api.workflow.get();
-          if (workflow.activeFocus) {
-            delete workflow.activeFocus.elapsedMs;
-            delete workflow.activeFocus.remainingMs;
-          }
-          return { tasks: await window.api.tasks.getAll(), workflow };
+          return { tasks: await window.api.tasks.getAll(), memos: await window.api.memos.getAll() };
         };
         switchView('stat');
         document.querySelector('#report-period-seg [data-period="daily"]').click();
@@ -1094,30 +697,6 @@ app.whenReady().then(async () => {
       throw new Error(`设置操作完成恢复验证失败：${JSON.stringify(settingsReleaseCheck)}`);
     }
     interactionChecks.push({ id: 'settings-scope-and-focus', passed: true });
-
-    const copilotSettingsCheck = await mainWindow.webContents.executeJavaScript(`
-      (() => {
-        focusSettingsSection('settings-assistant');
-        const group = document.querySelector('#settings-assistant');
-        const toggle = document.querySelector('#copilot-enabled');
-        const start = document.querySelector('#copilot-quiet-start');
-        const end = document.querySelector('#copilot-quiet-end');
-        const rect = group.getBoundingClientRect();
-        return {
-          toggleSemantic: toggle?.getAttribute('role') === 'switch' && toggle?.hasAttribute('aria-checked'),
-          validTimes: /^\\d{2}:\\d{2}$/.test(start?.value || '') && /^\\d{2}:\\d{2}$/.test(end?.value || ''),
-          controlsVisible: [toggle, start, end, document.querySelector('#btn-copilot-save')].every((control) => control && control.getBoundingClientRect().width > 0),
-          noHorizontalOverflow: group.scrollWidth <= group.clientWidth,
-          inViewport: rect.right <= innerWidth + 1
-        };
-      })()
-    `);
-    if (!copilotSettingsCheck.toggleSemantic || !copilotSettingsCheck.validTimes || !copilotSettingsCheck.controlsVisible
-      || !copilotSettingsCheck.noHorizontalOverflow || !copilotSettingsCheck.inViewport) {
-      throw new Error(`每日 Agent 设置验证失败：${JSON.stringify(copilotSettingsCheck)}`);
-    }
-    interactionChecks.push({ id: 'daily-copilot-settings', passed: true });
-    results.push(await capture(mainWindow, 'daily-copilot-settings-narrow.png'));
 
     const confirmRetryCheck = await mainWindow.webContents.executeJavaScript(`
       (async () => {

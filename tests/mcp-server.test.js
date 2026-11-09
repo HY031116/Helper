@@ -33,7 +33,6 @@ const TOKEN = 'a'.repeat(48);
 before(() => {
   process.env.WORK_HELPER_DATA_DIR = DATA_DIR;
   store.init();
-  store.updateWorkPreferences({ workdayStart: '09:00', workdayEnd: '23:59' });
   store.clearAgentState();
 });
 
@@ -77,8 +76,9 @@ function jsonRequest(port, { method = 'POST', urlPath = '/mcp', token = TOKEN, h
 }
 
 /* ---------- 协议核心：目录与映射 ---------- */
-test('MCP 工具目录：32 个工具、注解与前后缀解析一致', () => {
-  assert.strictEqual(protocol.TOOL_CATALOG.length, 32);
+test('MCP 工具目录：24 个工具、注解与前后缀解析一致', () => {
+  // 目录按已注册意图动态生成：阶段 1 下线工作流意图（daily_plan/daily_replan/daily_review/focus_*×5）后 32→24。
+  assert.strictEqual(protocol.TOOL_CATALOG.length, 24);
   const names = new Set();
   for (const tool of protocol.TOOL_CATALOG) {
     assert.ok(tool.name.startsWith(protocol.TOOL_PREFIX), `工具名缺少前缀：${tool.name}`);
@@ -91,7 +91,7 @@ test('MCP 工具目录：32 个工具、注解与前后缀解析一致', () => {
     assert.strictEqual(tool.annotations.openWorldHint, false);
     assert.strictEqual(tool.annotations.title, tool.title);
   }
-  assert.strictEqual(names.size, 32, '工具名不能重复');
+  assert.strictEqual(names.size, 24, '工具名不能重复');
 
   const readOnly = protocol.TOOL_CATALOG.filter((tool) => tool.annotations.readOnlyHint).map((tool) => tool.name).sort();
   assert.deepStrictEqual(readOnly, [
@@ -350,7 +350,7 @@ test('HTTP 传输：鉴权、Origin 与 Host 校验', async () => {
   const health = await jsonRequest(info.port, { urlPath: '/health' });
   assert.strictEqual(health.status, 200);
   assert.strictEqual(health.json.ok, true);
-  assert.strictEqual(health.json.tools, 32);
+  assert.strictEqual(health.json.tools, 24);
   const healthNoAuth = await jsonRequest(info.port, { urlPath: '/health', token: '' });
   assert.strictEqual(healthNoAuth.status, 401);
   const notFound = await jsonRequest(info.port, { urlPath: '/other' });
@@ -373,7 +373,7 @@ test('HTTP 传输：完整会话流程与危险操作确认链', async () => {
     body: { jsonrpc: '2.0', id: 't1', method: 'tools/list' },
     headers: { 'Mcp-Session-Id': coreSessionId }
   });
-  assert.strictEqual(tools.json.result.tools.length, 32);
+  assert.strictEqual(tools.json.result.tools.length, 24);
 
   // 写操作经 HTTP 真实落库
   const create = await jsonRequest(transport.port(), {
@@ -445,7 +445,7 @@ test('HTTP 传输：完整会话流程与危险操作确认链', async () => {
   assert.ok(Array.isArray(batch.json));
   assert.strictEqual(batch.json.length, 2);
   assert.strictEqual(batch.json[0].id, 'b1');
-  assert.strictEqual(batch.json[1].result.tools.length, 32);
+  assert.strictEqual(batch.json[1].result.tools.length, 24);
 
   // 请求体超限 → 413
   const oversized = await jsonRequest(transport.port(), { body: 'x'.repeat(MAX_BODY_BYTES + 16), headers: { 'Mcp-Session-Id': coreSessionId } });
@@ -522,7 +522,7 @@ test('stdio 代理：手动 url+token 模式端到端转发', async () => {
   send({ jsonrpc: '2.0', method: 'notifications/initialized' });
   send({ jsonrpc: '2.0', id: 2, method: 'tools/list' });
   const toolsResponse = await onceProxyResponse(child, (message) => message.id === 2);
-  assert.strictEqual(toolsResponse.result.tools.length, 32);
+  assert.strictEqual(toolsResponse.result.tools.length, 24);
 
   const task = store.createTask({ title: 'stdio 代理链路任务' });
   send({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'workhelper_query', arguments: {} } });

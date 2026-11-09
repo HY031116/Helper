@@ -7,8 +7,7 @@ function clone(value) {
 function comparableState(store) {
   return {
     tasks: clone(store.getAllTasks()),
-    memos: clone(store.getAllMemos()),
-    workflow: clone(store.getWorkflowState())
+    memos: clone(store.getAllMemos())
   };
 }
 
@@ -116,7 +115,7 @@ function evaluateTurn(expectation, result, before, after, store) {
     }
   }
 
-  if (expected.noDataMutation && !sameState(before, after)) failures.push('本轮不应修改任务、备忘录或工作流');
+  if (expected.noDataMutation && !sameState(before, after)) failures.push('本轮不应修改任务或备忘录');
   if (expected.counts) {
     if (expected.counts.tasks !== undefined && after.tasks.length !== expected.counts.tasks) {
       failures.push(`任务数期望 ${expected.counts.tasks}，实际 ${after.tasks.length}`);

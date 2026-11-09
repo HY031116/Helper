@@ -100,16 +100,6 @@ html[data-theme="glass"] body:not(.dark) .view-head { border-bottom: 1px solid r
 html[data-theme="glass"] body:not(.dark) .view-head h2::before { display: none; }
 html[data-theme="glass"] body:not(.dark) .set-group { border-top: 1px solid rgba(122, 132, 165, 0.35); }
 
-/* 今日计划：半透玻璃面板，去掉网格底纹 */
-html[data-theme="glass"] body:not(.dark) .workflow-panel,
-html[data-theme="glass"] body:not(.dark) .daily-copilot {
-  background-image: none;
-  background-color: rgba(255, 255, 255, 0.5);
-  backdrop-filter: blur(14px) saturate(1.3);
-  -webkit-backdrop-filter: blur(14px) saturate(1.3);
-  border-radius: var(--radius-lg);
-}
-
 /* 助手消息：玻璃泡；用户消息沿用 --grad 渐变泡 */
 html[data-theme="glass"] body:not(.dark) .msg.ai {
   background: rgba(255, 255, 255, 0.6);
@@ -214,8 +204,6 @@ html[data-theme="mono"] body:not(.dark) {
 html[data-theme="mono"] body:not(.dark) .view-head { border-bottom: 1px solid var(--rule); }
 html[data-theme="mono"] body:not(.dark) .view-head h2::before { display: none; }
 html[data-theme="mono"] body:not(.dark) .set-group { border-top: 1px solid var(--rule); }
-html[data-theme="mono"] body:not(.dark) .workflow-panel,
-html[data-theme="mono"] body:not(.dark) .daily-copilot,
 html[data-theme="mono"] body:not(.dark) .ai-chat { background-image: none; }
 /* 完成勾选框从圆章变回方框，呼应克制几何 */
 html[data-theme="mono"] body:not(.dark) .task-check { border-radius: 4px; }

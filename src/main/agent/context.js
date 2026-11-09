@@ -39,13 +39,6 @@ function buildWorkspaceSnapshot(store, query) {
   const tasks = selectEntities(allTasks, query, 40);
   const memos = selectEntities(allMemos, query, 30);
   const state = store.getAgentState();
-  const workflow = store.getWorkflowState();
-  const today = (() => {
-    const date = new Date();
-    const pad = (value) => String(value).padStart(2, '0');
-    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
-  })();
-  const todayPlan = workflow.dailyPlans && workflow.dailyPlans[today] || null;
   const taskIds = new Set(allTasks.map((task) => task.id));
   const memoIds = new Set(allMemos.map((memo) => memo.id));
   return {
@@ -68,29 +61,6 @@ function buildWorkspaceSnapshot(store, query) {
       tags: Array.isArray(memo.tags) ? memo.tags.slice(0, 5) : [],
       preview: String(memo.content || '').replace(/\s+/g, ' ').slice(0, 160)
     })),
-    dailyWorkflow: {
-      preferences: workflow.preferences,
-      todayPlan: todayPlan ? {
-        date: todayPlan.date,
-        revision: todayPlan.revision,
-        status: todayPlan.status,
-        items: todayPlan.items.map((item) => ({
-          taskId: item.taskId,
-          title: item.title,
-          plannedMinutes: item.plannedMinutes,
-          plannedStart: item.plannedStart,
-          status: item.status
-        }))
-      } : null,
-      activeFocus: workflow.activeFocus ? {
-        taskId: workflow.activeFocus.taskId,
-        title: workflow.activeFocus.title,
-        state: workflow.activeFocus.state,
-        targetMinutes: workflow.activeFocus.targetMinutes,
-        elapsedMinutes: Math.floor(workflow.activeFocus.elapsedMs / 60000),
-        interruptionCount: workflow.activeFocus.interruptions.length
-      } : null
-    },
     recentFocus: currentEntity(state, allTasks, allMemos),
     recentCollection: currentCollection(state, allTasks, allMemos),
     recentReferences: (Array.isArray(state.references) ? state.references : [])

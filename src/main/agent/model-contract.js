@@ -105,19 +105,6 @@ function normalizeAction(parsed, allowedIntents) {
   const rescheduleScope = usesReschedule
     ? optionalEnum(parsed.rescheduleScope, 'rescheduleScope', ['today', 'tomorrow'], 'today') : undefined;
   const onlyRemaining = usesReschedule ? optionalBoolean(parsed.onlyRemaining, 'onlyRemaining') : undefined;
-  const usesDailyPlan = ['daily_plan', 'daily_replan'].includes(parsed.intent);
-  const startTime = usesDailyPlan ? optionalString(parsed.startTime, 'startTime', 5) : '';
-  if (startTime && !/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(startTime)) {
-    fail('MODEL_OUTPUT_INVALID_FIELD', '模型字段 startTime 必须使用 HH:mm 格式');
-  }
-  const endTime = usesDailyPlan ? optionalString(parsed.endTime, 'endTime', 5) : '';
-  if (endTime && !/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(endTime)) {
-    fail('MODEL_OUTPUT_INVALID_FIELD', '模型字段 endTime 必须使用 HH:mm 格式');
-  }
-  const blockedTimes = usesDailyPlan ? optionalStringList(parsed.blockedTimes, 'blockedTimes', 8, 32) : [];
-  if (blockedTimes.some((value) => !/^((?:[01]\d|2[0-3]):[0-5]\d)\s*[-~至到]\s*((?:[01]\d|2[0-3]):[0-5]\d)$/.test(value))) {
-    fail('MODEL_OUTPUT_INVALID_FIELD', '模型字段 blockedTimes 必须使用 HH:mm-HH:mm 格式');
-  }
 
   return {
     intent: parsed.intent,
@@ -138,24 +125,8 @@ function normalizeAction(parsed, allowedIntents) {
       days,
       estimatedMinutes: ['create', 'update'].includes(parsed.intent)
         ? optionalInteger(parsed.estimatedMinutes, 'estimatedMinutes', 5, 480) : undefined,
-      availableMinutes: ['daily_plan', 'daily_replan'].includes(parsed.intent)
-        ? optionalInteger(parsed.availableMinutes, 'availableMinutes', 30, 720) : undefined,
-      startTime: usesDailyPlan ? startTime : undefined,
-      endTime: usesDailyPlan ? endTime : undefined,
-      focus: usesDailyPlan
-        ? optionalString(parsed.focus, 'focus', 160) : undefined,
-      include: usesDailyPlan
-        ? optionalStringList(parsed.include, 'include', 5, 80) : undefined,
-      exclude: usesDailyPlan
-        ? optionalStringList(parsed.exclude, 'exclude', 8, 80) : undefined,
-      blockedTimes: usesDailyPlan ? blockedTimes : undefined,
-      targetMinutes: parsed.intent === 'focus_start'
-        ? optionalInteger(parsed.targetMinutes, 'targetMinutes', 5, 240) : undefined,
-      reason: optionalString(parsed.reason, 'reason', 240),
-      note: optionalString(parsed.note, 'note', 1000),
       period: parsed.intent === 'report' ? optionalEnum(parsed.period, 'period', ['daily', 'weekly'], 'weekly') : undefined,
       offset: parsed.intent === 'report' ? optionalInteger(parsed.offset, 'offset', -1, 1) : undefined,
-      completeTask: parsed.intent === 'focus_finish' ? optionalBoolean(parsed.completeTask, 'completeTask') : undefined,
       status: ['query', 'stats', 'batch'].includes(parsed.intent)
         ? optionalEnum(parsed.status, 'status', ['todo', 'doing', 'done'], undefined) : undefined,
       rescheduleTime: usesReschedule ? (rescheduleTime || undefined) : undefined,

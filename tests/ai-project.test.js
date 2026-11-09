@@ -18,10 +18,8 @@ const store = require('../src/main/store');
 const ai = require('../src/main/ai');
 const { TOOL_DEFINITIONS, createToolRegistry } = require('../src/main/agent/tool-registry');
 const { buildWorkspaceSnapshot } = require('../src/main/agent/context');
-const { normalizeWorkflowState, generateDailyPlan } = require('../src/main/workflow-planner');
 const { normalizeModelResponse } = require('../src/main/agent/model-contract');
 const { normalizeReportModelResponse, reportToMarkdown } = require('../src/main/agent/report-contract');
-const { buildDailyCopilot, normalizeCopilotState } = require('../src/main/agent/daily-copilot');
 const { routeSemanticInput, reconcileModelRoute } = require('../src/main/agent/semantic-router');
 
 const DATA_DIR = process.env.WORK_HELPER_DATA_DIR || path.join(require('os').tmpdir(), 'work-helper-ai-test-' + Date.now());
@@ -38,7 +36,6 @@ after(() => {
 /* ---------- 工具 ---------- */
 function reset() {
   store.resetTasks();
-  store.updateWorkPreferences({ workdayStart: '09:00', workdayEnd: '23:59' });
   store.clearAgentState();
 }
 
@@ -95,185 +92,6 @@ test('工作记录：旧任务保持兼容且记录可以新增、修改和删�
   assert.strictEqual(updated.text, '决定先验证核心链路');
   assert.deepStrictEqual(store.removeTaskWorkLog(task.id, created.id), { ok: true, id: created.id });
   assert.deepStrictEqual(store.getTask(task.id).workLogs, []);
-});
-
-test('每日闭环：计划按进行中、逾期和优先级排序且不超过可用时间', (context) => {
-  useMorning(context);
-  reset();
-  const tasks = store.getAllTasks();
-  tasks.forEach((task, index) => store.updateTask(task.id, { estimatedMinutes: 25 + index * 5 }));
-  const now = new Date();
-  now.setHours(9, 0, 0, 0);
-  const plan = store.previewDailyPlan({ availableMinutes: 80, startTime: '09:00' });
-  assert.strictEqual(plan.status, 'draft');
-  assert.strictEqual(plan.capacityMinutes, 80);
-  assert.ok(plan.scheduledMinutes <= 80);
-  assert.strictEqual(plan.items[0].taskId, 3, '正在进行的任务应排在最前');
-  assert.strictEqual(new Set(plan.items.map((item) => item.taskId)).size, plan.items.length);
-  assert.ok(plan.items.every((item) => item.reason && item.plannedStart && item.plannedEnd));
-});
-
-test('每日闭环：临近下班生成计划时严格截断在工作结束时间', () => {
-  const state = normalizeWorkflowState({
-    preferences: {
-      workdayStart: '09:00',
-      workdayEnd: '18:00',
-      dailyCapacityMinutes: 240,
-      defaultTaskMinutes: 30,
-      shortBreakMinutes: 5
-    }
-  });
-  const plan = generateDailyPlan([
-    { id: 9001, title: '临近下班任务', status: 'todo', pri: 4, estimatedMinutes: 120, order: 1 },
-    { id: 9002, title: '明天再做任务', status: 'todo', pri: 3, estimatedMinutes: 120, order: 2 }
-  ], state, { date: '2026-08-21', availableMinutes: 240 }, new Date('2026-08-21T17:30:00'));
-  assert.strictEqual(plan.scheduledMinutes, 30);
-  assert.strictEqual(plan.items.length, 1);
-  assert.strictEqual(plan.items[0].plannedStart, '17:30');
-  assert.strictEqual(plan.items[0].plannedEnd, '18:00');
-  assert.strictEqual(plan.items[0].partial, true);
-});
-
-test('每日闭环：智能约束会优先匹配、排除任务并避开占用时段', () => {
-  const state = normalizeWorkflowState({
-    preferences: { workdayStart: '09:00', workdayEnd: '18:00', dailyCapacityMinutes: 240, shortBreakMinutes: 5 }
-  });
-  const plan = generateDailyPlan([
-    { id: 9101, title: '发布版本说明', status: 'todo', pri: 4, estimatedMinutes: 30, order: 1 },
-    { id: 9102, title: '整理会议记录', status: 'todo', pri: 4, estimatedMinutes: 30, order: 2 },
-    { id: 9103, title: '处理发布阻塞问题', status: 'todo', pri: 1, estimatedMinutes: 30, order: 3 }
-  ], state, {
-    date: '2026-08-25', availableMinutes: 120, startTime: '13:30', focus: '发布', exclude: ['会议'], blockedTimes: ['14:00-15:00']
-  }, new Date('2026-08-25T08:00:00'));
-  assert.strictEqual(plan.items[0].taskId, 9101);
-  assert.ok(!plan.items.some((item) => item.taskId === 9102));
-  assert.ok(plan.items.every((item) => item.plannedEnd <= '14:00' || item.plannedStart >= '15:00'));
-  assert.deepStrictEqual(plan.blockedTimes, ['14:00-15:00']);
-});
-
-test('每日 Agent：晨间没有计划时只推荐生成可确认的计划草案', () => {
-  const now = new Date('2026-08-25T09:15:00');
-  const briefing = buildDailyCopilot([
-    { id: 9201, title: '修复发布阻塞', status: 'todo', pri: 4, due: '2026-08-24 18:00' },
-    { id: 9202, title: '整理会议记录', status: 'todo', pri: 2, due: '2026-08-25 17:00' }
-  ], normalizeWorkflowState({ preferences: { workdayStart: '09:00', workdayEnd: '18:00' } }), now);
-  assert.strictEqual(briefing.visible, true);
-  assert.strictEqual(briefing.heading, '晨间简报');
-  assert.strictEqual(briefing.suggestion.kind, 'plan_day');
-  assert.strictEqual(briefing.suggestion.action.kind, 'preview_plan');
-  assert.strictEqual(briefing.suggestion.targetId, 9201);
-  assert.deepStrictEqual(briefing.suggestion.sources.map((source) => source.id), ['task:9201']);
-  assert.strictEqual(briefing.summary.overdueCount, 1);
-});
-
-test('每日 Agent：已有计划时推荐唯一的当前任务并给出计划与任务依据', () => {
-  const now = new Date('2026-08-25T10:15:00');
-  const workflow = normalizeWorkflowState({
-    preferences: { workdayStart: '09:00', workdayEnd: '18:00' },
-    dailyPlans: {
-      '2026-08-25': {
-        date: '2026-08-25', revision: 2, capacityMinutes: 120, scheduledMinutes: 60,
-        items: [{ taskId: 9301, title: '完成交互稿', plannedStart: '10:00', plannedEnd: '11:00', plannedMinutes: 60, reason: '今天截止' }]
-      }
-    }
-  });
-  const briefing = buildDailyCopilot([
-    { id: 9301, title: '完成交互稿', status: 'todo', pri: 3, due: '2026-08-25 17:00' }
-  ], workflow, now);
-  assert.strictEqual(briefing.suggestion.kind, 'start_planned_task');
-  assert.strictEqual(briefing.suggestion.action.kind, 'start_focus');
-  assert.strictEqual(briefing.suggestion.action.targetMinutes, 60);
-  assert.deepStrictEqual(briefing.suggestion.sources.map((source) => source.type), ['plan', 'task']);
-  assert.match(briefing.suggestion.reason, /计划时段/);
-});
-
-test('每日 Agent：暂停中的专注优先恢复，进行中时不诱导切换', () => {
-  const now = new Date('2026-08-25T11:00:00');
-  const base = {
-    preferences: { workdayStart: '09:00', workdayEnd: '18:00' },
-    activeFocus: {
-      id: 'focus-1', taskId: 9401, title: '核对验收结果', state: 'paused', targetMinutes: 25,
-      startedAt: now.getTime() - 12 * 60000, pausedAt: now.getTime(), accumulatedMs: 12 * 60000
-    }
-  };
-  const tasks = [{ id: 9401, title: '核对验收结果', status: 'doing', pri: 3 }];
-  const paused = buildDailyCopilot(tasks, normalizeWorkflowState(base), now);
-  assert.strictEqual(paused.suggestion.action.kind, 'resume_focus');
-  const runningState = normalizeWorkflowState(Object.assign({}, base, {
-    activeFocus: Object.assign({}, base.activeFocus, { state: 'running', resumedAt: now.getTime() })
-  }));
-  const running = buildDailyCopilot(tasks, runningState, now);
-  assert.strictEqual(running.suggestion.kind, 'stay_focused');
-  assert.strictEqual(running.suggestion.action.kind, 'view_focus');
-});
-
-test('每日 Agent：安静时段、稍后提醒和今日静默都会抑制主动卡片', () => {
-  const tasks = [{ id: 9501, title: '低打扰测试', status: 'todo', pri: 2 }];
-  const late = new Date('2026-08-25T21:00:00');
-  const quiet = buildDailyCopilot(tasks, normalizeWorkflowState({}), late);
-  assert.strictEqual(quiet.visible, false);
-  assert.strictEqual(quiet.suppressedBy, 'quiet');
-  const morning = new Date('2026-08-25T10:00:00');
-  const snoozed = buildDailyCopilot(tasks, normalizeWorkflowState({ copilot: { snoozedUntil: morning.getTime() + 60000 } }), morning);
-  assert.strictEqual(snoozed.suppressedBy, 'snoozed');
-  const muted = buildDailyCopilot(tasks, normalizeWorkflowState({ copilot: { mutedDate: '2026-08-25' } }), morning);
-  assert.strictEqual(muted.suppressedBy, 'muted');
-  assert.strictEqual(normalizeCopilotState({ quietStart: 'bad', quietEnd: 'bad' }).quietStart, '20:00');
-});
-
-test('每日 Agent：下班后从计划事实引导复盘，复盘后转向日报', () => {
-  const now = new Date('2026-08-25T18:30:00');
-  const plan = {
-    date: '2026-08-25', revision: 1, capacityMinutes: 60, scheduledMinutes: 60,
-    items: [{ taskId: 9601, title: '完成验收', plannedStart: '16:00', plannedEnd: '17:00', plannedMinutes: 60 }]
-  };
-  const tasks = [{ id: 9601, title: '完成验收', status: 'done', pri: 3, completedAt: now.getTime() }];
-  const pending = buildDailyCopilot(tasks, normalizeWorkflowState({ preferences: { workdayEnd: '18:00' }, dailyPlans: { '2026-08-25': plan }, copilot: { quietStart: '22:00' } }), now);
-  assert.strictEqual(pending.suggestion.action.kind, 'review_day');
-  const reviewed = buildDailyCopilot(tasks, normalizeWorkflowState({ preferences: { workdayEnd: '18:00' }, dailyPlans: { '2026-08-25': Object.assign({}, plan, { review: { completionRate: 100 } }) }, copilot: { quietStart: '22:00' } }), now);
-  assert.strictEqual(reviewed.suggestion.action.kind, 'open_daily_report');
-});
-
-test('每日 Agent：稍后提醒与恢复写入本地工作流状态', () => {
-  reset();
-  const now = new Date('2026-08-25T10:00:00').getTime();
-  const snoozed = store.updateDailyCopilot({ action: 'snooze', minutes: 30, now });
-  assert.strictEqual(snoozed.visible, false);
-  assert.strictEqual(snoozed.suppressedBy, 'snoozed');
-  assert.strictEqual(store.getWorkflowState(now).copilot.snoozedUntil, now + 30 * 60000);
-  const restored = store.updateDailyCopilot({ action: 'restore', now });
-  assert.strictEqual(restored.suppressedBy, '');
-});
-
-test('Agent 智能安排：只生成首页草案，不写入已保存计划', async (context) => {
-  useMorning(context);
-  reset();
-  const preview = await ai.previewDailyPlan('今天只有 2 小时，先做发布相关，14:00-15:00 开会');
-  assert.strictEqual(preview.type, 'daily_plan_preview');
-  assert.strictEqual(preview.plan.capacityMinutes, 120);
-  assert.deepStrictEqual(preview.constraints.blockedTimes, ['14:00-15:00']);
-  assert.strictEqual(Object.keys(store.getWorkflowState().dailyPlans).length, 0);
-});
-
-test('Agent 智能安排：中文时间窗口会转换为计划边界', async (context) => {
-  useMorning(context);
-  reset();
-  const preview = await ai.previewDailyPlan('今天下午两点到七点');
-  assert.strictEqual(preview.type, 'daily_plan_preview');
-  assert.strictEqual(preview.constraints.startTime, '14:00');
-  assert.strictEqual(preview.constraints.endTime, '19:00');
-  assert.strictEqual(preview.constraints.availableMinutes, 300);
-  assert.ok(preview.plan.items.every((item) => item.plannedEnd <= '19:00'));
-});
-
-test('Agent 智能安排：模型超时后受控降级，不把 AbortError 泄漏到界面', async (context) => {
-  useMorning(context);
-  reset();
-  store.updateSettings({ aiStage: 'llm', aiProvider: 'custom', aiBaseUrl: 'http://127.0.0.1:1/v1', aiApiKey: 'test-key', aiModel: 'test-model' });
-  const preview = await ai.previewDailyPlan('今天下午两点到七点');
-  assert.strictEqual(preview.type, 'daily_plan_preview');
-  assert.match(preview.notice, /已使用本地计划器/);
-  store.updateSettings({ aiStage: 'mock' });
 });
 
 test('任务上下文 Agent：预览不写入，确认后可撤销', async () => {
@@ -627,205 +445,6 @@ test('任务上下文 Agent：拆分预览后补充具体步骤不会重复写�
   assert.strictEqual(second.action.intent, 'split');
   assert.deepStrictEqual(second.action.params.steps, ['准备说明', '执行发布', '通知团队']);
   assert.deepStrictEqual(store.getTask(task.id).children, []);
-});
-
-test('每日闭环：应用计划检查版本且可以无冲突撤销', (context) => {
-  useMorning(context);
-  reset();
-  const draft = store.previewDailyPlan({ availableMinutes: 60 });
-  const applied = store.applyDailyPlan(draft);
-  assert.strictEqual(applied.plan.status, 'active');
-  assert.strictEqual(store.getWorkflowState().dailyPlans[draft.date].revision, 1);
-  assert.throws(() => store.applyDailyPlan(draft), /已经变化/);
-  const undone = store.restoreDailyPlan({
-    date: draft.date,
-    expectedRevision: applied.plan.revision,
-    previousPlan: applied.previousPlan
-  });
-  assert.strictEqual(undone.ok, true);
-  assert.strictEqual(store.getWorkflowState().dailyPlans[draft.date], undefined);
-});
-
-test('每日闭环：编辑后的计划不能超过声明的可用时间', (context) => {
-  useMorning(context);
-  reset();
-  const draft = store.previewDailyPlan({ availableMinutes: 60 });
-  draft.items[0].plannedMinutes = 65;
-  assert.throws(() => store.applyDailyPlan(draft), /超出可用时间/);
-  assert.strictEqual(store.getWorkflowState().dailyPlans[draft.date], undefined);
-});
-
-test('每日闭环：服务端拒绝手工编辑到工作时间之外的计划', () => {
-  reset();
-  store.updateWorkPreferences({ workdayStart: '09:00', workdayEnd: '18:00' });
-  const tomorrow = new Date();
-  tomorrow.setDate(tomorrow.getDate() + 1);
-  const pad = (value) => String(value).padStart(2, '0');
-  const date = `${tomorrow.getFullYear()}-${pad(tomorrow.getMonth() + 1)}-${pad(tomorrow.getDate())}`;
-  const draft = store.previewDailyPlan({ date, availableMinutes: 120, startTime: '17:00' });
-  draft.items = [Object.assign({}, draft.items[0], {
-    plannedMinutes: 90,
-    plannedStart: '17:00',
-    plannedEnd: '18:30'
-  })];
-  assert.throws(() => store.applyDailyPlan(draft), /不能超出工作时间/);
-  assert.strictEqual(store.getWorkflowState().dailyPlans[date], undefined);
-});
-
-test('每日闭环：服务端拒绝把任务编辑进智能安排的占用时段', () => {
-  reset();
-  store.updateWorkPreferences({ workdayStart: '09:00', workdayEnd: '18:00' });
-  const tomorrow = new Date();
-  tomorrow.setDate(tomorrow.getDate() + 1);
-  const pad = (value) => String(value).padStart(2, '0');
-  const date = `${tomorrow.getFullYear()}-${pad(tomorrow.getMonth() + 1)}-${pad(tomorrow.getDate())}`;
-  const draft = store.previewDailyPlan({ date, availableMinutes: 120, startTime: '13:00', blockedTimes: ['14:00-15:00'] });
-  draft.items = [Object.assign({}, draft.items[0], { plannedStart: '14:10', plannedEnd: '14:40' })];
-  assert.throws(() => store.applyDailyPlan(draft), /不能超出工作时间/);
-  assert.strictEqual(store.getWorkflowState().dailyPlans[date], undefined);
-});
-
-test('每日闭环：专注暂停、打断、继续和完成跨时间累计并同步任务', (context) => {
-  useMorning(context);
-  reset();
-  const task = store.getTask(3);
-  const base = Date.now();
-  const draft = store.previewDailyPlan({ availableMinutes: 60 });
-  store.applyDailyPlan(draft);
-  let state = store.startFocus(task.id, { targetMinutes: 25, now: base });
-  assert.strictEqual(state.activeFocus.state, 'running');
-  state = store.recordInterruption('临时电话', { now: base + 10 * 60000 });
-  assert.strictEqual(state.activeFocus.state, 'paused');
-  assert.strictEqual(state.activeFocus.elapsedMs, 10 * 60000);
-  assert.strictEqual(state.activeFocus.interruptions[0].reason, '临时电话');
-  state = store.getWorkflowState(base + 20 * 60000);
-  assert.strictEqual(state.activeFocus.elapsedMs, 10 * 60000, '暂停期间不能继续计时');
-  state = store.resumeFocus({ now: base + 20 * 60000 });
-  assert.strictEqual(state.activeFocus.state, 'running');
-  const finished = store.finishFocus({ completeTask: true, now: base + 30 * 60000 });
-  assert.strictEqual(finished.session.focusedMs, 20 * 60000);
-  assert.strictEqual(finished.session.interruptions.length, 1);
-  assert.strictEqual(store.getTask(task.id).status, 'done');
-  assert.strictEqual(finished.workflow.activeFocus, null);
-  const review = store.getDailyReview(draft.date, base + 31 * 60000);
-  assert.ok(review.completedCount >= 1);
-  assert.strictEqual(review.focusedMinutes, 20);
-  assert.strictEqual(review.interruptionCount, 1);
-});
-
-test('每日闭环：损坏或旧版工作流状态会被安全规范化', () => {
-  const normalized = normalizeWorkflowState({
-    preferences: { focusMinutes: 2, dailyCapacityMinutes: 9999 },
-    activeFocus: { taskId: 8, state: 'paused', accumulatedMs: -1 },
-    focusSessions: [{ taskId: 8, focusedMs: -10, outcome: 'unexpected' }]
-  });
-  assert.strictEqual(normalized.preferences.focusMinutes, 10);
-  assert.strictEqual(normalized.preferences.dailyCapacityMinutes, 720);
-  assert.strictEqual(normalized.activeFocus.accumulatedMs, 0);
-  assert.strictEqual(normalized.focusSessions[0].outcome, 'stopped');
-});
-
-test('Agent 每日计划：先预览确认，保存后可以撤销', (context) => {
-  useMorning(context);
-  reset();
-  const preview = ai.handle('帮我按 2 小时安排今天的工作');
-  assert.strictEqual(preview.intent, 'daily_plan');
-  assert.strictEqual(preview.type, 'confirm');
-  assert.strictEqual(preview.confirmation.params.plan.capacityMinutes, 120);
-  assert.strictEqual(store.getWorkflowState().dailyPlans[preview.confirmation.params.plan.date], undefined);
-
-  const applied = ai.handle('确认');
-  assert.strictEqual(applied.type, 'daily_plan');
-  assert.ok(applied.plan.items.length > 0);
-  const undone = ai.undoAction(applied.undo);
-  assert.strictEqual(undone.ok, true);
-  assert.strictEqual(store.getWorkflowState().dailyPlans[applied.plan.date], undefined);
-});
-
-test('Agent 专注闭环：按计划开始、记录打断、继续并完成任务', (context) => {
-  useMorning(context);
-  reset();
-  ai.handle('安排今天的工作计划');
-  ai.handle('确认');
-  const started = ai.handle('开始下一项');
-  assert.strictEqual(started.type, 'focus_start');
-  assert.strictEqual(store.getWorkflowState().activeFocus.state, 'running');
-
-  const interrupted = ai.handle('被电话打断了');
-  assert.strictEqual(interrupted.type, 'focus_interrupt');
-  assert.strictEqual(interrupted.workflow.activeFocus.interruptions[0].reason, '电话');
-  assert.strictEqual(interrupted.workflow.activeFocus.state, 'paused');
-
-  assert.strictEqual(ai.handle('继续专注').type, 'focus_resume');
-  const finished = ai.handle('完成当前任务');
-  assert.strictEqual(finished.type, 'focus_finish');
-  assert.strictEqual(finished.task.status, 'done');
-  assert.strictEqual(store.getWorkflowState().activeFocus, null);
-});
-
-test('每日闭环：专注任务被归档时结束计时并跳过计划项', (context) => {
-  useMorning(context);
-  reset();
-  const draft = store.previewDailyPlan({ availableMinutes: 60 });
-  store.applyDailyPlan(draft);
-  const taskId = draft.items[0].taskId;
-  store.startFocus(taskId, { targetMinutes: 25 });
-  store.archiveTask(taskId);
-  const workflow = store.getWorkflowState();
-  assert.strictEqual(workflow.activeFocus, null);
-  assert.strictEqual(workflow.dailyPlans[draft.date].items.find((item) => item.taskId === taskId).status, 'skipped');
-  assert.strictEqual(workflow.focusSessions.at(-1).outcome, 'stopped');
-});
-
-test('每日闭环：专注尚未结束时不能保存今日复盘', (context) => {
-  useMorning(context);
-  reset();
-  const draft = store.previewDailyPlan({ availableMinutes: 60 });
-  store.applyDailyPlan(draft);
-  store.startFocus(draft.items[0].taskId, { targetMinutes: 25 });
-  assert.throws(() => store.saveDailyReview(draft.date, {}), /先结束当前专注/);
-  store.finishFocus({ completeTask: false });
-});
-
-test('Agent 重排与复盘：保留原因并继续使用确认边界', (context) => {
-  useMorning(context);
-  reset();
-  ai.handle('安排今天的工作计划');
-  ai.handle('确认');
-  const before = store.getWorkflowState();
-  const date = Object.keys(before.dailyPlans)[0];
-  const replan = ai.handle('今天来不及了，只剩 1 小时，重新安排一下');
-  assert.strictEqual(replan.intent, 'daily_replan');
-  assert.strictEqual(replan.type, 'confirm');
-  assert.strictEqual(replan.confirmation.params.plan.capacityMinutes, 60);
-  assert.match(replan.message, /来不及/);
-  assert.strictEqual(store.getWorkflowState().dailyPlans[date].revision, before.dailyPlans[date].revision);
-  assert.strictEqual(ai.handle('确认').type, 'daily_replan');
-
-  const review = ai.handle('复盘一下今天');
-  assert.strictEqual(review.type, 'confirm');
-  assert.match(review.message, /完成/);
-  const saved = ai.handle('确认');
-  assert.strictEqual(saved.type, 'daily_review');
-  assert.strictEqual(store.getWorkflowState().dailyPlans[date].status, 'completed');
-  assert.strictEqual(ai.undoAction(saved.undo).ok, true);
-  assert.strictEqual(store.getWorkflowState().dailyPlans[date].status, 'active');
-});
-
-test('模型契约：接受受限工作流字段并拒绝越界专注时长', () => {
-  const parsed = normalizeModelResponse(JSON.stringify({
-    schemaVersion: 1,
-    intent: 'focus_start',
-    confidence: 'high',
-    target: '写方案',
-    targetMinutes: 45
-  }), ai.INTENTS);
-  assert.strictEqual(parsed.params.targetMinutes, 45);
-  assert.throws(() => normalizeModelResponse(JSON.stringify({
-    schemaVersion: 1,
-    intent: 'focus_start',
-    targetMinutes: 999
-  }), ai.INTENTS), /targetMinutes/);
 });
 
 test('模型契约：忽略只读建议中的无关字段但继续拒绝会执行的非法字段', () => {
@@ -1355,22 +974,6 @@ test('助手撤销：单独创建任务和备忘录都可安全移除', () => {
   assert.strictEqual(createdMemo.undoable, true);
   assert.strictEqual(ai.undoAction(createdMemo.undo).ok, true);
   assert.strictEqual(store.getMemo(createdMemo.memo.id), null);
-});
-
-test('助手撤销：新任务进入今日计划后拒绝移除并保留计划引用', (context) => {
-  useMorning(context);
-  store.clearAllTasks();
-  store.updateWorkPreferences({ workdayStart: '00:00', workdayEnd: '23:59' });
-  const created = ai.handle('今天 新建计划引用检查 预计 25 分钟');
-  const plan = store.previewDailyPlan({ availableMinutes: 60 });
-  assert.ok(plan.items.some((item) => item.taskId === created.task.id));
-  store.applyDailyPlan(plan);
-
-  const undone = ai.undoAction(created.undo);
-  assert.strictEqual(undone.ok, false);
-  assert.strictEqual(undone.reason, 'conflict');
-  assert.match(undone.message, /今日计划或专注记录/);
-  assert.ok(store.getTask(created.task.id));
 });
 
 test('数据层：一轮聊天记录原子写入，失败时不留下半轮内容', () => {
@@ -1945,7 +1548,7 @@ test('周报：上周/下周偏移不报错', () => {
   assert.ok(!next.includes('## 一、本周概览'));
 });
 
-test('日报：按本地日期汇总完成、到期和专注投入', (context) => {
+test('日报：按本地日期汇总完成与到期', (context) => {
   useMorning(context);
   reset();
   const today = new Date();
@@ -1958,7 +1561,7 @@ test('日报：按本地日期汇总完成、到期和专注投入', (context) =
   assert.ok(md.includes(`# 工作日报（${date}）`));
   assert.ok(md.includes('日报已完成'));
   assert.ok(md.includes('日报待处理'));
-  assert.ok(md.includes('专注投入'));
+  assert.doesNotMatch(md, /专注投入/);
 });
 
 test('Agent 报告：日报和周报都走只读报告工具', (context) => {
@@ -2025,7 +1628,6 @@ test('真正的报告 Agent：模型撰写与连续修订复用事实快照且�
   store.completeTask(work.id);
   store.completeTask(life.id);
   const beforeTasks = JSON.stringify(store.getAllTasks());
-  const beforeWorkflow = JSON.stringify(store.getWorkflowState());
   store.updateSettings({
     aiStage: 'llm', aiProvider: 'custom', aiBaseUrl: 'https://example.invalid/v1', aiApiKey: 'test-key', aiModel: 'test-model'
   });
@@ -2063,7 +1665,6 @@ test('真正的报告 Agent：模型撰写与连续修订复用事实快照且�
     assert.ok(revised.preferences.exclude.includes('生活'));
     assert.ok(!revised.sources.some((item) => item.title === '购买生活用品'));
     assert.strictEqual(JSON.stringify(store.getAllTasks()), beforeTasks);
-    assert.strictEqual(JSON.stringify(store.getWorkflowState()), beforeWorkflow);
 
     const cancelled = await ai.handleAuto('结束报告修改');
     assert.strictEqual(cancelled.reportSessionActive, false);
@@ -2075,7 +1676,7 @@ test('真正的报告 Agent：模型撰写与连续修订复用事实快照且�
   }
 });
 
-test('报告事实快照包含任务语境、子任务进度、新增事项和复盘原因', (context) => {
+test('报告事实快照包含任务语境、子任务进度和新增事项', (context) => {
   useMorning(context);
   reset();
   const now = Date.now();
@@ -2098,17 +1699,6 @@ test('报告事实快照包含任务语境、子任务进度、新增事项和�
     pendingTitles: ['真实窗口验收']
   });
   assert.match(source.detail, /子任务：已完成 1\/2/);
-
-  const draft = store.previewDailyPlan({ availableMinutes: 60 });
-  store.applyDailyPlan(draft);
-  store.saveDailyReview(draft.date, {
-    note: '核心链路已经完成',
-    unfinishedReasons: [{ taskId: draft.items[0].taskId, reason: '等待真实模型验收' }]
-  });
-  const reviewed = store.buildReportSnapshot({ period: 'daily', offset: 0, now });
-  const review = reviewed.sources.find((item) => item.type === 'review' && item.date === draft.date);
-  assert.ok(review);
-  assert.deepStrictEqual(review.unfinishedReasons, [{ taskId: draft.items[0].taskId, reason: '等待真实模型验收' }]);
 });
 
 test('报告工作记录：纳入可追溯来源并按项目合并成果与进展', async (context) => {
@@ -2470,7 +2060,7 @@ test('真正的报告 Agent：正文被截断时只重写一次，引用造假�
 test('真正的报告 Agent：取消生成不会保存半成品会话或修改工作数据', async (context) => {
   useMorning(context);
   reset();
-  const before = JSON.stringify({ tasks: store.getAllTasks(), workflow: store.getWorkflowState() });
+  const before = JSON.stringify({ tasks: store.getAllTasks() });
   store.updateSettings({
     aiStage: 'llm', aiProvider: 'custom', aiBaseUrl: 'https://example.invalid/v1', aiApiKey: 'test-key', aiModel: 'test-model'
   });
@@ -2488,7 +2078,7 @@ test('真正的报告 Agent：取消生成不会保存半成品会话或修改�
     controller.abort();
     await assert.rejects(pending, (error) => error && error.code === 'AI_REQUEST_CANCELLED');
     assert.strictEqual(store.getAgentState().reportSession, null);
-    assert.strictEqual(JSON.stringify({ tasks: store.getAllTasks(), workflow: store.getWorkflowState() }), before);
+    assert.strictEqual(JSON.stringify({ tasks: store.getAllTasks() }), before);
   } finally {
     global.fetch = originalFetch;
     store.updateSettings({ aiStage: 'mock' });
@@ -2824,36 +2414,6 @@ test('任务对话小窗：会话自持记忆，不读写主窗口侧边栏对�
   }
 });
 
-test('统一语义路由：安排今天入口保护计划意图并保留本地时间约束', async () => {
-  reset();
-  store.createTask({ title: '发布配置核查', estimatedMinutes: 60 });
-  const previous = store.getSettings();
-  store.updateSettings({
-    aiStage: 'llm', aiProvider: 'custom', aiBaseUrl: 'https://example.invalid/v1', aiApiKey: 'test-key', aiModel: 'test-model'
-  });
-  const originalFetch = global.fetch;
-  global.fetch = async () => ({
-    ok: true,
-    json: async () => ({ choices: [{ message: { content: JSON.stringify({
-      schemaVersion: 1, intent: 'query', confidence: 'high', range: 'today'
-    }) } }] })
-  });
-  try {
-    const preview = await ai.previewDailyPlan('下午两点到四点先做发布配置');
-    assert.strictEqual(preview.intent, 'daily_plan');
-    assert.strictEqual(preview.type, 'daily_plan_preview');
-    assert.strictEqual(preview.constraints.startTime, '14:00');
-    assert.strictEqual(preview.constraints.endTime, '16:00');
-    assert.strictEqual(store.getWorkflowState().dailyPlans[preview.plan.date], undefined, '预览不得直接保存计划');
-  } finally {
-    global.fetch = originalFetch;
-    store.updateSettings({
-      aiStage: previous.aiStage, aiProvider: previous.aiProvider, aiBaseUrl: previous.aiBaseUrl,
-      aiApiKey: previous.aiApiKey, aiModel: previous.aiModel
-    });
-  }
-});
-
 test('本地快路径：明确创建前缀保护标题中的操作词并清理截止残词', () => {
   const parsed = ai.parse('新建任务：取消后恢复验证，今天 21:00 截止');
   assert.strictEqual(parsed.intent, 'create');
@@ -3123,7 +2683,6 @@ test('真实模型：回退生成回答时仍保留当前问题相关的完整�
     assert.match(chatSystemPrompt, /workspace_snapshot/);
     assert.match(chatSystemPrompt, new RegExp(target.title));
     assert.match(chatSystemPrompt, new RegExp(memo.title));
-    assert.match(chatSystemPrompt, /dailyWorkflow/);
   } finally {
     global.fetch = originalFetch;
     store.clearChat();

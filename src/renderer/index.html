@@ -49,8 +49,6 @@
           <h2>今天 <span class="today-date" id="today-date"></span></h2>
           <span class="view-sub" id="today-sub"></span>
         </div>
-        <section class="daily-copilot hidden" id="daily-copilot" aria-label="每日 Agent 建议" aria-live="polite"></section>
-        <section class="workflow-panel" id="workflow-panel" aria-label="今日工作计划" aria-live="polite"></section>
         <div class="view-body" id="today-list">
           <div class="load-state" role="status" aria-live="polite">
             <span class="load-indicator" aria-hidden="true"></span>
@@ -258,7 +256,6 @@
       <div class="modal-head">
         <h5 id="modal-title">新建任务</h5>
         <div class="modal-head-actions">
-          <button type="button" class="modal-agent-btn hidden" id="m-agent" title="和 Agent 一起修改" aria-label="和 Agent 一起修改这项任务"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-i-message"></use></svg></button>
           <button type="button" class="modal-close" id="m-close" title="关闭" aria-label="关闭任务编辑"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-i-x"></use></svg></button>
         </div>
       </div>
@@ -347,8 +344,6 @@
       </form>
     </div>
   </div>
-
-  <!-- 任务 Agent 已升级为独立悬浮对话小窗（src/renderer/task-agent/），入口见任务行与编辑弹窗 -->
 
   <!-- 删除确认 -->
   <div class="modal-mask hidden" id="confirm-mask" aria-hidden="true">

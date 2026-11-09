@@ -20,9 +20,6 @@ const petCss = fs.readFileSync(path.join(ROOT, 'src/renderer/pet/pet.css'), 'utf
 const petPanelHtml = fs.readFileSync(path.join(ROOT, 'src/renderer/pet/panel.html'), 'utf8');
 const petPanelApp = fs.readFileSync(path.join(ROOT, 'src/renderer/pet/panel.js'), 'utf8');
 const petPanelCss = fs.readFileSync(path.join(ROOT, 'src/renderer/pet/panel.css'), 'utf8');
-const taWindowHtml = fs.readFileSync(path.join(ROOT, 'src/renderer/task-agent/window.html'), 'utf8');
-const taWindowApp = fs.readFileSync(path.join(ROOT, 'src/renderer/task-agent/window.js'), 'utf8');
-const taWindowCss = fs.readFileSync(path.join(ROOT, 'src/renderer/task-agent/window.css'), 'utf8');
 const aiSource = fs.readFileSync(path.join(ROOT, 'src/main/ai.js'), 'utf8');
 const buildWin = fs.readFileSync(path.join(ROOT, 'scripts/build-win.ps1'), 'utf8');
 const iconGenerator = fs.readFileSync(path.join(ROOT, 'scripts/generate-app-icons.js'), 'utf8');
@@ -139,12 +136,6 @@ function loadPetRuntime(elements, tasks) {
       api: {
         settings: { get: async () => ({ theme: 'auto' }) },
         tasks: { getAll: async () => tasks || [] },
-        workflow: {
-          get: async () => ({ dailyPlans: {}, activeFocus: null }),
-          pauseFocus: async () => ({ dailyPlans: {}, activeFocus: null }),
-          resumeFocus: async () => ({ dailyPlans: {}, activeFocus: null }),
-          finishFocus: async () => ({ workflow: { dailyPlans: {}, activeFocus: null } })
-        },
         pet: {
           setPosition: async () => ({ ok: true }),
           commitPosition: async () => ({ ok: true }),
@@ -257,118 +248,6 @@ test('视图切换保留各自滚动位置且重复选择不会跳回顶部', ()
   assert.strictEqual(content.scrollTop, 135);
 });
 
-test('今日工作闭环在主界面与桌宠共享完整操作入口', () => {
-  assert.match(html, /id="workflow-panel"/);
-  assert.match(html, /id="m-estimate"/);
-  assert.match(app, /window\.api\.workflow\.previewPlan/);
-  assert.match(app, /window\.api\.workflow\.previewSmartPlan/);
-  assert.match(app, /id="workflow-smart-input"/);
-  assert.match(app, /workflowDraftMeta/);
-  assert.match(app, /data-workflow="smart-toggle"/);
-  assert.match(app, /result\.notice/);
-  assert.match(main, /智能安排暂时未完成，请重试；计划尚未保存/);
-  assert.match(app, /window\.api\.workflow\.startFocus/);
-  assert.match(app, /window\.api\.workflow\.saveReview/);
-  assert.match(app, /<strong>安排今天<\/strong><span>\$\{actionable\.length\} 项待处理/);
-  assert.match(app, />生成今日计划<\/button>/);
-  assert.match(css, /\.workflow-panel \{[\s\S]*?margin: 0 0 16px;[\s\S]*?border-left: 3px solid var\(--accent2\);[\s\S]*?border-radius: 8px;/);
-  assert.match(petHtml, /id="pet-focus"/);
-  assert.match(petApp, /window\.api\.workflow\.pauseFocus/);
-  assert.match(petApp, /window\.api\.workflow\.resumeFocus/);
-  assert.match(petApp, /window\.api\.workflow\.finishFocus/);
-  assert.match(petApp, /finishFocus\(\{ completeTask: true \}\)[\s\S]*?await refreshStatus\(false\)/);
-  assert.match(petApp, /window\.api\.on\('workflow:changed', async \(state\) => \{[\s\S]*?await refreshStatus\(false\)/);
-  assert.match(app, /plan\.scheduledMinutes > plan\.capacityMinutes/);
-  assert.match(css, /@container \(max-width: 560px\) \{[\s\S]*?\.workflow-item \{ grid-template-columns: 72px minmax\(0, 1fr\); \}/);
-  assert.match(css, /\.workflow-smart-entry textarea/);
-  assert.match(css, /\.workflow-constraint-summary/);
-  assert.match(petHtml, /data-pet-focus="toggle" aria-label="暂停专注"/);
-  assert.match(petCss, /\.pm-focus-btn \{ width: 27px; height: 27px;/);
-  assert.match(main, /broadcastAgentWorkflowResult/);
-  assert.match(main, /'complete', 'start', 'delete', 'archive', 'update', 'postpone', 'restore'/);
-  assert.match(app, /if \(operationTypes\.includes\(result\.type\)\) await refreshWorkflow\(\)/);
-  assert.match(preload, /workflow:changed/);
-});
-
-test('每日 Agent：首页提供单一建议、依据、稍后提醒与安全操作入口', () => {
-  assert.match(html, /id="daily-copilot"[^>]+aria-label="每日 Agent 建议"/);
-  assert.match(app, /window\.api\.workflow\.getCopilot\(\)/);
-  assert.match(app, /window\.api\.workflow\.updateCopilot\(\{ action: action === 'snooze' \? 'snooze' : 'mute-today'/);
-  assert.match(app, /data-copilot="primary"/);
-  assert.match(app, /为什么现在/);
-  assert.match(app, /查看依据/);
-  assert.match(app, /30 分钟后提醒/);
-  assert.match(app, /今天不再提示/);
-  assert.match(app, /id="copilot-enabled"[^>]+role="switch"/);
-  assert.match(app, /id="copilot-quiet-start" type="time"/);
-  assert.match(app, /id="copilot-quiet-end" type="time"/);
-  assert.match(app, /action: 'preferences', quietStart, quietEnd/);
-  assert.match(preload, /getCopilot: \(\) => ipcRenderer\.invoke\('workflow:getCopilot'\)/);
-  assert.match(preload, /updateCopilot: \(input\) => ipcRenderer\.invoke\('workflow:updateCopilot', input\)/);
-  assert.match(main, /ipcMain\.handle\('workflow:getCopilot'/);
-  assert.match(main, /ipcMain\.handle\('workflow:updateCopilot'/);
-  assert.match(css, /\.daily-copilot \{/);
-  assert.match(css, /\.copilot-rail::before/);
-  assert.match(css, /\.quiet-time-controls/);
-  assert.match(css, /@container \(max-width: 560px\)[\s\S]*?\.copilot-foot \{ align-items: flex-start; flex-direction: column-reverse; \}/);
-});
-
-test('今日工作流以面板级操作锁阻止并发写入', async () => {
-  const calls = [];
-  const confirmButton = { focused: false, focus() { this.focused = true; } };
-  const button = {
-    attrs: {},
-    classList: fakeClassList(['btn']),
-    dataset: { workflow: 'preview' },
-    disabled: false,
-    textContent: '生成今日计划',
-    setAttribute(name, value) { this.attrs[name] = value; },
-    closest(selector) { return selector === '[data-workflow]' ? this : null; }
-  };
-  const panel = {
-    attrs: {},
-    classList: fakeClassList(),
-    innerHTML: '',
-    setAttribute(name, value) { this.attrs[name] = value; },
-    querySelectorAll() { return [button]; },
-    querySelector(selector) {
-      return selector.includes('[data-workflow="apply-plan"]') ? confirmButton : null;
-    }
-  };
-  const event = { target: button };
-  const run = loadRendererRuntime({
-    '#workflow-panel': panel,
-    __window: { api: { workflow: { previewPlan: async () => ({}) } } },
-    __testValues: { event, calls, release: null }
-  });
-  run(`window.api.workflow.previewPlan = () => {
-    testValues.calls.push('preview');
-    return new Promise((resolve) => { testValues.release = resolve; });
-  };
-  toast = () => {};
-  tasks = [];
-  workflowState = { preferences: {}, dailyPlans: {}, activeFocus: null, focusSessions: [] };
-  testValues.first = handleWorkflowAction(testValues.event);`);
-
-  assert.strictEqual(run('workflowBusy'), true);
-  assert.strictEqual(panel.classList.contains('is-busy'), true);
-  assert.strictEqual(panel.attrs['aria-busy'], 'true');
-  assert.strictEqual(button.disabled, true);
-  assert.strictEqual(button.textContent, '生成中…');
-  const duplicate = await run('handleWorkflowAction(testValues.event)');
-  assert.strictEqual(duplicate, false);
-  assert.deepStrictEqual(calls, ['preview']);
-
-  await run(`testValues.release({ items: [], omittedCount: 0, scheduledMinutes: 0, capacityMinutes: 0 }); testValues.first`);
-  assert.strictEqual(run('workflowBusy'), false);
-  assert.strictEqual(panel.classList.contains('is-busy'), false);
-  assert.strictEqual(panel.attrs['aria-busy'], 'false');
-  assert.strictEqual(button.disabled, false);
-  assert.strictEqual(confirmButton.focused, true);
-  assert.match(css, /\.workflow-panel\.is-busy \{[\s\S]*?cursor: progress;/);
-  assert.match(app, /focusWorkflowAfterAction\(action, succeeded, focusContext\)/);
-});
-
 test('高频任务操作和设置开关暴露键盘与状态语义', () => {
   assert.match(app, /<button type="button" class="task-check"[^>]+aria-label=/);
   assert.match(app, /<button type="button" class="pri-dot p\$\{t\.pri\}"[^>]+data-pri-toggle/);
@@ -468,105 +347,13 @@ test('任务低频操作收进统一菜单并支持方向键浏览', () => {
   assert.strictEqual(items[1].focused, true);
 });
 
-test('任务上下文 Agent 在任务行与编辑弹窗唤起独立对话小窗', () => {
-  assert.match(app, /class="task-agent-btn"[^`]+uiIcon\('message'\)/);
-  assert.match(html, /id="m-agent"[^>]+aria-label="和 Agent 一起修改这项任务"/);
-  // 内嵌 popover 已移除，改为独立悬浮小窗
-  assert.ok(!/task-agent-popover/.test(html));
-  assert.ok(!/task-agent-popover/.test(app));
-  assert.match(preload, /taskAgent: \{\s*open: \(payload\) => ipcRenderer\.invoke\('task-agent:open', payload\)/);
-  assert.match(preload, /'task-agent:session'/);
-  assert.match(main, /ipcMain\.handle\('task-agent:open'/);
-  assert.match(main, /ipcMain\.handle\('task-agent:close'/);
-  assert.match(main, /createTaskAgentWindow/);
-  assert.match(main, /loadFile\(path\.join\(__dirname, 'renderer', 'task-agent', 'window\.html'\)\)/);
-  // 主窗口只负责唤起：入口统一带任务上下文
-  assert.match(app, /window\.api\.taskAgent\.open\(\{/);
-  assert.match(app, /workLogId: workLog && workLog\.id \|\| ''/);
-  // 小窗三件套：对话流 + 快捷指令 + 预览确认
-  assert.match(taWindowHtml, /id="ta-thread"[^>]+aria-live="polite"/);
-  assert.match(taWindowHtml, /data-prompt="改到明天"/);
-  assert.match(taWindowApp, /previewTaskAction\(session\.taskId, input, requestId/);
-  assert.match(taWindowApp, /window\.api\.ai\.applyTaskAction\(preview\.previewId\)/);
-  assert.match(taWindowApp, /window\.api\.ai\.handle\(input, requestId/);
-  assert.match(taWindowApp, /task-agent:session/);
-  assert.match(taWindowCss, /\.ta-preview-actions button\.primary/);
-  // 主窗口监听小窗修改后的刷新通知
-  assert.match(main, /mainWindow\.webContents\.send\('tasks:changed'\)/);
-  assert.match(app, /window\.api\.on\('tasks:changed'/);
-  // 会话隔离：小窗对话不读写主窗口侧边栏的对话记录
-  assert.match(taWindowApp, /const SESSION_HISTORY_LIMIT = 12/);
-  assert.match(taWindowApp, /rememberTurn\(sourceText, result\.message\)/);
-  assert.match(taWindowApp, /rememberTurn\(input, result && result\.message\)/);
-  assert.match(taWindowApp, /\}, currentSessionHistory\(\)\)/);
-  assert.match(preload, /history: options && options\.history/);
-  assert.match(preload, /context, history\) => ipcRenderer\.invoke\('ai:previewTaskAction', \{ taskId, text, requestId, context, history \}\)/);
-  assert.match(main, /isTaskAgentSender\(e\)/);
-  assert.match(main, /function sanitizeSessionHistory\(input\)/);
-  assert.match(main, /if \(isTaskAgent\) return aiRequestCoordinator\.complete\(key, result\)/);
-  assert.match(main, /if \(isTaskAgentSender\(e\)\) return result/);
-  assert.match(main, /history: sanitizeSessionHistory\(payload\.history\)/);
-  assert.match(aiSource, /function conversationContextMessages\(requestContext\)/);
-  assert.match(aiSource, /\.\.\.conversationContextMessages\(requestContext\)/);
-  assert.ok(!/\.\.\.getRecentConversationMessages\(\),\s*\n\s*\{ role: 'user', content: text \}/.test(aiSource));
-});
-
-test('任务工作记录通过 Agent 安全编辑并进入报告来源', () => {
-  const taskSource = app.slice(app.indexOf('function rowHTML('), app.indexOf('function renderList('));
-  assert.match(taskSource, /class="task-worklog"/);
-  assert.match(taskSource, /data-worklog-add="\$\{t\.id\}"/);
-  assert.match(taskSource, /data-worklog-edit="\$\{esc\(log\.id\)\}"/);
-  assert.match(taskSource, /data-worklog-remove="\$\{esc\(log\.id\)\}"/);
-  assert.match(app, /workLogId: workLog && workLog\.id \|\| ''/);
-  assert.match(app, /workLogKind: workLog && workLog\.kind \|\| ''/);
-  assert.match(app, /closest\('\[data-worklog-add\]'\)/);
-  assert.match(app, /closest\('\[data-worklog-edit\]'\)/);
-  assert.match(app, /label: '记录成果'/);
-  assert.match(app, /function openCompletionOutcome\(taskId\)/);
-  assert.match(app, /worklog: '记录'/);
-  assert.match(preload, /addWorkLog: \(taskId, input\) => ipcRenderer\.invoke\('tasks:addWorkLog'/);
-  assert.match(main, /ipcMain\.handle\('tasks:addWorkLog'/);
-  assert.match(css, /\.task-worklog-item \{[^}]*grid-template-columns:/);
-});
-
-test('任务 Agent 入口把任务与工作记录上下文传给独立小窗', () => {
-  const opened = [];
-  const trigger = { isConnected: true, focused: false, focus() { this.focused = true; } };
-  const run = loadRendererRuntime({
-    __window: {
-      innerWidth: 1200,
-      innerHeight: 800,
-      api: {
-        taskAgent: { open: async (payload) => { opened.push(payload); return { ok: true }; } }
-      }
-    },
-    __testValues: {
-      trigger,
-      task: { id: 42, title: '独立小窗的任务', status: 'todo' },
-      archived: { id: 43, title: '已归档', status: 'archived' },
-      log: { id: 'log-7', kind: 'progress', text: '进展：完成一半' }
-    }
-  });
-
-  run('openTaskAgent(testValues.task, testValues.trigger)');
-  assert.strictEqual(opened.length, 1);
-  assert.strictEqual(opened[0].taskId, 42);
-  assert.strictEqual(opened[0].title, '独立小窗的任务');
-  assert.strictEqual(opened[0].draft, '');
-  assert.strictEqual(opened[0].workLogId, '');
-  assert.strictEqual(trigger.focused, true);
-
-  // 编辑工作记录入口：带记录上下文与草稿
-  run('openTaskAgent(testValues.task, testValues.trigger, { workLog: testValues.log })');
-  assert.strictEqual(opened.length, 2);
-  assert.strictEqual(opened[1].workLogId, 'log-7');
-  assert.strictEqual(opened[1].workLogKind, 'progress');
-  assert.strictEqual(opened[1].draft, '进展：完成一半');
-  assert.strictEqual(opened[1].title, '编辑记录 · 独立小窗的任务');
-
-  // 归档任务不打开小窗
-  run('openTaskAgent(testValues.archived, testValues.trigger)');
-  assert.strictEqual(opened.length, 2);
+test('任务上下文 Agent 独立小窗已下线，主窗口不再保留唤起入口', () => {
+  assert.ok(!fs.existsSync(path.join(ROOT, 'src/renderer/task-agent')));
+  assert.doesNotMatch(app, /task-agent-btn|openTaskAgent|window\.api\.taskAgent/);
+  assert.doesNotMatch(html, /id="m-agent"/);
+  assert.doesNotMatch(css, /\.task-agent-btn|\.modal-agent-btn|\.task-worklog/);
+  assert.doesNotMatch(preload, /taskAgent|'task-agent:session'/);
+  assert.doesNotMatch(main, /createTaskAgentWindow|'task-agent:open'|'task-agent:close'|isTaskAgentSender/);
 });
 
 /* 任务对话小窗运行时：预览确认流 + 非任务操作回退全局对话 */
@@ -618,113 +405,6 @@ function fakeTaElement(tag) {
     String(el.className || '').split(/\s+/).includes(name);
   return el;
 }
-
-function loadTaskAgentWindowRuntime(api) {
-  const elements = {};
-  ['#ta-thread', '#ta-input', '#ta-send', '#ta-state', '#ta-title', '#ta-close', '#ta-form', '#ta-chips']
-    .forEach((id) => { elements[id] = fakeTaElement(id === '#ta-form' ? 'form' : 'div'); });
-  const chip = fakeTaElement('button');
-  chip.dataset.prompt = '改到明天';
-  elements.__chips = [chip];
-  const context = vm.createContext({
-    console,
-    Date,
-    Math,
-    JSON,
-    Promise,
-    setTimeout: (callback) => { callback(); return 1; },
-    clearTimeout: () => {},
-    document: {
-      querySelector: (selector) => elements[selector] || null,
-      querySelectorAll: (selector) => (selector === '.ta-chips .ta-chip' ? elements.__chips : []),
-      createElement: (tag) => fakeTaElement(tag),
-      addEventListener() {},
-      removeEventListener() {}
-    },
-    window: { api }
-  });
-  vm.runInContext(taWindowApp, context);
-  return { elements, run: (source) => vm.runInContext(source, context) };
-}
-
-test('任务对话小窗：任务修改走预览确认流，非任务操作回退全局 Agent', async () => {
-  const calls = { preview: [], handle: [], apply: [] };
-  let previewResult = {
-    ok: true,
-    type: 'task_action_preview',
-    summary: '准备更新「独立小窗的任务」',
-    fields: [{ label: '截止时间', before: '2026-08-21 18:00', after: '2026-08-22 18:00' }],
-    previewId: 'preview-1',
-    action: { intent: 'update', params: { due: '2026-08-22 18:00' } }
-  };
-  const api = {
-    on: (channel, cb) => { api.__session = cb; },
-    taskAgent: { open: async () => ({ ok: true }), close: () => {} },
-    ai: {
-      onProgress: () => {},
-      previewTaskAction: async (taskId, text, requestId, context, history) => {
-        calls.preview.push({ taskId, text, context, history });
-        return JSON.parse(JSON.stringify(previewResult));
-      },
-      applyTaskAction: async (previewId) => {
-        calls.apply.push(previewId);
-        return { ok: true, type: 'update', message: '已把「独立小窗的任务」改到明天。', undoable: false };
-      },
-      handle: async (text, requestId, options) => {
-        calls.handle.push({ text, history: options && options.history });
-        return { type: 'chat', message: '这个安排合理，紧急任务优先处理。' };
-      },
-      resolve: async () => ({}),
-      undo: async () => ({ ok: true })
-    }
-  };
-  const { elements, run } = loadTaskAgentWindowRuntime(api);
-
-  // 会话注入
-  api.__session({ taskId: 42, title: '独立小窗的任务', draft: '', workLogId: '', workLogKind: '' });
-  assert.strictEqual(elements['#ta-title'].textContent, '独立小窗的任务');
-  // 欢迎语 + 用户输入 + agent 消息
-  await run('sendPrompt("改到明天")');
-  assert.strictEqual(calls.preview.length, 1);
-  assert.strictEqual(calls.preview[0].taskId, 42);
-  assert.strictEqual(calls.preview[0].text, '改到明天');
-  // 会话记忆自持：首轮 history 为空数组（隔离全局侧边栏记录），而不是 undefined
-  assert.ok(Array.isArray(calls.preview[0].history));
-  assert.strictEqual(calls.preview[0].history.length, 0);
-
-  // 预览卡渲染在最后一条 agent 消息内
-  const thread = elements['#ta-thread'];
-  const lastMessage = thread.children[thread.children.length - 1];
-  const previewCard = lastMessage.children.find((child) => child.classList.contains('ta-preview'));
-  assert.ok(previewCard, '应渲染预览卡');
-  const actions = previewCard.children.find((child) => child.classList.contains('ta-preview-actions'));
-  assert.ok(actions);
-  const applyBtn = actions.children.find((button) => button.classList.contains('primary'));
-  assert.strictEqual(applyBtn.textContent, '确认修改');
-
-  // 确认修改：走 applyTaskAction，成功后展示结果消息
-  await applyBtn.listeners.click();
-  assert.deepStrictEqual(calls.apply, ['preview-1']);
-  const resultMessage = thread.children[thread.children.length - 1];
-  assert.strictEqual(resultMessage.querySelector('.ta-text').textContent, '已把「独立小窗的任务」改到明天。');
-
-  // 非任务操作（如咨询意见）：预览管线不支持 → 回退全局 Agent 对话
-  previewResult = { ok: false, type: 'error', message: '我还不能在任务内执行这类操作。' };
-  await run('sendPrompt("你觉得这个安排合理吗")');
-  assert.strictEqual(calls.handle.length, 1);
-  assert.strictEqual(calls.handle[0].text, '你觉得这个安排合理吗');
-  // 兜底对话带上会话自持记忆：包含刚才确认过的「改到明天」轮次
-  assert.ok(Array.isArray(calls.handle[0].history));
-  assert.deepStrictEqual(JSON.parse(JSON.stringify(calls.handle[0].history)), [
-    { role: 'user', content: '改到明天' },
-    { role: 'assistant', content: '已把「独立小窗的任务」改到明天。' }
-  ]);
-  // 预览请求同样携带会话记忆，而不是全局侧边栏记录
-  assert.strictEqual(calls.preview.length, 2);
-  assert.deepStrictEqual(JSON.parse(JSON.stringify(calls.preview[1].history)), JSON.parse(JSON.stringify(calls.handle[0].history)));
-  const chatMessage = thread.children[thread.children.length - 1];
-  assert.strictEqual(chatMessage.querySelector('.ta-text').textContent, '这个安排合理，紧急任务优先处理。');
-});
 
 test('快速添加同时支持按钮和回车，并防止重复提交', () => {
   assert.match(app, /async function createQuickTask\(\)/);
@@ -801,7 +481,7 @@ test('任务编辑使用语义表单、内联校验和提交中状态', () => {
   assert.match(app, /restoreModalFocus\(\)/);
   assert.match(app, /shouldComplete = data\.status === 'done'/);
   assert.match(app, /completion = await window\.api\.tasks\.saveAndComplete\(editingTask \? editingTask\.id : null, data\)/);
-  assert.match(main, /ipcMain\.handle\('tasks:saveAndComplete', \(e, id, data\) => runWorkflowMutation\(\(\) => store\.saveAndCompleteTask\(id, data\)\)\)/);
+  assert.match(main, /ipcMain\.handle\('tasks:saveAndComplete', \(e, id, data\) => runTaskMutation\(\(\) => store\.saveAndCompleteTask\(id, data\)\)\)/);
   assert.match(preload, /saveAndComplete: \(id, data\) => ipcRenderer\.invoke\('tasks:saveAndComplete', id, data\)/);
 
   const title = { attrs: {}, setAttribute(name, value) { this.attrs[name] = value; }, focus() {} };
@@ -1514,7 +1194,7 @@ test('助手歧义选择走结构化解析，并提供上下文下一步', () =>
   );
   assert.match(app, /memo_delete: '已删除备忘录'/);
   assert.match(app, /memo_to_task: '已转为任务'/);
-  assert.match(app, /Promise\.all\(\[refreshTasks\(\), refreshMemos\(\), refreshWorkflow\(\)\]\)/);
+  assert.match(app, /Promise\.all\(\[refreshTasks\(\), refreshMemos\(\)\]\)/);
   assert.match(app, /String\(result\.type\)\.startsWith\('memo_'\)/);
 });
 
@@ -1727,9 +1407,6 @@ test('桌宠自由拖放并通过独立小窗提供概览和连续 Agent 对话'
   assert.match(petApp, /pendingReminder = \{ id: data\.id, title: data\.title, due: data\.due \|\| '' \}/);
   assert.match(petApp, /petMenu\.classList\.toggle\('has-reminder', !!pendingReminder\)/);
   assert.match(petApp, /await window\.api\.pet\.openTask\(reminder\.id\)/);
-  assert.match(petApp, /if \(!action \|\| !workflowSnapshot\.activeFocus \|\| petFocusBusy\) return/);
-  assert.match(petApp, /petFocus\.querySelectorAll\('button'\)\.forEach/);
-  assert.match(petApp, /if \(!petFocusBusy\) petFocusTitle\.textContent/);
   assert.match(petApp, /queuePosition\(\{ x, y \}\)/);
   assert.match(petApp, /currentMood = 'moving';/);
   assert.match(petApp, /window\.api\.pet\.commitPosition\(\)/);
@@ -1771,7 +1448,6 @@ test('桌宠自由拖放并通过独立小窗提供概览和连续 Agent 对话'
     'pet-menu-title': fakePetElement(),
     'pet-menu-count': fakePetElement(),
     'pet-menu-next': fakePetElement(),
-    'pet-focus': fakePetElement(['hidden']),
     'pet-sprite': fakePetElement()
   };
   const firstAction = fakePetElement();
@@ -1831,10 +1507,6 @@ test('桌宠打开视图会阻止重复命令并在失败后保留菜单和焦�
     'pet-menu-title': fakePetElement(),
     'pet-menu-count': fakePetElement(),
     'pet-menu-next': fakePetElement(),
-    'pet-focus': fakePetElement(['hidden']),
-    'pet-focus-title': fakePetElement(),
-    'pet-focus-time': fakePetElement(),
-    'pet-focus-toggle': fakePetElement(),
     'pet-sprite': fakePetElement(),
     __openView: (destination) => {
       calls.push(destination);
@@ -1883,7 +1555,6 @@ test('桌宠视图工具栏支持二维方向键且只保留一个 Tab 入口', 
     'pet-menu-title': fakePetElement(),
     'pet-menu-count': fakePetElement(),
     'pet-menu-next': fakePetElement(),
-    'pet-focus': fakePetElement(['hidden']),
     'pet-sprite': fakePetElement()
   };
   const buttons = Array.from({ length: 6 }, () => fakePetElement());
@@ -3323,129 +2994,9 @@ test('助手进度阶段不再覆盖已流出的回答正文', async () => {
   assert.strictEqual(run('activeAiRequest'), null);
 });
 
-test('任务对话小窗进度阶段不覆盖已流出的回答并保留会话记忆', async () => {
-  assert.match(taWindowApp, /if \(message && !activeRequest\.streamStarted && !reasoningDelta && !progress\.reasoningDone\) \{/);
-
-  const calls = { handle: [] };
-  let resolveHandle = null;
-  let progressListener = null;
-  const api = {
-    on: (channel, cb) => { api.__session = cb; },
-    taskAgent: { open: async () => ({ ok: true }), close: () => {} },
-    ai: {
-      onProgress: (cb) => { progressListener = cb; return () => {}; },
-      handle: (text, requestId) => {
-        calls.handle.push({ text, requestId });
-        return new Promise((resolve) => { resolveHandle = resolve; });
-      },
-      previewTaskAction: async () => ({ ok: false, type: 'error', message: '不支持' }),
-      applyTaskAction: async () => ({ ok: true }),
-      resolve: async () => ({}),
-      undo: async () => ({ ok: true })
-    }
-  };
-  const { run } = loadTaskAgentWindowRuntime(api);
-  api.__session({ taskId: 42, title: '独立小窗的任务', draft: '', workLogId: '', workLogKind: '' });
-  assert.ok(progressListener, '小窗应注册进度监听');
-
-  run(`(function() {
-    const pending = document.createElement('div');
-    const body = document.createElement('div');
-    body.className = 'ta-text';
-    pending.appendChild(body);
-    globalThis.__pending = pending;
-  })()`);
-
-  const turn = run(`runGlobalChat(globalThis.__pending, '帮我看看今天的安排')`);
-  assert.strictEqual(calls.handle.length, 1);
-  const requestId = calls.handle[0].requestId;
-  const text = () => run('globalThis.__pending.querySelector(".ta-text").textContent');
-
-  // 流开始前的阶段文案仍可充当占位
-  progressListener({ requestId, stage: 'understanding', message: '正在理解你的要求…' });
-  assert.strictEqual(text(), '正在理解你的要求…');
-  progressListener({ requestId, stage: 'streaming', message: '正在生成回复…', delta: '任务' });
-  progressListener({ requestId, stage: 'streaming', message: '正在生成回复…', delta: '回答' });
-  assert.strictEqual(text(), '任务回答');
-  // 工具执行与完成阶段不允许覆盖已流出的正文
-  progressListener({ requestId, stage: 'executing', message: '正在执行工具…' });
-  progressListener({ requestId, stage: 'done', message: '处理完成' });
-  assert.strictEqual(text(), '任务回答');
-  assert.strictEqual(run('activeRequest && activeRequest.streamStarted'), true);
-  // 其他请求的进度按 requestId 隔离
-  progressListener({ requestId: '别的请求', stage: 'streaming', message: '污染', delta: '污染' });
-  assert.strictEqual(text(), '任务回答');
-
-  resolveHandle({ type: 'chat', message: '任务最终回答' });
-  await turn;
-  assert.strictEqual(text(), '任务最终回答');
-  assert.strictEqual(run('activeRequest'), null);
-  assert.deepStrictEqual(JSON.parse(run('JSON.stringify(currentSessionHistory())')), [
-    { role: 'user', content: '帮我看看今天的安排' },
-    { role: 'assistant', content: '任务最终回答' }
-  ]);
-});
-
 test('桌宠面板正文保留流开始防护且完成事件不带文案', () => {
   assert.match(petPanelApp, /if \(!activeRequest\.streamStarted && !delta && !reasoningDelta\) \{\s*activeRequest\.pendingText\.textContent = message;/);
   assert.match(petPanelApp, /chatState\.textContent = message;/);
-});
-
-test('任务小窗组合步骤预览一次确认整组执行', async () => {
-  const calls = { preview: [], apply: [] };
-  const previewResult = {
-    ok: true,
-    type: 'task_action_preview',
-    multi: true,
-    summary: '准备对「独立小窗的任务」连续执行 2 步',
-    steps: [
-      { intent: 'postpone', summary: '准备把「独立小窗的任务」顺延 2 天', fields: [{ label: '截止时间', before: '2026-08-28 18:00', after: '2026-08-30 18:00' }] },
-      { intent: 'start', summary: '准备开始「独立小窗的任务」', fields: [{ label: '状态', before: 'todo', after: '进行中' }] }
-    ],
-    action: { taskId: 42, actions: [{ intent: 'postpone', params: { days: 2 } }, { intent: 'start', params: {} }] }
-  };
-  const api = {
-    on: (channel, cb) => { api.__session = cb; },
-    taskAgent: { open: async () => ({ ok: true }), close: () => {} },
-    ai: {
-      onProgress: () => {},
-      previewTaskAction: async (taskId, text) => {
-        calls.preview.push({ taskId, text });
-        return JSON.parse(JSON.stringify(previewResult));
-      },
-      applyTaskAction: async (previewId) => {
-        calls.apply.push(previewId);
-        return { ok: true, type: 'plan', message: '已完成 2 项操作：\n· 顺延\n· 开始', undoable: true, undo: { action: 'restoreAgentTransaction', transactionId: 't-1' } };
-      },
-      handle: async () => ({ type: 'chat', message: '不应回退全局对话' }),
-      resolve: async () => ({}),
-      undo: async () => ({ ok: true })
-    }
-  };
-  const { elements, run } = loadTaskAgentWindowRuntime(api);
-  api.__session({ taskId: 42, title: '独立小窗的任务', draft: '', workLogId: '', workLogKind: '' });
-
-  await run('sendPrompt("顺延两天然后开始做")');
-  assert.strictEqual(calls.preview.length, 1);
-  const thread = elements['#ta-thread'];
-  const lastMessage = thread.children[thread.children.length - 1];
-  const previewCard = lastMessage.children.find((child) => child.classList.contains('ta-preview'));
-  assert.ok(previewCard, '应渲染组合预览卡');
-  assert.match(previewCard.children.find((child) => child.classList.contains('ta-preview-summary')).textContent, /连续执行 2 步/);
-  const stepsBlock = previewCard.children.find((child) => child.classList.contains('ta-preview-fields'));
-  assert.strictEqual(stepsBlock.children.length, 2);
-  assert.match(stepsBlock.children[0].children[0].textContent, /1\. 准备把「独立小窗的任务」顺延 2 天/);
-  assert.match(stepsBlock.children[0].children[1].textContent, /截止时间：2026-08-30 18:00/);
-  assert.match(stepsBlock.children[1].children[0].textContent, /2\. 准备开始「独立小窗的任务」/);
-  assert.match(stepsBlock.children[1].children[1].textContent, /状态：进行中/);
-  const actions = previewCard.children.find((child) => child.classList.contains('ta-preview-actions'));
-  const applyBtn = actions.children.find((button) => button.classList.contains('primary'));
-  assert.strictEqual(applyBtn.textContent, '确认执行 2 步');
-
-  await applyBtn.listeners.click();
-  assert.strictEqual(calls.apply.length, 1);
-  const resultMessage = thread.children[thread.children.length - 1];
-  assert.match(resultMessage.querySelector('.ta-text').textContent, /已完成 2 项操作/);
 });
 
 test('模型流被中断时思考块在轮次收尾处折叠而不是悬浮成回答', async () => {
@@ -3484,35 +3035,6 @@ test('模型流被中断时思考块在轮次收尾处折叠而不是悬浮成�
   assert.strictEqual(mainBlock.classList.contains('is-done'), true);
   assert.strictEqual(mainBlock.open, false);
   assert.strictEqual(mainBlock.querySelector('.msg-reasoning-body').textContent, '模型正在推演任务列表…');
-
-  // 任务小窗：全局对话失败路径同样收尾思考块
-  let progressListener = null;
-  let rejectHandle = null;
-  const api = {
-    on: (channel, cb) => { api.__session = cb; },
-    taskAgent: { open: async () => ({ ok: true }), close: () => {} },
-    ai: {
-      onProgress: (cb) => { progressListener = cb; return () => {}; },
-      handle: () => new Promise((resolve, reject) => { rejectHandle = reject; }),
-      previewTaskAction: async () => ({ ok: false, type: 'error', message: '不支持' }),
-      applyTaskAction: async () => ({ ok: true }),
-      resolve: async () => ({}),
-      undo: async () => ({ ok: true })
-    }
-  };
-  const { run } = loadTaskAgentWindowRuntime(api);
-  api.__session({ taskId: 42, title: '独立小窗的任务', draft: '', workLogId: '', workLogKind: '' });
-  const turn = run(`runGlobalChat(addMessage('ai', ''), '继续')`);
-  const requestId = run(`activeRequest && activeRequest.id`);
-  progressListener({ requestId, reasoningDelta: '小窗里的思考…' });
-  rejectHandle(new Error('连接中断'));
-  await turn;
-  const taBlock = run(`document.querySelector('#ta-thread').children[document.querySelector('#ta-thread').children.length - 1].querySelector('.ta-reasoning')`);
-  assert.ok(taBlock, '小窗思考块应已创建');
-  assert.strictEqual(taBlock.classList.contains('is-streaming'), false);
-  assert.strictEqual(taBlock.classList.contains('is-done'), true);
-  assert.strictEqual(taBlock.open, false);
-  assert.strictEqual(taBlock.querySelector('.ta-reasoning-body').textContent, '小窗里的思考…');
 });
 
 /* ---------- MCP 服务设置 ---------- */

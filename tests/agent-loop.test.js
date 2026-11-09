@@ -31,7 +31,6 @@ after(() => {
 
 function reset() {
   store.resetTasks();
-  store.updateWorkPreferences({ workdayStart: '09:00', workdayEnd: '23:59' });
   store.clearAgentState();
 }
 

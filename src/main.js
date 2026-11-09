@@ -35,7 +35,6 @@ const TRAY_ICON_PATH = path.join(__dirname, 'assets', 'app-icon-32.png');
 let mainWindow = null;
 let petWindow = null;
 let petPanelWindow = null;
-let taskAgentWindow = null;
 let tray = null;
 let isQuitting = false;
 let reminderTimer = null;
@@ -44,7 +43,6 @@ let remindedTaskIds = new Set();
 const isDev = process.argv.includes('--dev');
 const PET_WINDOW_SIZE = Object.freeze({ width: 160, height: 268 });
 const PET_PANEL_SIZE = Object.freeze({ width: 360, height: 500 });
-const TASK_AGENT_WINDOW_SIZE = Object.freeze({ width: 400, height: 620 });
 const PET_WINDOW_MARGIN = 8;
 
 /* ---------- 窗口创建 ---------- */
@@ -108,7 +106,6 @@ function createMainWindow() {
 
   mainWindow.on('closed', () => {
     mainWindow = null;
-    if (taskAgentWindow && !taskAgentWindow.isDestroyed()) taskAgentWindow.close();
   });
 }
 
@@ -219,67 +216,6 @@ function createPetPanelWindow() {
 
 function hidePetPanel() {
   if (petPanelWindow && !petPanelWindow.isDestroyed()) petPanelWindow.hide();
-}
-
-/* ---------- 任务 Agent 独立对话小窗 ---------- */
-function createTaskAgentWindow() {
-  taskAgentWindow = new BrowserWindow({
-    width: TASK_AGENT_WINDOW_SIZE.width,
-    height: TASK_AGENT_WINDOW_SIZE.height,
-    minWidth: 340,
-    minHeight: 420,
-    show: false,
-    title: '任务对话',
-    frame: false,
-    resizable: true,
-    alwaysOnTop: true,
-    skipTaskbar: true,
-    backgroundColor: '#F7F8F9',
-    icon: APP_ICON_PATH,
-    webPreferences: {
-      preload: path.join(__dirname, 'preload.js'),
-      contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: false
-    }
-  });
-  taskAgentWindow.loadFile(path.join(__dirname, 'renderer', 'task-agent', 'window.html'));
-  taskAgentWindow.setAlwaysOnTop(true, 'floating');
-  taskAgentWindow.on('closed', () => {
-    taskAgentWindow = null;
-  });
-}
-
-function positionTaskAgentWindow() {
-  if (!taskAgentWindow || taskAgentWindow.isDestroyed()) return;
-  const bounds = mainWindow && !mainWindow.isDestroyed() ? mainWindow.getBounds() : screen.getPrimaryDisplay().workArea;
-  const [width, height] = taskAgentWindow.getSize();
-  const x = Math.round(bounds.x + bounds.width - width - 24);
-  const y = Math.round(bounds.y + 92);
-  taskAgentWindow.setPosition(Math.max(0, x), Math.max(0, y), false);
-}
-
-function openTaskAgentWindow(input) {
-  const payload = input && typeof input === 'object' ? input : {};
-  if (!taskAgentWindow || taskAgentWindow.isDestroyed()) createTaskAgentWindow();
-  const target = taskAgentWindow;
-  const session = {
-    taskId: Number(payload.taskId) || null,
-    title: String(payload.title || '').slice(0, 200),
-    draft: String(payload.draft || '').slice(0, 1000),
-    workLogId: String(payload.workLogId || '').slice(0, 100),
-    workLogKind: String(payload.workLogKind || '').slice(0, 20)
-  };
-  const send = () => {
-    if (target.isDestroyed()) return;
-    positionTaskAgentWindow();
-    if (!target.isVisible()) target.show();
-    target.focus();
-    target.webContents.send('task-agent:session', session);
-  };
-  if (target.webContents.isLoading()) target.webContents.once('did-finish-load', send);
-  else send();
-  return { ok: true };
 }
 
 function clampPetPosition(pos) {
@@ -444,12 +380,6 @@ function persistAiExchange(userText, result) {
   }
 }
 
-/* 任务对话小窗：会话自持记忆，不读写全局侧边栏对话记录 */
-function isTaskAgentSender(event) {
-  return !!(taskAgentWindow && !taskAgentWindow.isDestroyed() && event && event.sender &&
-    event.sender.id === taskAgentWindow.webContents.id);
-}
-
 function sanitizeSessionHistory(input) {
   if (!Array.isArray(input)) return null;
   return input
@@ -459,40 +389,34 @@ function sanitizeSessionHistory(input) {
     .slice(-12);
 }
 
-function broadcastWorkflowState() {
-  const state = store.getWorkflowState();
-  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('workflow:changed', state);
-  if (petWindow && !petWindow.isDestroyed()) petWindow.webContents.send('workflow:changed', state);
-  if (petPanelWindow && !petPanelWindow.isDestroyed()) petPanelWindow.webContents.send('workflow:changed', state);
-  return state;
+// 任务数据变更后同步桌宠与面板：workflow:changed 已随工作流下线，改为复用 tasks:changed。
+function syncPetTasksChanged() {
+  for (const win of [petWindow, petPanelWindow]) {
+    if (win && !win.isDestroyed()) win.webContents.send('tasks:changed');
+  }
 }
 
-function runWorkflowMutation(operation) {
+function runTaskMutation(operation) {
   const result = operation();
-  broadcastWorkflowState();
+  syncPetTasksChanged();
   return result;
 }
 
-const AGENT_WORKFLOW_RESULT_TYPES = new Set([
-  // 保留核心任务工作流类型序列，子任务与拆分也需要同步给桌宠。
-  // 'complete', 'start', 'delete', 'archive', 'update', 'postpone', 'restore'
-  'complete', 'start', 'delete', 'archive', 'update', 'child', 'split', 'postpone', 'restore', 'plan',
-  'daily_plan', 'daily_replan', 'focus_start', 'focus_pause', 'focus_resume',
-  'focus_interrupt', 'focus_finish', 'daily_review'
+const AGENT_MUTATION_RESULT_TYPES = new Set([
+  'complete', 'start', 'delete', 'archive', 'update', 'child', 'split', 'postpone', 'restore'
 ]);
 
-function broadcastAgentWorkflowResult(result) {
-  if (result && AGENT_WORKFLOW_RESULT_TYPES.has(result.type)) broadcastWorkflowState();
+function syncPetAfterAgentResult(result) {
+  if (result && AGENT_MUTATION_RESULT_TYPES.has(result.type)) syncPetTasksChanged();
   return result;
 }
 
 /* ---------- MCP 服务：供本机其他 AI agent 调用 ---------- */
 function broadcastMcpMutation(intent) {
   const name = String(intent || '');
-  // 桌宠与面板只订阅 workflow:changed，广播一次即可让它们重新取数。
-  broadcastWorkflowState();
+  syncPetTasksChanged();
   if (!mainWindow || mainWindow.isDestroyed()) return;
-  const crossType = ['undo', 'plan', 'batch', 'memo_to_task', 'memo_split'].includes(name);
+  const crossType = ['undo', 'batch', 'memo_to_task', 'memo_split'].includes(name);
   const memoOnly = name.startsWith('memo_') && !crossType;
   if (!memoOnly) mainWindow.webContents.send('tasks:changed');
   if (name.startsWith('memo_') || crossType) mainWindow.webContents.send('memos:changed');
@@ -555,76 +479,28 @@ function sendAiProgress(sender, requestId, progress) {
 function registerIpc() {
   // 任务
   ipcMain.handle('tasks:getAll', () => store.getAllTasks());
-  ipcMain.handle('tasks:create', (e, data) => runWorkflowMutation(() => store.createTask(data)));
-  ipcMain.handle('tasks:update', (e, id, patch) => runWorkflowMutation(() => store.updateTask(id, patch)));
-  ipcMain.handle('tasks:delete', (e, id) => runWorkflowMutation(() => store.deleteTask(id)));
-  ipcMain.handle('tasks:restore', (e, id) => runWorkflowMutation(() => store.restoreTask(id)));
-  ipcMain.handle('tasks:archive', (e, id) => runWorkflowMutation(() => store.archiveTask(id)));
-  ipcMain.handle('tasks:unarchive', (e, id) => runWorkflowMutation(() => store.unarchiveTask(id)));
-  ipcMain.handle('tasks:reset', () => runWorkflowMutation(() => store.resetTasks()));
-  ipcMain.handle('tasks:clearAll', () => runWorkflowMutation(() => store.clearAllTasks()));
-  ipcMain.handle('tasks:import', (e, list) => runWorkflowMutation(() => store.importTasks(list)));
-  ipcMain.handle('tasks:complete', (e, id) => runWorkflowMutation(() => store.completeTask(id)));
-  ipcMain.handle('tasks:saveAndComplete', (e, id, data) => runWorkflowMutation(() => store.saveAndCompleteTask(id, data)));
+  ipcMain.handle('tasks:create', (e, data) => runTaskMutation(() => store.createTask(data)));
+  ipcMain.handle('tasks:update', (e, id, patch) => runTaskMutation(() => store.updateTask(id, patch)));
+  ipcMain.handle('tasks:delete', (e, id) => runTaskMutation(() => store.deleteTask(id)));
+  ipcMain.handle('tasks:restore', (e, id) => runTaskMutation(() => store.restoreTask(id)));
+  ipcMain.handle('tasks:archive', (e, id) => runTaskMutation(() => store.archiveTask(id)));
+  ipcMain.handle('tasks:unarchive', (e, id) => runTaskMutation(() => store.unarchiveTask(id)));
+  ipcMain.handle('tasks:reset', () => runTaskMutation(() => store.resetTasks()));
+  ipcMain.handle('tasks:clearAll', () => runTaskMutation(() => store.clearAllTasks()));
+  ipcMain.handle('tasks:import', (e, list) => runTaskMutation(() => store.importTasks(list)));
+  ipcMain.handle('tasks:complete', (e, id) => runTaskMutation(() => store.completeTask(id)));
+  ipcMain.handle('tasks:saveAndComplete', (e, id, data) => runTaskMutation(() => store.saveAndCompleteTask(id, data)));
   ipcMain.handle('tasks:addWorkLog', (e, taskId, input) => store.addTaskWorkLog(taskId, input));
   ipcMain.handle('tasks:updateWorkLog', (e, taskId, logId, patch) => store.updateTaskWorkLog(taskId, logId, patch));
   ipcMain.handle('tasks:removeWorkLog', (e, taskId, logId) => store.removeTaskWorkLog(taskId, logId));
-  ipcMain.handle('tasks:postpone', (e, id, days) => runWorkflowMutation(() => store.postponeTask(id, days)));
-  ipcMain.handle('tasks:reorder', (e, ids) => runWorkflowMutation(() => store.reorderTasks(ids)));
-  ipcMain.handle('tasks:batchUpdate', (e, ids, patch) => runWorkflowMutation(() => store.batchUpdate(ids, patch)));
-  ipcMain.handle('tasks:batchComplete', (e, ids) => runWorkflowMutation(() => store.batchComplete(ids)));
-  ipcMain.handle('tasks:batchDelete', (e, ids) => runWorkflowMutation(() => store.batchDelete(ids)));
+  ipcMain.handle('tasks:postpone', (e, id, days) => runTaskMutation(() => store.postponeTask(id, days)));
+  ipcMain.handle('tasks:reorder', (e, ids) => runTaskMutation(() => store.reorderTasks(ids)));
+  ipcMain.handle('tasks:batchUpdate', (e, ids, patch) => runTaskMutation(() => store.batchUpdate(ids, patch)));
+  ipcMain.handle('tasks:batchComplete', (e, ids) => runTaskMutation(() => store.batchComplete(ids)));
+  ipcMain.handle('tasks:batchDelete', (e, ids) => runTaskMutation(() => store.batchDelete(ids)));
   ipcMain.handle('tasks:getDeleted', () => store.getDeletedTasks());
   ipcMain.handle('tasks:purge', (e, id) => store.purgeTask(id));
   ipcMain.handle('tasks:emptyTrash', () => store.emptyTrash());
-
-  // 每日计划与专注会话
-  ipcMain.handle('workflow:get', () => store.getWorkflowState());
-  ipcMain.handle('workflow:getCopilot', (e, input) => store.getDailyCopilot(input && input.now));
-  ipcMain.handle('workflow:updateCopilot', (e, input) => runWorkflowMutation(() => store.updateDailyCopilot(input)));
-  ipcMain.handle('workflow:updatePreferences', (e, patch) => runWorkflowMutation(() => store.updateWorkPreferences(patch)));
-  ipcMain.handle('workflow:previewPlan', (e, options) => store.previewDailyPlan(options));
-  ipcMain.handle('workflow:previewSmartPlan', async (e, input) => {
-    const payload = input && typeof input === 'object' ? input : { text: input };
-    const requestId = `workflow-${String(payload.requestId || Date.now()).slice(0, 70)}`;
-    const request = aiRequestCoordinator.begin(e.sender.id, requestId);
-    if (request.status === 'completed') return request.result;
-    if (request.status === 'active') return { type: 'error', duplicate: true, message: '计划仍在生成中，请稍候。' };
-    const { key, controller } = request;
-    try {
-      const result = await ai.previewDailyPlan(String(payload.text || ''), {
-        signal: controller.signal,
-        timeout: 12000,
-        onProgress: (progress) => sendAiProgress(e.sender, requestId, progress)
-      });
-      return aiRequestCoordinator.complete(key, result);
-    } catch (error) {
-      if (controller.signal.aborted || error.code === 'AI_REQUEST_CANCELLED') {
-        return aiRequestCoordinator.complete(key, {
-          type: 'error',
-          cancelled: true,
-          message: '智能安排已停止，计划尚未保存。'
-        });
-      }
-      console.error('[workflow] 智能安排失败:', error.message);
-      return aiRequestCoordinator.complete(key, {
-        type: 'error',
-        message: '智能安排暂时未完成，请重试；计划尚未保存。'
-      });
-    } finally {
-      aiRequestCoordinator.release(key);
-    }
-  });
-  ipcMain.handle('workflow:applyPlan', (e, plan) => runWorkflowMutation(() => store.applyDailyPlan(plan)));
-  ipcMain.handle('workflow:updatePlan', (e, date, input) => runWorkflowMutation(() => store.updateDailyPlan(date, input)));
-  ipcMain.handle('workflow:restorePlan', (e, input) => runWorkflowMutation(() => store.restoreDailyPlan(input)));
-  ipcMain.handle('workflow:startFocus', (e, taskId, options) => runWorkflowMutation(() => store.startFocus(taskId, options)));
-  ipcMain.handle('workflow:pauseFocus', (e, input) => runWorkflowMutation(() => store.pauseFocus(input)));
-  ipcMain.handle('workflow:resumeFocus', (e, input) => runWorkflowMutation(() => store.resumeFocus(input)));
-  ipcMain.handle('workflow:interrupt', (e, reason, input) => runWorkflowMutation(() => store.recordInterruption(reason, input)));
-  ipcMain.handle('workflow:finishFocus', (e, input) => runWorkflowMutation(() => store.finishFocus(input)));
-  ipcMain.handle('workflow:getReview', (e, date) => store.getDailyReview(date));
-  ipcMain.handle('workflow:saveReview', (e, date, input) => runWorkflowMutation(() => store.saveDailyReview(date, input)));
 
   // 备忘录
   ipcMain.handle('memos:getAll', () => store.getAllMemos());
@@ -674,24 +550,20 @@ function registerIpc() {
       return { intent: 'unknown', type: 'info', duplicate: true, message: '这条请求仍在处理中，没有重复执行。' };
     }
     const { key, controller } = request;
-    const isTaskAgent = isTaskAgentSender(e);
     const history = sanitizeSessionHistory(payload.history);
     try {
-      const result = broadcastAgentWorkflowResult(await ai.handleAuto(text, {
+      const result = syncPetAfterAgentResult(await ai.handleAuto(text, {
         signal: controller.signal,
         history,
         onProgress: (progress) => sendAiProgress(e.sender, requestId, progress)
       }));
       sendAiProgress(e.sender, requestId, { stage: 'done' });
-      // 任务对话小窗：会话记忆由小窗自持，不写入主窗口侧边栏的对话记录
-      if (isTaskAgent) return aiRequestCoordinator.complete(key, result);
       const persisted = persistAiExchange(text, result);
       return aiRequestCoordinator.complete(key, persisted);
     } catch (error) {
       if (controller.signal.aborted || error.code === 'AI_REQUEST_CANCELLED') {
         const result = { intent: 'cancel', type: 'cancelled', cancelled: true, message: '已停止。本次请求没有执行任何操作。' };
         sendAiProgress(e.sender, requestId, { stage: 'cancelled', message: result.message });
-        if (isTaskAgent) return aiRequestCoordinator.complete(key, result);
         const persisted = persistAiExchange(text, result);
         return aiRequestCoordinator.complete(key, persisted);
       }
@@ -728,8 +600,7 @@ function registerIpc() {
     }
   });
   ipcMain.handle('ai:resolve', (e, intent, params, taskId, label) => {
-    const result = broadcastAgentWorkflowResult(ai.resolve(intent, params, taskId));
-    if (isTaskAgentSender(e)) return result;
+    const result = syncPetAfterAgentResult(ai.resolve(intent, params, taskId));
     return persistAiExchange(label, result);
   });
   ipcMain.handle('ai:test', async () => {
@@ -746,7 +617,7 @@ function registerIpc() {
   ipcMain.handle('ai:session', () => ai.getSessionState());
   ipcMain.handle('ai:undo', (e, undo) => {
     const result = ai.undoAction(undo);
-    broadcastWorkflowState();
+    syncPetTasksChanged();
     return result;
   });
   ipcMain.handle('ai:previewTaskAction', async (e, input) => {
@@ -790,7 +661,7 @@ function registerIpc() {
       const result = ai.applyTaskAction(preview);
       if (result && result.ok !== false) {
         taskActionPreviews.delete(key);
-        broadcastAgentWorkflowResult(result);
+        syncPetAfterAgentResult(result);
         // 修改来自任务对话小窗等非主窗口入口时，通知主窗口刷新任务列表
         if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('tasks:changed');
       }
@@ -798,11 +669,6 @@ function registerIpc() {
     } finally {
       if (taskActionPreviews.has(key)) preview.applying = false;
     }
-  });
-  ipcMain.handle('task-agent:open', (e, input) => openTaskAgentWindow(input));
-  ipcMain.handle('task-agent:close', () => {
-    if (taskAgentWindow && !taskAgentWindow.isDestroyed()) taskAgentWindow.hide();
-    return { ok: true };
   });
   ipcMain.handle('chat:get', () => store.getChatLog());
   ipcMain.handle('chat:clear', () => store.clearChat());

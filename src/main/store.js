@@ -9,18 +9,6 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { app } = require('electron');
-const {
-  normalizePreferences,
-  normalizeWorkflowState,
-  normalizePlan,
-  localDateKey,
-  generateDailyPlan,
-  planFitsWorkday,
-  focusElapsedMs,
-  workflowSnapshot,
-  createDailyReview
-} = require('./workflow-planner');
-const { buildDailyCopilot, normalizeCopilotState } = require('./agent/daily-copilot');
 
 /* ---------- 路径 ---------- */
 function getDataDir() {
@@ -35,7 +23,6 @@ const MEMOS_FILE = path.join(DATA_DIR, 'memos.json');
 const SETTINGS_FILE = path.join(DATA_DIR, 'settings.json');
 const CHAT_FILE = path.join(DATA_DIR, 'chat.json');
 const AGENT_STATE_FILE = path.join(DATA_DIR, 'agent-state.json');
-const WORKFLOW_FILE = path.join(DATA_DIR, 'workflow.json');
 const BACKUP_DIR = path.join(DATA_DIR, 'backups');
 
 /* ---------- 工具 ---------- */
@@ -59,6 +46,12 @@ function writeJson(file, data) {
   const tmp = file + '.tmp';
   fs.writeFileSync(tmp, JSON.stringify(data, null, 2), 'utf-8');
   fs.renameSync(tmp, file); // 原子写入，避免写一半损坏
+}
+
+function localDateKey(value) {
+  const date = value instanceof Date ? value : new Date(value == null ? Date.now() : value);
+  const pad = (number) => String(number).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
 }
 
 function normalizeEstimatedMinutes(value) {
@@ -113,7 +106,6 @@ let memos = [];
 let settings = {};
 let chatLog = [];
 let agentState = {};
-let workflowState = {};
 let seq = 100;
 let memoSeq = 1000;
 let agentTransactionDepth = 0;
@@ -147,7 +139,6 @@ function init() {
   settings = Object.assign({}, getDefaultSettings(), readJson(SETTINGS_FILE, {}));
   chatLog = readJson(CHAT_FILE, []);
   agentState = normalizeAgentState(readJson(AGENT_STATE_FILE, {}));
-  workflowState = normalizeWorkflowState(readJson(WORKFLOW_FILE, {}));
 }
 
 function getDefaultSettings() {
@@ -387,7 +378,6 @@ function captureAgentDataState() {
   return {
     tasks: cloneData(tasks),
     memos: cloneData(memos),
-    workflow: cloneData(workflowState),
     seq,
     memoSeq
   };
@@ -396,7 +386,6 @@ function captureAgentDataState() {
 function applyAgentDataState(snapshot) {
   tasks = cloneData(snapshot.tasks);
   memos = cloneData(snapshot.memos);
-  workflowState = cloneData(snapshot.workflow);
   seq = snapshot.seq;
   memoSeq = snapshot.memoSeq;
 }
@@ -404,7 +393,6 @@ function applyAgentDataState(snapshot) {
 function persistAgentDataState() {
   writeJson(TASKS_FILE, tasks);
   writeJson(MEMOS_FILE, memos);
-  writeJson(WORKFLOW_FILE, workflowState);
 }
 
 function sameAgentDataState(left, right) {
@@ -510,13 +498,6 @@ function removeCreatedAdditions(expected) {
 
   const taskIds = new Set(expectedTasks.map((entry) => Number(entry.id)));
   const memoIds = new Set(expectedMemos.map((entry) => Number(entry.id)));
-  const referencedByWorkflow = workflowState.activeFocus && taskIds.has(workflowState.activeFocus.taskId) ||
-    Object.values(workflowState.dailyPlans || {}).some((plan) =>
-      Array.isArray(plan && plan.items) && plan.items.some((item) => taskIds.has(item.taskId))
-    );
-  if (referencedByWorkflow) {
-    return { ok: false, reason: 'conflict', message: '新增任务已经进入今日计划或专注记录，本次撤销未执行' };
-  }
 
   const before = { tasks: cloneData(tasks), memos: cloneData(memos) };
   try {
@@ -629,11 +610,7 @@ function removeTaskWorkLog(taskId, logId) {
 function updateTask(id, patch) {
   const t = getTask(id);
   if (!t) throw new Error('任务不存在');
-  if (workflowState.activeFocus && workflowState.activeFocus.taskId === t.id && ['done', 'archived'].includes(patch.status)) {
-    finishFocus({ completeTask: false });
-  }
   applyTaskPatch(t, patch);
-  syncTaskInWorkflow(t, patch.status === 'done' ? 'done' : patch.status === 'archived' ? 'skipped' : null);
   saveTasks();
   return t;
 }
@@ -641,10 +618,8 @@ function updateTask(id, patch) {
 function deleteTask(id) {
   const t = getTask(id);
   if (!t) throw new Error('任务不存在');
-  if (workflowState.activeFocus && workflowState.activeFocus.taskId === t.id) finishFocus({ completeTask: false });
   t._deleted = true; // 软删除，支持撤销
   t.deletedAt = Date.now();
-  syncTaskInWorkflow(t, 'skipped');
   saveTasks();
   return { ok: true, id };
 }
@@ -661,9 +636,7 @@ function restoreTask(id) {
 function archiveTask(id) {
   const t = getTask(id);
   if (!t) throw new Error('任务不存在');
-  if (workflowState.activeFocus && workflowState.activeFocus.taskId === t.id) finishFocus({ completeTask: false });
   t.status = 'archived';
-  syncTaskInWorkflow(t, 'skipped');
   saveTasks();
   return t;
 }
@@ -823,28 +796,12 @@ function completeTaskRecord(t) {
 function completeTask(id) {
   const t = getTask(id);
   if (!t) throw new Error('任务不存在');
-  if (workflowState.activeFocus && workflowState.activeFocus.taskId === t.id) {
-    return finishFocus({ completeTask: true }).completion;
-  }
   const result = completeTaskRecord(t);
-  let planChanged = false;
-  Object.values(workflowState.dailyPlans).forEach((plan) => {
-    const item = plan.items.find((entry) => entry.taskId === t.id);
-    if (!item) return;
-    planChanged = true;
-    item.status = 'done';
-    item.completedAt = t.completedAt;
-    plan.updatedAt = Date.now();
-  });
   saveTasks();
-  if (planChanged) saveWorkflow();
   return result;
 }
 
 function saveAndCompleteTask(id, data) {
-  if (id != null && workflowState.activeFocus && workflowState.activeFocus.taskId === Number(id)) {
-    finishFocus({ completeTask: false });
-  }
   const pendingData = Object.assign({}, data, { status: 'todo' });
   let task;
   if (id == null) {
@@ -855,17 +812,7 @@ function saveAndCompleteTask(id, data) {
     applyTaskPatch(task, pendingData);
   }
   const result = completeTaskRecord(task);
-  let planChanged = false;
-  Object.values(workflowState.dailyPlans).forEach((plan) => {
-    const item = plan.items.find((entry) => entry.taskId === task.id);
-    if (!item) return;
-    planChanged = true;
-    item.status = 'done';
-    item.completedAt = task.completedAt;
-    plan.updatedAt = Date.now();
-  });
   saveTasks();
-  if (planChanged) saveWorkflow();
   return result;
 }
 
@@ -884,8 +831,7 @@ function postponeTask(id, days) {
 
 function clearAllTasks() {
   tasks = [];
-  workflowState = normalizeWorkflowState({ preferences: workflowState.preferences });
-  saveTaskAndWorkflowState();
+  saveTasks();
   return tasks;
 }
 
@@ -925,8 +871,7 @@ function resetTasks() {
   seq = 100;
   tasks.forEach((t) => { if (t.id > seq) seq = t.id; });
   tasks = tasks.map((task) => Object.assign({}, task, { estimatedMinutes: null, workLogs: [], updatedAt: task.createdAt || Date.now() }));
-  workflowState = normalizeWorkflowState({ preferences: workflowState.preferences });
-  saveTaskAndWorkflowState();
+  saveTasks();
   return tasks;
 }
 
@@ -1069,310 +1014,9 @@ function clearAgentState() {
   return getAgentState();
 }
 
-/* ---------- 每日工作闭环 ---------- */
-function saveWorkflow() {
-  if (agentTransactionDepth) return;
-  writeJson(WORKFLOW_FILE, workflowState);
-}
-
-function syncTaskInWorkflow(task, inactiveStatus) {
-  let changed = false;
-  if (workflowState.activeFocus && workflowState.activeFocus.taskId === task.id && workflowState.activeFocus.title !== task.title) {
-    workflowState.activeFocus.title = task.title;
-    changed = true;
-  }
-  Object.values(workflowState.dailyPlans).forEach((plan) => {
-    const item = plan.items.find((entry) => entry.taskId === task.id);
-    if (!item) return;
-    if (item.title !== task.title) {
-      item.title = task.title;
-      changed = true;
-    }
-    if (inactiveStatus && item.status !== inactiveStatus) {
-      item.status = inactiveStatus;
-      if (inactiveStatus === 'done') item.completedAt = task.completedAt || Date.now();
-      changed = true;
-    }
-    if (changed) plan.updatedAt = Date.now();
-  });
-  if (changed) saveWorkflow();
-}
-
-function getWorkflowState(now) {
-  return workflowSnapshot(workflowState, now);
-}
-
-function updateWorkPreferences(patch) {
-  workflowState.preferences = normalizePreferences(Object.assign({}, workflowState.preferences, patch));
-  saveWorkflow();
-  return getWorkflowState();
-}
-
-function getDailyCopilot(now) {
-  return buildDailyCopilot(getAllTasks(), getWorkflowState(now), now);
-}
-
-function updateDailyCopilot(input) {
-  const source = input && typeof input === 'object' ? input : {};
-  const action = String(source.action || '');
-  const now = Number(source.now) || Date.now();
-  const current = normalizeCopilotState(workflowState.copilot);
-  const briefing = getDailyCopilot(now);
-  const next = Object.assign({}, current);
-  if (action === 'snooze') {
-    const minutes = Math.max(5, Math.min(240, Math.round(Number(source.minutes) || 30)));
-    next.snoozedUntil = now + minutes * 60000;
-    next.lastActionKey = briefing.suggestion && briefing.suggestion.key || '';
-    next.lastActionAt = now;
-  } else if (action === 'mute-today') {
-    next.mutedDate = localDateKey(now);
-    next.snoozedUntil = 0;
-    next.lastActionKey = briefing.suggestion && briefing.suggestion.key || '';
-    next.lastActionAt = now;
-  } else if (action === 'restore') {
-    next.mutedDate = '';
-    next.snoozedUntil = 0;
-  } else if (action === 'preferences') {
-    if (source.enabled !== undefined) next.enabled = !!source.enabled;
-    if (source.quietStart !== undefined) next.quietStart = source.quietStart;
-    if (source.quietEnd !== undefined) next.quietEnd = source.quietEnd;
-  } else {
-    throw new Error('未知的每日助手设置');
-  }
-  workflowState.copilot = normalizeCopilotState(next);
-  saveWorkflow();
-  return getDailyCopilot(now);
-}
-
-function previewDailyPlan(options) {
-  return generateDailyPlan(getAllTasks(), workflowState, options || {});
-}
-
-function validatePlanForWrite(planInput) {
-  const normalized = normalizePlan(planInput, planInput && planInput.date);
-  if (!normalized || !normalized.items.length) throw new Error('计划中没有可执行的任务');
-  const seen = new Set();
-  normalized.items.forEach((item) => {
-    if (seen.has(item.taskId)) throw new Error('计划中不能重复安排同一任务');
-    seen.add(item.taskId);
-    const task = getTask(item.taskId);
-    if (!task || !['todo', 'doing'].includes(task.status)) throw new Error(`任务「${item.title || item.taskId}」当前不可安排`);
-    item.title = task.title;
-  });
-  normalized.scheduledMinutes = normalized.items.reduce((sum, item) => sum + item.plannedMinutes, 0);
-  if (normalized.scheduledMinutes > normalized.capacityMinutes) {
-    throw new Error(`计划超出可用时间 ${normalized.scheduledMinutes - normalized.capacityMinutes} 分钟`);
-  }
-  if (!planFitsWorkday(normalized, workflowState.preferences)) {
-    throw new Error(`计划不能超出工作时间 ${workflowState.preferences.workdayStart} - ${workflowState.preferences.workdayEnd}`);
-  }
-  return normalized;
-}
-
-function applyDailyPlan(planInput) {
-  const plan = validatePlanForWrite(planInput);
-  const current = workflowState.dailyPlans[plan.date] || null;
-  const expectedRevision = (current && current.revision || 0) + 1;
-  if (plan.revision !== expectedRevision) throw new Error('今日计划已经变化，请重新生成后再确认');
-  const previousPlan = cloneData(current);
-  plan.status = 'active';
-  plan.updatedAt = Date.now();
-  workflowState.dailyPlans[plan.date] = plan;
-  saveWorkflow();
-  return { plan: cloneData(plan), previousPlan };
-}
-
-function updateDailyPlan(date, input) {
-  const current = workflowState.dailyPlans[date];
-  if (!current) throw new Error('没有找到这一天的计划');
-  if (Number(input && input.expectedRevision) !== current.revision) throw new Error('计划已经变化，请刷新后重试');
-  const next = validatePlanForWrite(Object.assign({}, current, {
-    items: input.items,
-    revision: current.revision + 1,
-    updatedAt: Date.now()
-  }));
-  const previousPlan = cloneData(current);
-  workflowState.dailyPlans[date] = next;
-  saveWorkflow();
-  return { plan: cloneData(next), previousPlan };
-}
-
-function restoreDailyPlan(input) {
-  const date = String(input && input.date || '');
-  const current = workflowState.dailyPlans[date] || null;
-  if (!current || current.revision !== Number(input && input.expectedRevision)) {
-    return { ok: false, reason: 'conflict', message: '计划后来又被调整过，本次撤销未执行' };
-  }
-  if (input.previousPlan) workflowState.dailyPlans[date] = normalizePlan(input.previousPlan, date);
-  else delete workflowState.dailyPlans[date];
-  saveWorkflow();
-  return { ok: true, plan: cloneData(workflowState.dailyPlans[date] || null) };
-}
-
-function planItemForTask(taskId, date) {
-  const plan = workflowState.dailyPlans[date];
-  if (!plan) return { plan: null, item: null };
-  return { plan, item: plan.items.find((entry) => entry.taskId === Number(taskId)) || null };
-}
-
-function saveTaskAndWorkflowState() {
-  saveTasks();
-  saveWorkflow();
-}
-
-function startFocus(taskId, options) {
-  const task = getTask(Number(taskId));
-  if (!task || !['todo', 'doing'].includes(task.status)) throw new Error('这个任务当前不能开始专注');
-  if (workflowState.activeFocus) {
-    if (workflowState.activeFocus.taskId === task.id && workflowState.activeFocus.state === 'paused') return resumeFocus(options);
-    throw new Error(`正在专注「${workflowState.activeFocus.title}」，请先暂停或结束当前专注`);
-  }
-  const now = Number(options && options.now) || Date.now();
-  const date = localDateKey(now);
-  const match = planItemForTask(task.id, date);
-  const targetMinutes = normalizeEstimatedMinutes(options && options.targetMinutes) ||
-    match.item && match.item.plannedMinutes || task.estimatedMinutes || workflowState.preferences.focusMinutes;
-  const before = { tasks: cloneData(tasks), workflow: cloneData(workflowState) };
-  try {
-    task.status = 'doing';
-    if (match.item) match.item.status = 'active';
-    if (match.plan) match.plan.updatedAt = now;
-    workflowState.activeFocus = {
-      id: `focus-${now}-${task.id}`,
-      taskId: task.id,
-      title: task.title,
-      planDate: date,
-      planItemId: match.item && match.item.id || null,
-      state: 'running',
-      targetMinutes,
-      startedAt: now,
-      resumedAt: now,
-      pausedAt: null,
-      accumulatedMs: 0,
-      interruptions: []
-    };
-    saveTaskAndWorkflowState();
-    return getWorkflowState(now);
-  } catch (error) {
-    tasks = before.tasks;
-    workflowState = before.workflow;
-    throw error;
-  }
-}
-
-function pauseFocus(input) {
-  const focus = workflowState.activeFocus;
-  if (!focus) throw new Error('当前没有进行中的专注');
-  const now = Number(input && input.now) || Date.now();
-  const reason = String(input && input.reason || '').trim().slice(0, 160);
-  if (focus.state === 'running') {
-    focus.accumulatedMs += Math.max(0, now - focus.resumedAt);
-    focus.state = 'paused';
-    focus.resumedAt = null;
-    focus.pausedAt = now;
-  }
-  if (reason) focus.interruptions.push({ at: now, reason });
-  const match = planItemForTask(focus.taskId, focus.planDate);
-  if (match.item) match.item.status = 'paused';
-  if (match.plan) match.plan.updatedAt = now;
-  saveWorkflow();
-  return getWorkflowState(now);
-}
-
-function resumeFocus(input) {
-  const focus = workflowState.activeFocus;
-  if (!focus) throw new Error('当前没有可继续的专注');
-  if (focus.state === 'running') return getWorkflowState(input && input.now);
-  const task = getTask(focus.taskId);
-  if (!task || !['todo', 'doing'].includes(task.status)) throw new Error('关联任务当前不能继续');
-  const now = Number(input && input.now) || Date.now();
-  focus.state = 'running';
-  focus.resumedAt = now;
-  focus.pausedAt = null;
-  const match = planItemForTask(focus.taskId, focus.planDate);
-  if (match.item) match.item.status = 'active';
-  if (match.plan) match.plan.updatedAt = now;
-  saveWorkflow();
-  return getWorkflowState(now);
-}
-
-function recordInterruption(reason, input) {
-  return pauseFocus(Object.assign({}, input, { reason: String(reason || '').trim() || '被临时事务打断' }));
-}
-
-function finishFocus(input) {
-  const focus = workflowState.activeFocus;
-  if (!focus) throw new Error('当前没有进行中的专注');
-  const now = Number(input && input.now) || Date.now();
-  const task = getTask(focus.taskId);
-  const before = { tasks: cloneData(tasks), workflow: cloneData(workflowState) };
-  try {
-    const elapsedMs = focusElapsedMs(focus, now);
-    const complete = !!(input && input.completeTask);
-    const session = {
-      id: focus.id,
-      taskId: focus.taskId,
-      title: focus.title,
-      planDate: focus.planDate,
-      targetMinutes: focus.targetMinutes,
-      startedAt: focus.startedAt,
-      endedAt: now,
-      focusedMs: elapsedMs,
-      outcome: complete ? 'completed' : 'stopped',
-      interruptions: cloneData(focus.interruptions)
-    };
-    workflowState.focusSessions.push(session);
-    workflowState.focusSessions = workflowState.focusSessions.slice(-200);
-    const match = planItemForTask(focus.taskId, focus.planDate);
-    let completion = null;
-    if (complete && task) {
-      completion = completeTaskRecord(task);
-      if (match.item) {
-        match.item.status = 'done';
-        match.item.completedAt = now;
-      }
-    } else if (match.item) {
-      match.item.status = 'planned';
-    }
-    if (match.plan) match.plan.updatedAt = now;
-    workflowState.activeFocus = null;
-    saveTaskAndWorkflowState();
-    return { workflow: getWorkflowState(now), session: cloneData(session), completion };
-  } catch (error) {
-    tasks = before.tasks;
-    workflowState = before.workflow;
-    throw error;
-  }
-}
-
-function getDailyReview(date, now) {
-  return createDailyReview(getAllTasks(), workflowState, date, now);
-}
-
-function saveDailyReview(date, input) {
-  const plan = workflowState.dailyPlans[date];
-  if (!plan) throw new Error('没有找到这一天的计划');
-  if (workflowState.activeFocus && workflowState.activeFocus.planDate === date) {
-    throw new Error('请先结束当前专注，再保存今日复盘');
-  }
-  const previousPlan = cloneData(plan);
-  const review = Object.assign({}, getDailyReview(date), {
-    note: String(input && input.note || '').trim().slice(0, 1000),
-    unfinishedReasons: Array.isArray(input && input.unfinishedReasons)
-      ? input.unfinishedReasons.slice(0, 20).map((entry) => ({ taskId: Number(entry.taskId), reason: String(entry.reason || '').trim().slice(0, 200) }))
-      : []
-  });
-  plan.review = review;
-  plan.status = 'completed';
-  plan.revision += 1;
-  plan.updatedAt = Date.now();
-  saveWorkflow();
-  return { review: cloneData(review), plan: cloneData(plan), previousPlan };
-}
-
 /* ---------- 备份 ---------- */
 function getBackupPayload() {
-  return { version: 5, tasks, memos, agentState, workflow: workflowState };
+  return { version: 5, tasks, memos, agentState };
 }
 
 function backup() {
@@ -1435,11 +1079,8 @@ function restoreFromBackup(filePath) {
   } else {
     clearAgentState();
   }
-  workflowState = !Array.isArray(data) && data.workflow
-    ? normalizeWorkflowState(data.workflow)
-    : normalizeWorkflowState({});
-  saveWorkflow();
-  return { ok: true, count: tasks.length, memoCount: getAllMemos().length, workflowRestored: !!(!Array.isArray(data) && data.workflow) };
+  // 旧备份里的 workflow 字段已随工作流模块下线：保留在备份文件中但不再恢复（hide-don't-delete）
+  return { ok: true, count: tasks.length, memoCount: getAllMemos().length };
 }
 
 /* 一键备份到外部指定文件夹（防止数据目录丢失） */
@@ -1454,7 +1095,7 @@ function backupToDir(dir) {
 
 /* ---------- 导出 ---------- */
 function exportJSON() {
-  return JSON.stringify({ version: 3, tasks: getAllTasks(), memos: getAllMemos(), workflow: getWorkflowState() }, null, 2);
+  return JSON.stringify({ version: 3, tasks: getAllTasks(), memos: getAllMemos() }, null, 2);
 }
 
 function exportCSV() {
@@ -1605,82 +1246,6 @@ function buildReportSnapshot(input) {
     });
   });
 
-  const plans = Object.entries(workflowState.dailyPlans || {})
-    .filter(([date]) => dateInRange(date))
-    .sort(([a], [b]) => a.localeCompare(b));
-  const planItemSources = [];
-  const reviews = [];
-  plans.forEach(([date, plan]) => {
-    (plan.items || []).forEach((item, index) => {
-      const id = `plan-${date}-${reportSourceIdPart(item.id || `${item.taskId}-${index + 1}`)}`;
-      const entry = {
-        id,
-        type: 'plan',
-        title: item.title,
-        detail: `${date} 计划 ${item.plannedMinutes} 分钟${item.plannedStart ? `，${item.plannedStart}-${item.plannedEnd}` : ''}；状态：${item.status}`,
-        date,
-        taskId: item.taskId,
-        plannedMinutes: Number(item.plannedMinutes) || 0,
-        plannedStart: item.plannedStart || '',
-        plannedEnd: item.plannedEnd || '',
-        status: item.status
-      };
-      planItemSources.push(entry);
-      sources.push(entry);
-    });
-    if (plan.review) {
-      const review = {
-        id: `review-${date}`,
-        type: 'review',
-        title: `${date} 工作复盘`,
-        detail: `计划完成率 ${Number(plan.review.completionRate) || 0}%；${String(plan.review.note || plan.review.suggestion || '无备注')}`,
-        date,
-        completionRate: Number(plan.review.completionRate) || 0,
-        note: String(plan.review.note || '').slice(0, 500),
-        suggestion: String(plan.review.suggestion || '').slice(0, 500),
-        unfinishedReasons: Array.isArray(plan.review.unfinishedReasons)
-          ? plan.review.unfinishedReasons.slice(0, 20).map((item) => ({
-              taskId: Number(item.taskId) || null,
-              reason: String(item.reason || '').slice(0, 200)
-            }))
-          : []
-      };
-      reviews.push(review);
-      sources.push(review);
-    }
-  });
-
-  const focusSessions = (workflowState.focusSessions || []).filter((session) => dateInRange(session.planDate));
-  focusSessions.forEach((session) => {
-    sources.push({
-      id: `focus-${reportSourceIdPart(session.id)}`,
-      type: 'focus',
-      title: session.title,
-      detail: `${session.planDate} 专注 ${Math.round(Number(session.focusedMs || 0) / 60000)} 分钟；打断 ${(session.interruptions || []).length} 次；${session.outcome === 'completed' ? '完成' : '结束'}`,
-      date: session.planDate,
-      taskId: session.taskId,
-      focusedMinutes: Math.round(Number(session.focusedMs || 0) / 60000),
-      interruptionCount: (session.interruptions || []).length,
-      outcome: session.outcome
-    });
-  });
-  const activeFocus = workflowState.activeFocus && dateInRange(workflowState.activeFocus.planDate)
-    ? workflowState.activeFocus
-    : null;
-  if (activeFocus) {
-    sources.push({
-      id: `focus-active-${reportSourceIdPart(activeFocus.id)}`,
-      type: 'focus',
-      title: activeFocus.title,
-      detail: `${activeFocus.planDate} 正在专注；已投入 ${Math.round(focusElapsedMs(activeFocus, range.now.getTime()) / 60000)} 分钟；打断 ${(activeFocus.interruptions || []).length} 次`,
-      date: activeFocus.planDate,
-      taskId: activeFocus.taskId,
-      focusedMinutes: Math.round(focusElapsedMs(activeFocus, range.now.getTime()) / 60000),
-      interruptionCount: (activeFocus.interruptions || []).length,
-      outcome: 'active'
-    });
-  }
-
   // 备忘录是背景依据，不是成果本体：只取本期新建或改动过的，并限制条数与正文长度，
   // 避免长文本把报告写作的输出预算挤爆。
   const periodMemos = memos
@@ -1737,16 +1302,6 @@ function buildReportSnapshot(input) {
       if (!tagStat.sourceIds.includes(sourceId)) tagStat.sourceIds.push(sourceId);
     });
   });
-  const plannedCompleted = planItemSources.filter((item) => item.status === 'done').length;
-  const plannedSkipped = planItemSources.filter((item) => item.status === 'skipped').length;
-  const activeFocusedMinutes = activeFocus ? Math.round(focusElapsedMs(activeFocus, range.now.getTime()) / 60000) : 0;
-  const focusedMinutes = focusSessions.reduce((sum, session) => sum + Math.round(Number(session.focusedMs || 0) / 60000), 0) + activeFocusedMinutes;
-  const interruptionCount = focusSessions.reduce((sum, session) => sum + (session.interruptions || []).length, 0) +
-    (activeFocus ? (activeFocus.interruptions || []).length : 0);
-  const focusSourceIds = [
-    ...focusSessions.map((session) => `focus-${reportSourceIdPart(session.id)}`),
-    ...(activeFocus ? [`focus-active-${reportSourceIdPart(activeFocus.id)}`] : [])
-  ];
   const semantic = {
     period: range.period,
     offset: range.offset,
@@ -1769,20 +1324,6 @@ function buildReportSnapshot(input) {
       overdueRisks: { count: overdue.length, sourceIds: idsFor(overdue) },
       active: { count: active.length, sourceIds: idsFor(active) },
       nextDue: { count: nextDue.length, sourceIds: idsFor(nextDue) },
-      planExecution: {
-        plannedCount: planItemSources.length,
-        completedCount: plannedCompleted,
-        skippedCount: plannedSkipped,
-        completionRate: planItemSources.length ? Math.round(plannedCompleted / planItemSources.length * 100) : 0,
-        scheduledMinutes: planItemSources.reduce((sum, item) => sum + item.plannedMinutes, 0),
-        sourceIds: planItemSources.map((item) => item.id)
-      },
-      focus: {
-        sessionCount: focusSourceIds.length,
-        focusedMinutes,
-        interruptionCount,
-        sourceIds: focusSourceIds
-      },
       workLogs: {
         count: workLogSourceIds.length,
         sourceIds: workLogSourceIds,
@@ -1797,7 +1338,6 @@ function buildReportSnapshot(input) {
     },
     projects: [...projectMap.values()].sort((a, b) => b.completedCount - a.completedCount || a.name.localeCompare(b.name, 'zh-CN')),
     tags: [...tagMap.values()].sort((a, b) => b.completedCount - a.completedCount || a.name.localeCompare(b.name, 'zh-CN')),
-    reviews: reviews.map((review) => review.id),
     sources,
     sourceFingerprint
   };
@@ -1987,10 +1527,6 @@ function generateDailyReport(dayOffset) {
   const dueTasks = all.filter((t) => t.status !== 'archived' && dueOnDate(t));
   const unfinished = dueTasks.filter((t) => t.status !== 'done');
   const overdue = all.filter((t) => t.status !== 'done' && t.status !== 'archived' && t.due && t.due < `${date} 00:00`);
-  const plan = workflowState.dailyPlans[date] || null;
-  const sessions = workflowState.focusSessions.filter((session) => session.planDate === date);
-  const focusedMinutes = Math.round(sessions.reduce((sum, session) => sum + Number(session.focusedMs || 0), 0) / 60000);
-  const interruptionCount = sessions.reduce((sum, session) => sum + (Array.isArray(session.interruptions) ? session.interruptions.length : 0), 0);
   const periodName = offset === -1 ? '昨天' : offset === 1 ? '明天' : '今天';
   const lines = [];
 
@@ -2004,7 +1540,6 @@ function generateDailyReport(dayOffset) {
   lines.push(`- 📅 ${periodName}到期：**${dueTasks.length}** 项`);
   lines.push(`- ⏳ ${periodName}未完成：**${unfinished.length}** 项`);
   lines.push(`- 🔥 当前逾期：**${overdue.length}** 项`);
-  lines.push(`- 🎯 专注投入：**${focusedMinutes}** 分钟，打断 **${interruptionCount}** 次`);
   lines.push('');
 
   lines.push(`## 二、${periodName}完成明细`);
@@ -2024,17 +1559,12 @@ function generateDailyReport(dayOffset) {
   }
   lines.push('');
 
-  lines.push(`## 三、${periodName}计划与到期任务`);
+  lines.push(`## 三、${periodName}到期任务`);
   lines.push('');
-  if (plan && plan.items && plan.items.length) {
-    plan.items.forEach((item, index) => {
-      const status = item.status === 'done' ? 'x' : ' ';
-      lines.push(`${index + 1}. [${status}] ${item.title}（${item.plannedMinutes} 分钟）`);
-    });
-  } else if (dueTasks.length) {
+  if (dueTasks.length) {
     dueTasks.forEach((task) => lines.push(`- [${task.status === 'done' ? 'x' : ' '}] ${task.title}${task.due ? `（${task.due}）` : ''}`));
   } else {
-    lines.push('（没有记录今日计划或到期任务）');
+    lines.push('（没有到期任务）');
   }
   lines.push('');
 
@@ -2047,16 +1577,11 @@ function generateDailyReport(dayOffset) {
 
   lines.push('## 五、工作复盘');
   lines.push('');
-  const review = plan && plan.review;
-  if (review) {
-    lines.push(`- 计划完成率：${review.completionRate}%（${review.completedCount}/${review.plannedCount}）`);
-    if (review.note) lines.push(`- 复盘备注：${review.note}`);
-    if (review.suggestion) lines.push(`- 建议：${review.suggestion}`);
-  } else if (completed.length || focusedMinutes) {
-    lines.push(`- 今天完成 ${completed.length} 项任务，累计专注 ${focusedMinutes} 分钟。`);
-    lines.push('- 可以在结束工作后补充一次复盘，让明天的安排更准确。');
+  if (completed.length) {
+    lines.push(`- 今天完成 ${completed.length} 项任务。`);
+    lines.push('- 可以在结束工作后简单回顾一下，为明天的安排积累素材。');
   } else {
-    lines.push('（尚未保存复盘）');
+    lines.push('（今天暂无完成任务）');
   }
 
   return lines.join('\n');
@@ -2122,21 +1647,6 @@ module.exports = {
   getAgentState,
   updateAgentState,
   clearAgentState,
-  getWorkflowState,
-  updateWorkPreferences,
-  getDailyCopilot,
-  updateDailyCopilot,
-  previewDailyPlan,
-  applyDailyPlan,
-  updateDailyPlan,
-  restoreDailyPlan,
-  startFocus,
-  pauseFocus,
-  resumeFocus,
-  recordInterruption,
-  finishFocus,
-  getDailyReview,
-  saveDailyReview,
   backup,
   listBackups,
   restoreFromBackup,

@@ -16,10 +16,6 @@ const petMenuNext = document.getElementById('pet-menu-next');
 const petReminder = document.getElementById('pet-reminder');
 const petReminderText = document.getElementById('pet-reminder-text');
 const petSprite = document.getElementById('pet-sprite');
-const petFocus = document.getElementById('pet-focus');
-const petFocusTitle = document.getElementById('pet-focus-title');
-const petFocusTime = document.getElementById('pet-focus-time');
-const petFocusToggle = document.getElementById('pet-focus-toggle');
 
 let bubbleTimer = null;
 let idleTimer = null;
@@ -27,9 +23,7 @@ let moodTimer = null;
 let currentMood = 'normal'; // normal | happy | surprised | sad
 let wasDragging = false; // 标记最近一次是否发生了拖拽（用于区分点击）
 let statusSnapshot = { todo: 0, overdue: 0, next: null };
-let workflowSnapshot = { activeFocus: null, dailyPlans: {} };
 let pendingReminder = null;
-let petFocusBusy = false;
 let petNavigationBusy = false;
 let petNavigationFeedback = null;
 let statusRequestSequence = 0;
@@ -449,21 +443,11 @@ function formatPetDue(value) {
 }
 
 function renderStatus() {
-  const focus = workflowSnapshot.activeFocus;
   petMenu.classList.toggle('has-reminder', !!pendingReminder);
   petReminder.classList.toggle('hidden', !pendingReminder);
   if (pendingReminder) {
     petReminderText.textContent = `查看 · ${pendingReminder.title}`;
     petReminder.setAttribute('aria-label', `查看提醒任务：${pendingReminder.title}`);
-  }
-  petFocus.classList.toggle('hidden', !focus);
-  if (focus) {
-    if (!petFocusBusy) petFocusTitle.textContent = `${focus.state === 'paused' ? '已暂停' : '专注中'} · ${focus.title}`;
-    const paused = focus.state === 'paused';
-    petFocusToggle.innerHTML = uiIcon(paused ? 'play' : 'pause');
-    petFocusToggle.setAttribute('aria-label', paused ? '继续专注' : '暂停专注');
-    petFocusToggle.title = paused ? '继续专注' : '暂停专注';
-    renderFocusTime();
   }
   petMenuTitle.textContent = statusSnapshot.overdue ? `工作台 · ${statusSnapshot.overdue} 项逾期` : '工作台';
   petMenuCount.textContent = `${statusSnapshot.todo} 项待办`;
@@ -482,67 +466,6 @@ function renderStatus() {
     petMenuNext.textContent = '今天已清空 · 可以新建任务';
   }
 }
-
-function focusElapsedMs() {
-  const focus = workflowSnapshot.activeFocus;
-  if (!focus) return 0;
-  return (Number(focus.accumulatedMs) || 0) + (focus.state === 'running' ? Math.max(0, Date.now() - Number(focus.resumedAt || Date.now())) : 0);
-}
-
-function renderFocusTime() {
-  const total = Math.floor(focusElapsedMs() / 1000);
-  petFocusTime.textContent = `${String(Math.floor(total / 60)).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}`;
-}
-
-async function refreshWorkflow() {
-  try {
-    workflowSnapshot = await window.api.workflow.get();
-    renderStatus();
-  } catch (error) {
-    workflowSnapshot = { activeFocus: null, dailyPlans: {} };
-  }
-}
-
-function setPetFocusBusy(action, busy) {
-  petFocusBusy = busy;
-  petFocus.setAttribute('aria-busy', String(busy));
-  petFocus.querySelectorAll('button').forEach((button) => {
-    button.disabled = busy;
-    button.classList.toggle('is-busy', busy && button === action);
-  });
-  if (busy) {
-    petFocusTitle.textContent = action.dataset.petFocus === 'complete'
-      ? '完成中'
-      : (workflowSnapshot.activeFocus && workflowSnapshot.activeFocus.state === 'paused' ? '继续中' : '暂停中');
-  }
-}
-
-petFocus.addEventListener('click', async (event) => {
-  const action = event.target.closest('[data-pet-focus]');
-  if (!action || !workflowSnapshot.activeFocus || petFocusBusy) return;
-  event.stopPropagation();
-  const restoreFocus = document.activeElement === action;
-  setPetFocusBusy(action, true);
-  try {
-    if (action.dataset.petFocus === 'toggle') {
-      workflowSnapshot = workflowSnapshot.activeFocus.state === 'paused'
-        ? await window.api.workflow.resumeFocus({})
-        : await window.api.workflow.pauseFocus({});
-    } else {
-      const result = await window.api.workflow.finishFocus({ completeTask: true });
-      workflowSnapshot = result.workflow;
-      await refreshStatus(false);
-      showBubble('任务已完成，专注记录已保存', false, 3000);
-    }
-    renderStatus();
-  } catch (error) {
-    showBubble(error.message || '专注状态更新失败', true, 3000);
-  } finally {
-    setPetFocusBusy(action, false);
-    renderStatus();
-    if (restoreFocus && isMenuOpen()) action.focus();
-  }
-});
 
 async function refreshStatus(announce) {
   const requestId = ++statusRequestSequence;
@@ -580,10 +503,7 @@ if (window.api && typeof window.api.on === 'function') {
   window.api.on('pet-panel:visibility', (visible) => {
     petEl.setAttribute('aria-expanded', String(!!visible));
   });
-  window.api.on('workflow:changed', async (state) => {
-    workflowSnapshot = state || workflowSnapshot;
-    await refreshStatus(false);
-  });
+  window.api.on('tasks:changed', () => refreshStatus(false));
 }
 
 /* ---------- 初始化 ---------- */
@@ -597,8 +517,6 @@ if (window.api && typeof window.api.on === 'function') {
   playSprite('idle');
   startIdle();
   await refreshStatus(false);
-  await refreshWorkflow();
   // 每分钟静默刷新菜单状态，不主动打断用户。
   setInterval(() => refreshStatus(false), 60000);
-  setInterval(renderFocusTime, 1000);
 })();

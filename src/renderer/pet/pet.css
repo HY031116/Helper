@@ -213,19 +213,7 @@ html, body {
 .pm-reminder:hover, .pm-reminder:focus-visible { background: rgba(var(--pet-info-rgb), 0.14); border-color: rgba(var(--pet-info-rgb), 0.44); }
 .pm-reminder:focus-visible { outline: 2px solid var(--pet-info); outline-offset: 1px; }
 .pm-reminder:disabled { cursor: wait; opacity: 0.62; }
-.pm-focus { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px; margin: 8px 0; padding: 8px; border: 1px solid var(--pet-rule); background: var(--pet-surface-subtle); }
-.pm-focus[aria-busy="true"] { border-color: rgba(var(--pet-info-rgb), 0.32); }
-.pm-focus.hidden { display: none; }
-.pm-focus strong, .pm-focus span { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.pm-focus strong { color: var(--pet-ink); font-size: 10.5px; }
-.pm-focus span { margin-top: 2px; color: var(--pet-primary); font: 700 14px/1 ui-monospace, Consolas, monospace; letter-spacing: 0; }
-.pm-focus-actions { display: flex; gap: 4px; }
-.pm-focus-btn { width: 27px; height: 27px; padding: 0; border: 1px solid var(--pet-rule); border-radius: 5px; background: transparent; color: var(--pet-ink); display: grid; place-items: center; }
-.pm-focus-btn .ui-icon { width: 13px; height: 13px; }
-.pm-focus-btn.primary { border-color: var(--pet-primary); background: var(--pet-primary); color: #F7F6F2; }
-.pm-focus-btn:focus-visible { outline: 2px solid var(--pet-primary); outline-offset: 1px; }
-.pm-focus-btn:active, .pm-main:active, .pet-menu .pm-it:active, .pm-reminder:active { transform: scale(0.97); }
-.pm-focus-btn.is-busy .ui-icon { animation: pet-control-busy var(--pet-motion-loop) var(--pet-ease-standard) infinite alternate; }
+.pm-main:active, .pet-menu .pm-it:active, .pm-reminder:active { transform: scale(0.97); }
 @keyframes pet-control-busy { to { opacity: 0.38; transform: scale(0.84); } }
 .pet-menu.has-overdue .pm-next { border-left-color: var(--pet-danger); color: var(--pet-ink2); }
 .pm-primary { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 8px; }
@@ -279,7 +267,6 @@ html, body {
     background-position: 0 var(--sprite-y);
   }
   .pet.alert,
-  .pm-focus-btn.is-busy .ui-icon,
   .pet-menu [data-pet][aria-busy="true"] .ui-icon { animation: none !important; }
 }
 

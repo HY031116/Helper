@@ -885,18 +885,6 @@ html, body {
 .done-time { display: inline-flex; align-items: center; gap: 4px; }
 .done-time .ui-icon { width: 12px; height: 12px; }
 .task-more .ui-icon { width: 17px; height: 17px; }
-.task-agent-btn {
-  width: 28px; height: 28px; flex: 0 0 28px; border: 0; border-radius: 6px;
-  display: inline-grid; place-items: center; background: transparent; color: var(--muted);
-  cursor: pointer; opacity: 0.62;
-  transition: opacity var(--motion-base) var(--ease-standard), color var(--motion-base) var(--ease-standard), background var(--motion-base) var(--ease-standard);
-}
-.task-agent-btn .ui-icon { width: 15px; height: 15px; }
-.task-row:hover .task-agent-btn,
-.task-row:focus-within .task-agent-btn { opacity: 1; }
-.task-agent-btn:hover,
-.task-agent-btn:focus-visible,
-.task-agent-btn[aria-expanded="true"] { background: rgba(var(--accent2-rgb), 0.09); color: var(--accent2); opacity: 1; }
 .task-row:hover .task-more,
 .task-row:focus-within .task-more,
 .task-more[aria-expanded="true"] { opacity: 1; }
@@ -945,189 +933,10 @@ html, body {
 
 /* 今日日期 */
 .today-date { font-size: 13px; font-weight: 400; color: var(--muted); }
-/* 每日 Agent：蓝图纸底稿面——AI 的提议画在非感光蓝图层上 */
-.daily-copilot {
-  display: grid;
-  grid-template-columns: 54px minmax(0, 1fr);
-  margin: 0 0 10px;
-  border: 1px solid rgba(var(--accent2-rgb), 0.18);
-  border-top: 1px solid rgba(var(--accent2-rgb), 0.18);
-  border-bottom: 1px solid rgba(var(--accent2-rgb), 0.18);
-  background-color: var(--paper-ai);
-  background-image:
-    repeating-linear-gradient(0deg, var(--grid-line) 0, var(--grid-line) 1px, transparent 1px, transparent 22px),
-    repeating-linear-gradient(90deg, var(--grid-line) 0, var(--grid-line) 1px, transparent 1px, transparent 22px);
-  transition: border-color var(--motion-base) var(--ease-standard), background var(--motion-base) var(--ease-standard);
-}
-.task-worklog { margin-top: 5px; padding-top: 9px; border-top: 1px solid var(--rule); }
-.task-worklog-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
-.task-worklog-head strong { font-size: 11.5px; color: var(--ink2); }
-.task-log-add { display: inline-flex; align-items: center; gap: 4px; min-height: 26px; padding: 3px 7px; border: 1px solid var(--rule); border-radius: 6px; background: var(--bg2); color: var(--accent2); font: 600 11px/1 var(--font-ui); cursor: pointer; }
-.task-log-add .ui-icon { width: 12px; height: 12px; }
-.task-worklog-list { display: grid; gap: 5px; margin-top: 7px; }
-.task-worklog-item { display: grid; grid-template-columns: 38px minmax(0, 1fr) auto auto; gap: 7px; align-items: start; min-width: 0; }
-.task-worklog-kind { padding-top: 2px; color: var(--accent2); font-size: 10.5px; font-weight: 700; }
-.task-worklog-item.blocker .task-worklog-kind { color: var(--danger); }
-.task-worklog-item.outcome .task-worklog-kind { color: var(--ok); }
-.task-worklog-item.next .task-worklog-kind { color: var(--warn); }
-.task-worklog-item p { min-width: 0; margin: 0; color: var(--ink2); font-size: 11.5px; line-height: 1.45; overflow-wrap: anywhere; white-space: pre-wrap; }
-.task-worklog-item time { padding-top: 2px; color: var(--muted); font-size: 10px; white-space: nowrap; }
-.task-worklog-tools { display: flex; gap: 2px; }
-.task-worklog-tools button { width: 24px; height: 24px; display: inline-grid; place-items: center; padding: 0; border: 0; border-radius: 5px; background: transparent; color: var(--muted); cursor: pointer; }
-.task-worklog-tools button:hover, .task-worklog-tools button:focus-visible { background: var(--bg3); color: var(--ink2); }
-.task-worklog-tools .ui-icon { width: 12px; height: 12px; }
-.task-worklog-empty { margin: 6px 0 0; color: var(--muted); font-size: 11px; }
-
-@media (max-width: 720px) {
-  .task-worklog-item { grid-template-columns: 38px minmax(0, 1fr) auto; }
-  .task-worklog-item time { grid-column: 2; }
-  .task-worklog-tools { grid-column: 3; grid-row: 1 / span 2; }
-}
-.daily-copilot.is-busy { cursor: progress; opacity: 0.84; }
-.copilot-rail { position: relative; min-height: 168px; color: var(--accent2); font: 650 10px/1 var(--font-num); }
-.copilot-rail::before {
-  content: '';
-  position: absolute;
-  top: 18px;
-  bottom: 18px;
-  left: 18px;
-  width: 1px;
-  background: rgba(var(--accent2-rgb), 0.28);
-}
-.copilot-rail span {
-  position: absolute;
-  top: 28px;
-  left: 14px;
-  width: 9px;
-  height: 9px;
-  border: 2px solid var(--bg2);
-  border-radius: 50%;
-  background: var(--accent2);
-  box-shadow: 0 0 0 2px rgba(var(--accent2-rgb), 0.18);
-}
-.copilot-rail strong { position: absolute; top: 47px; left: 7px; width: 32px; text-align: center; }
-.daily-copilot.urgency-high .copilot-rail { color: var(--danger); }
-.daily-copilot.urgency-high .copilot-rail::before { background: rgba(var(--danger-rgb), 0.28); }
-.daily-copilot.urgency-high .copilot-rail span { background: var(--danger); box-shadow: 0 0 0 2px rgba(var(--danger-rgb), 0.16); }
-.copilot-main { min-width: 0; padding: 14px 14px 12px 0; }
-.copilot-kicker { display: flex; align-items: center; gap: 7px; min-width: 0; color: var(--muted); font-size: 10.5px; }
-.copilot-agent-mark { color: var(--accent2); font-weight: 750; }
-.copilot-summary { overflow: hidden; min-width: 0; margin-left: auto; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-num); }
-.copilot-main h3 { margin-top: 7px; color: var(--ink); font-size: 15px; line-height: 1.35; letter-spacing: 0; overflow-wrap: anywhere; }
-.copilot-main > p { margin-top: 3px; color: var(--ink2); font-size: 11.5px; line-height: 1.5; }
-.copilot-why { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 8px; margin-top: 9px; font-size: 10.5px; line-height: 1.45; }
-.copilot-why strong { color: var(--accent2); }
-.copilot-why span { color: var(--muted); }
-.copilot-sources { margin-top: 9px; border-top: 1px dashed rgba(var(--accent2-rgb), 0.3); }
-.copilot-source { display: grid; grid-template-columns: 36px minmax(0, 1fr); gap: 8px; padding: 7px 0; border-bottom: 1px solid var(--rule); }
-.copilot-source > span { color: var(--accent2); font-size: 9.5px; font-weight: 700; }
-.copilot-source strong, .copilot-source small { display: block; overflow-wrap: anywhere; }
-.copilot-source strong { color: var(--ink2); font-size: 10.5px; font-weight: 650; }
-.copilot-source small { margin-top: 1px; color: var(--muted); font-size: 9.5px; }
-.copilot-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 11px; }
-.copilot-secondary { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-.daily-copilot .text-action {
-  min-height: 26px;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: var(--muted);
-  font: 550 10.5px/1.3 var(--font-ui);
-  cursor: pointer;
-}
-.daily-copilot .text-action:hover,
-.daily-copilot .text-action:focus-visible { color: var(--accent2); outline: 0; text-decoration: underline; text-underline-offset: 3px; }
-.copilot-primary { flex: 0 0 auto; }
 .quiet-time-controls { display: flex; align-items: flex-end; justify-content: flex-end; gap: 7px; flex-wrap: wrap; }
 .quiet-time-controls label { display: grid; gap: 3px; color: var(--muted); font-size: 9.5px; }
 .quiet-time-controls input { width: 96px; height: var(--control-sm); padding: 0 7px; border: 1px solid var(--rule); background: var(--bg2); color: var(--ink); font-family: var(--font-num); }
 .quiet-time-controls input:focus-visible { border-color: var(--accent2); box-shadow: 0 0 0 2px rgba(var(--accent2-rgb), 0.14); outline: 0; }
-/* 今日计划面板：同在蓝图纸上的执行清单 */
-.workflow-panel {
-  margin: 0 0 16px;
-  overflow: hidden;
-  border: 1px solid rgba(var(--accent2-rgb), 0.2);
-  border-left: 3px solid var(--accent2);
-  border-radius: 8px;
-  background-color: var(--paper-ai);
-  background-image:
-    repeating-linear-gradient(0deg, var(--grid-line) 0, var(--grid-line) 1px, transparent 1px, transparent 22px),
-    repeating-linear-gradient(90deg, var(--grid-line) 0, var(--grid-line) 1px, transparent 1px, transparent 22px);
-  box-shadow: var(--shadow-sm);
-}
-.workflow-panel.is-busy {
-  border-color: rgba(var(--accent2-rgb), 0.4);
-  box-shadow: inset 3px 0 0 rgba(var(--accent2-rgb), 0.32), var(--shadow-sm);
-  cursor: progress;
-}
-.workflow-panel.is-busy :disabled { cursor: progress; }
-.workflow-empty,
-.workflow-head,
-.workflow-focus,
-.workflow-review { padding: 13px 14px; }
-.workflow-empty,
-.workflow-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
-.workflow-empty { min-height: 64px; flex-wrap: wrap; }
-.workflow-empty-head { display: flex; align-items: center; gap: 10px; min-width: 0; flex: 1; }
-.workflow-empty-mark {
-  width: 34px;
-  height: 34px;
-  flex: 0 0 34px;
-  display: grid;
-  place-items: center;
-  border-radius: 8px;
-  background: rgba(var(--accent2-rgb), 0.1);
-  color: var(--accent2);
-}
-.workflow-empty-mark .ui-icon { width: 16px; height: 16px; }
-.workflow-empty .workflow-title { flex: 1; }
-.workflow-empty-actions { display: flex; align-items: center; justify-content: flex-end; gap: 7px; flex-wrap: wrap; }
-.workflow-smart-entry { flex: 1 1 100%; min-width: 0; border-top: 1px solid var(--rule); padding-top: 10px; }
-.workflow-smart-entry label { display: block; margin-bottom: 6px; color: var(--ink2); font-size: 11px; font-weight: 650; }
-.workflow-smart-entry textarea { width: 100%; min-height: 48px; padding: 8px 9px; resize: vertical; border: 1px solid var(--rule); background: var(--bg2); color: var(--ink); line-height: 1.45; }
-.workflow-smart-entry textarea:focus-visible { border-color: var(--accent2); box-shadow: 0 0 0 2px rgba(var(--accent2-rgb), 0.15); outline: 0; }
-.workflow-smart-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 7px; color: var(--muted); font-size: 10.5px; }
-.workflow-constraint-summary { margin: 0 14px 10px; padding: 7px 9px; border-left: 2px solid var(--accent2); background: rgba(var(--accent2-rgb), 0.07); color: var(--muted); font-size: 11px; line-height: 1.45; }
-.workflow-constraint-label { margin-right: 5px; color: var(--accent2); font-weight: 650; }
-.workflow-title { min-width: 0; }
-.workflow-title strong { display: block; font-size: 13px; color: var(--ink); }
-.workflow-title span { display: block; margin-top: 3px; color: var(--muted); font-size: 11px; line-height: 1.45; }
-.workflow-title .workflow-over { color: var(--danger); font-weight: 600; }
-.workflow-actions { display: flex; align-items: center; justify-content: flex-end; gap: 7px; flex-wrap: wrap; }
-.workflow-list { border-top: 1px solid var(--rule); }
-.workflow-item {
-  display: grid;
-  grid-template-columns: 92px minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 10px;
-  min-height: 48px;
-  padding: 8px 14px;
-  border-bottom: 1px solid var(--rule);
-}
-.workflow-item:last-child { border-bottom: 0; }
-.workflow-time { color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
-.workflow-task { min-width: 0; }
-.workflow-task strong { display: block; overflow-wrap: anywhere; font-size: 12px; }
-.workflow-task span { display: block; margin-top: 2px; color: var(--muted); font-size: 10.5px; }
-.workflow-item.done .workflow-task strong { color: var(--muted); text-decoration: line-through; }
-.workflow-item.active .workflow-task strong { color: var(--accent2); }
-.workflow-item-controls { display: flex; align-items: center; justify-content: flex-end; gap: 5px; }
-.workflow-minutes { width: 58px; height: 28px; padding: 0 6px; border: 1px solid var(--rule); background: var(--bg2); color: var(--ink); }
-.workflow-order { display: inline-flex; }
-.workflow-icon-btn { width: 27px; height: 27px; display: grid; place-items: center; border: 0; background: transparent; color: var(--muted); }
-.workflow-icon-btn:hover, .workflow-icon-btn:focus-visible { color: var(--accent2); background: rgba(var(--accent2-rgb), 0.08); }
-.workflow-icon-btn .ui-icon { width: 13px; height: 13px; }
-.workflow-focus { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 14px; }
-/* 专注计时：制图蓝，红色不参与计时 */
-.workflow-clock { margin-top: 5px; font: 700 24px/1 ui-monospace, Consolas, monospace; color: var(--accent2); letter-spacing: 0; }
-.workflow-focus-meta { color: var(--muted); font-size: 10.5px; margin-top: 5px; }
-.workflow-interrupt { display: flex; gap: 6px; width: 100%; margin-top: 8px; }
-.workflow-interrupt input, .workflow-review textarea { border: 1px solid var(--rule); background: var(--bg2); color: var(--ink); }
-.workflow-interrupt input { flex: 1; min-width: 0; height: 30px; padding: 0 8px; }
-.workflow-review { border-top: 1px solid var(--rule); }
-.workflow-review-metrics { display: flex; gap: 14px; flex-wrap: wrap; margin: 8px 0; color: var(--muted); font-size: 11px; }
-.workflow-review textarea { width: 100%; min-height: 64px; padding: 8px; resize: vertical; }
-.workflow-suggestion { margin: 8px 0; color: var(--ink); font-size: 11px; line-height: 1.5; }
 .today-group {
   position: relative;
   display: flex;
@@ -2407,12 +2216,6 @@ body.dark .msg-reasoning-body {
 .task-modal .m-actions .btn { padding-inline: 8px; white-space: nowrap; }
 .modal-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; padding-bottom: 10px; border-bottom: 1px solid var(--rule); }
 .modal-head-actions { display: flex; align-items: center; gap: 4px; }
-.modal-agent-btn {
-  width: 30px; height: 30px; border: 0; border-radius: 6px; display: grid; place-items: center;
-  background: transparent; color: var(--accent2); cursor: pointer;
-}
-.modal-agent-btn:hover { background: rgba(var(--accent2-rgb), 0.09); }
-.modal-agent-btn .ui-icon { width: 15px; height: 15px; }
 .modal h5 { font-size: 15.5px; font-weight: 700; letter-spacing: 0; }
 .modal > h5 { margin-bottom: 14px; }
 .modal > h5 { padding-bottom: 10px; border-bottom: 1px solid var(--rule); }
@@ -2449,8 +2252,6 @@ body.dark .msg-reasoning-body {
 .due-row input[type="date"], .due-row input[type="time"] { flex: 1; min-width: 0; }
 .due-row .btn.mini { flex: 0 0 auto; padding: 6px 9px; }
 .cal-add-row { margin: 8px 0 4px; }
-
-/* 任务 Agent 对话已升级为独立悬浮小窗（src/renderer/task-agent/window.css），主窗口仅保留行内入口按钮 */
 .cal-add-row .btn { display: inline-flex; align-items: center; gap: 5px; }
 .cal-add-row .ui-icon { width: 13px; height: 13px; }
 #m-due-clear { width: 30px; height: 30px; flex: 0 0 30px; padding: 0; display: inline-grid; place-items: center; }
@@ -2807,49 +2608,13 @@ body.dark .ai-head { background: var(--bg2); }
 }
 
 @container (min-width: 880px) {
-  /* 宽屏「图纸台」：今天视图左清单右计划栏 */
   #view-today {
     max-width: 1080px;
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) 316px;
-    grid-template-areas:
-      'head head'
-      'list copilot'
-      'list workflow';
-    column-gap: 22px;
-    align-content: start;
   }
-  #view-today > .view-head { grid-area: head; }
-  #view-today > #daily-copilot { grid-area: copilot; }
-  #view-today > #workflow-panel { grid-area: workflow; margin-bottom: 0; }
-  #view-today > #today-list { grid-area: list; }
 }
 
 @container (max-width: 560px) {
-  .daily-copilot { grid-template-columns: 42px minmax(0, 1fr); }
-  .copilot-rail::before { left: 13px; }
-  .copilot-rail span { left: 9px; }
-  .copilot-rail strong { left: 1px; }
-  .copilot-main { padding-right: 10px; }
-  .copilot-kicker { align-items: flex-start; flex-wrap: wrap; }
-  .copilot-summary { width: 100%; margin-left: 0; white-space: normal; }
-  .copilot-foot { align-items: flex-start; flex-direction: column-reverse; }
-  .copilot-primary { width: 100%; }
-  .copilot-settings-row { align-items: flex-start; }
   .quiet-time-controls { width: 100%; justify-content: flex-start; }
-  .workflow-empty,
-  .workflow-head,
-  .workflow-focus { align-items: stretch; flex-direction: column; }
-  .workflow-empty { display: block; }
-  .workflow-empty-head { align-items: center; }
-  .workflow-empty-actions { margin: 10px 0 0 44px; justify-content: flex-start; }
-  .workflow-smart-entry { margin: 10px 0 0 44px; }
-  .workflow-smart-foot { align-items: flex-start; flex-direction: column; }
-  .workflow-focus { display: flex; }
-  .workflow-actions { justify-content: flex-start; }
-  .workflow-item { grid-template-columns: 72px minmax(0, 1fr); }
-  .workflow-item-controls { grid-column: 2; justify-content: flex-start; }
-  .workflow-minutes { width: 64px; }
   .memo-workspace { grid-template-columns: 1fr; grid-template-rows: 170px minmax(320px, 1fr); height: auto; min-height: 510px; }
   .memo-sidebar { border-right: 0; border-bottom: 1px solid var(--rule); }
   .memo-editor-head { padding: 12px 14px 8px; }

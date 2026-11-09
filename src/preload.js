@@ -83,24 +83,6 @@ contextBridge.exposeInMainWorld('api', {
     get: () => ipcRenderer.invoke('chat:get'),
     clear: () => ipcRenderer.invoke('chat:clear')
   },
-  workflow: {
-    get: () => ipcRenderer.invoke('workflow:get'),
-    getCopilot: () => ipcRenderer.invoke('workflow:getCopilot'),
-    updateCopilot: (input) => ipcRenderer.invoke('workflow:updateCopilot', input),
-    updatePreferences: (patch) => ipcRenderer.invoke('workflow:updatePreferences', patch),
-    previewPlan: (options) => ipcRenderer.invoke('workflow:previewPlan', options),
-    previewSmartPlan: (text, requestId) => ipcRenderer.invoke('workflow:previewSmartPlan', { text, requestId }),
-    applyPlan: (plan) => ipcRenderer.invoke('workflow:applyPlan', plan),
-    updatePlan: (date, input) => ipcRenderer.invoke('workflow:updatePlan', date, input),
-    restorePlan: (input) => ipcRenderer.invoke('workflow:restorePlan', input),
-    startFocus: (taskId, options) => ipcRenderer.invoke('workflow:startFocus', taskId, options),
-    pauseFocus: (input) => ipcRenderer.invoke('workflow:pauseFocus', input),
-    resumeFocus: (input) => ipcRenderer.invoke('workflow:resumeFocus', input),
-    interrupt: (reason, input) => ipcRenderer.invoke('workflow:interrupt', reason, input),
-    finishFocus: (input) => ipcRenderer.invoke('workflow:finishFocus', input),
-    getReview: (date) => ipcRenderer.invoke('workflow:getReview', date),
-    saveReview: (date, input) => ipcRenderer.invoke('workflow:saveReview', date, input)
-  },
   /* 数据 */
   data: {
     exportJSON: () => ipcRenderer.invoke('data:exportJSON'),
@@ -136,14 +118,9 @@ contextBridge.exposeInMainWorld('api', {
     quit: () => ipcRenderer.invoke('window:quit'),
     toggleMaximize: () => ipcRenderer.invoke('window:toggleMaximize')
   },
-  /* 任务 Agent 独立对话小窗 */
-  taskAgent: {
-    open: (payload) => ipcRenderer.invoke('task-agent:open', payload),
-    close: () => ipcRenderer.invoke('task-agent:close')
-  },
   /* 事件订阅 */
   on: (channel, cb) => {
-    const valid = ['app:new-task', 'app:focus-ai', 'app:open-task', 'app:reminder', 'app:switch-view', 'window:maximized', 'pet:remind', 'pet:theme', 'pet-panel:shown', 'pet-panel:visibility', 'workflow:changed', 'task-agent:session', 'tasks:changed', 'memos:changed'];
+    const valid = ['app:new-task', 'app:focus-ai', 'app:open-task', 'app:reminder', 'app:switch-view', 'window:maximized', 'pet:remind', 'pet:theme', 'pet-panel:shown', 'pet-panel:visibility', 'tasks:changed', 'memos:changed'];
     if (!valid.includes(channel)) return;
     const listener = (_e, data) => cb(data);
     ipcRenderer.on(channel, listener);

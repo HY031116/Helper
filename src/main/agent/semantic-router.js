@@ -5,8 +5,7 @@ const SEMANTIC_ENVELOPE_VERSION = 1;
 const WRITE_INTENTS = new Set([
   'create', 'memo_create', 'memo_delete', 'memo_pin', 'memo_to_task', 'memo_split',
   'complete', 'start', 'delete', 'archive', 'split', 'batch', 'update', 'child',
-  'postpone', 'restore', 'daily_plan', 'daily_replan', 'focus_start', 'focus_pause',
-  'focus_resume', 'focus_interrupt', 'focus_finish', 'daily_review', 'plan'
+  'postpone', 'restore', 'plan'
 ]);
 const READ_INTENTS = new Set(['memo_query', 'query', 'suggest', 'summary', 'stats', 'report', 'greeting', 'thanks']);
 
@@ -56,8 +55,6 @@ function isProtectedCommand(intent, text) {
   }
   if (intent === 'query') return /(查|看看|看一下|查看|列出|有哪些|有什么|做什么|干嘛|完成了吗|做完了吗)/.test(raw);
   if (surfaceQuestionCue(raw)) return false;
-  if (['daily_plan', 'daily_replan'].includes(intent)) return /(安排|规划|排一下|重新排|生成.*计划)/.test(raw);
-  if (['focus_pause', 'focus_resume', 'focus_finish'].includes(intent)) return true;
   const direct = {
     complete: '完成|搞定|勾掉',
     start: '开始|启动',
@@ -172,14 +169,6 @@ function routeSemanticInput(text, options) {
   else if (/(记到|记进|写到|写进|存到|存进|放到|放进|添加到|加入)(我的)?备忘录|新建备忘录|备忘一下/.test(intentText)) set('memo_create', 'memo_create', { entityType: 'memo', protected: true, confidence: 'high' });
   else if (/(查|找|搜索|看|查看|列出|有哪些|多少).*(备忘录|笔记)|(备忘录|笔记).*(查|找|搜索|看|查看|列出|有哪些|多少)/.test(intentText)) set('memo_query', 'memo_query', { entityType: 'memo', protected: true, confidence: 'high' });
   else if (/((生成|写|整理|汇总|导出|查看|看看|给我|做一份|出一份).*(日报|周报|工作报告|工作总结)|(日报|周报|工作报告|工作总结).*(生成|查看|看看|写|整理|汇总|导出))/.test(intentText)) set('report', 'report', { confidence: 'high' });
-  else if (/复盘(一下)?今天|今日复盘|今天.*复盘|结束今天/.test(intentText)) set('daily_review', 'daily_review');
-  else if (/重新(安排|规划|排一下).*(今天|今日|剩余|接下来)|今天.*(来不及|赶不完|计划有变)|来不及了|卡住了|计划有变/.test(intentText)) set('daily_replan', 'daily_replan', { entityType: 'workflow' });
-  else if (/开始(一次|一个)?专注|专注(做|处理|开始)|开始下一项/.test(intentText)) set('focus_start', 'focus_start');
-  else if (/暂停专注|暂停计时|先停一下/.test(intentText)) set('focus_pause', 'focus_pause', { protected: true, confidence: 'high' });
-  else if (/继续专注|恢复专注|继续计时/.test(intentText)) set('focus_resume', 'focus_resume', { protected: true, confidence: 'high' });
-  else if (/记录(一次)?打断|被.+打断|临时有事|插进来一件事/.test(intentText)) set('focus_interrupt', 'focus_interrupt');
-  else if (/结束专注|停止专注|完成当前专注|完成当前任务/.test(intentText)) set('focus_finish', 'focus_finish');
-  else if (/制定|生成|排(一下)?|安排(一下)?/.test(intentText) && /(?:今日|今天).*(?:计划|工作)|(?:计划|工作).*(?:今日|今天)/.test(intentText)) set('daily_plan', 'daily_plan', { entityType: 'workflow' });
   else if (/怎么安排|先做什么|排序|建议|安排一下|接下来呢|然后呢|下一步|现在该做什么|我该做什么|优先级.*(怎么|如何|排序)|怎么.*优先级|推荐.*顺序/.test(intentText)) set('suggest', 'suggest');
   else if (/小结|总结|复盘|进展|今天完成了什么|今天做了什么/.test(intentText)) set('summary', 'summary');
   else if (/(多少个|几条|几项|完成率|有几个|占比|还剩.*(个|条|项)|还有.*(个|条|项)没|完成了多少|做了多少|完成.*多少)/.test(intentText)) set('stats', 'stats');
@@ -210,13 +199,6 @@ function routeSemanticInput(text, options) {
   if (hasCompoundOperationCue(raw) && !config.expectedIntent && !config.contextEntityType) {
     protectedIntent = false;
     confidence = 'medium';
-  }
-  if (config.expectedIntent && ['daily_plan', 'daily_replan'].includes(config.expectedIntent) && !['daily_plan', 'daily_replan'].includes(intent)) {
-    intent = config.expectedIntent;
-    cue = 'surface_context';
-    entityType = 'workflow';
-    confidence = 'high';
-    protectedIntent = true;
   }
   if (config.contextEntityType === 'task' && ['update', 'child', 'split', 'postpone', 'start', 'complete', 'archive', 'delete'].includes(intent)) {
     entityType = 'task';
@@ -252,10 +234,6 @@ function mergeProtectedParams(envelope, modelParams, localParams) {
   } else if (envelope.intent === 'memo_create' && envelope.payload) {
     params.memoContent = envelope.payload;
     params.memoTitle = local.memoTitle || params.memoTitle;
-  } else if (['daily_plan', 'daily_replan'].includes(envelope.intent)) {
-    Object.entries(local).forEach(([key, value]) => {
-      if (params[key] === undefined || params[key] === null || params[key] === '') params[key] = value;
-    });
   } else if (semanticKind(envelope.intent) === 'read') {
     Object.assign(params, local);
     delete params.title;

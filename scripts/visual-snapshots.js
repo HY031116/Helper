@@ -62,7 +62,6 @@ app.whenReady().then(async () => {
     store.resetTasks();
     store.clearChat();
     store.updateSettings({ aiStage: 'mock' });
-    store.updateWorkPreferences({ workdayStart: '09:00', workdayEnd: '23:59' });
     const now = new Date();
     const fmt = (date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
     const yesterday = new Date(now.getTime() - 24 * 3600 * 1000);
@@ -80,21 +79,12 @@ app.whenReady().then(async () => {
     if (seeded[2]) store.completeTask(seeded[2].id);
     store.createMemo({ title: '发布前核对', content: '确认版本号、更新说明和回滚方案。\n记得把安装包同步到内网。', tags: ['发布'] });
     store.createMemo({ title: '键盘快捷键速记', content: '全局唤起：Alt+Shift+W\n快速新建：Ctrl+N', tags: ['技巧'] });
-    const plan = store.previewDailyPlan({ availableMinutes: 150 });
-    if (plan.items.length) store.applyDailyPlan(plan);
-    const focusTask = plan.items.length ? plan.items[0].taskId : seeded[0].id;
-    if (focusTask) store.startFocus(focusTask, { targetMinutes: 25 });
 
     await Promise.all([reloadWindow(mainWindow), reloadWindow(petWindow), reloadWindow(petPanelWindow)]);
 
-    // 固定每日 Agent 简报，保证今天视图首屏有建议内容
-    const briefing = store.getDailyCopilot(new Date('2026-08-25T09:15:00').getTime());
     await mainWindow.webContents.executeJavaScript(`
       document.body.classList.remove('dark');
-      dailyCopilot = ${JSON.stringify(briefing)};
-      copilotSourcesOpen = false;
       switchView('today');
-      renderDailyCopilot();
       true;
     `);
     results.push(await capture(mainWindow, '01-today-light.png'));
@@ -123,13 +113,6 @@ app.whenReady().then(async () => {
       document.body.classList.remove('dark');
       true;
     `);
-
-    await mainWindow.webContents.executeJavaScript(`
-      copilotSourcesOpen = true;
-      renderDailyCopilot();
-      true;
-    `);
-    results.push(await capture(mainWindow, '02-copilot-sources-light.png'));
 
     for (const [view, name] of [
       ['tasks', '03-tasks-light'],
@@ -173,28 +156,6 @@ app.whenReady().then(async () => {
     `);
     results.push(await capture(mainWindow, '19-task-modal-light.png'));
     await mainWindow.webContents.executeJavaScript(`closeModal(false); true;`);
-
-    // 任务 Agent 独立小窗
-    const agentTask = store.getAllTasks().find((task) => task.status !== 'done' && task.status !== 'archived');
-    await mainWindow.webContents.executeJavaScript(`
-      window.api.taskAgent.open({ taskId: ${agentTask.id}, title: ${JSON.stringify(agentTask.title)}, draft: '', workLogId: '', workLogKind: '' });
-      true;
-    `);
-    const agentWindow = await waitForWindow('任务对话');
-    await agentWindow.webContents.executeJavaScript(`
-      const thread = document.querySelector('#ta-thread');
-      const userMsg = document.createElement('div');
-      userMsg.className = 'ta-msg user';
-      userMsg.textContent = '拆成三步';
-      thread.appendChild(userMsg);
-      const aiMsg = document.createElement('div');
-      aiMsg.className = 'ta-msg ai';
-      aiMsg.textContent = '建议拆成：1）列出核对项；2）逐项确认回滚方案；3）打包并内网同步。确认后我来更新子任务。';
-      thread.appendChild(aiMsg);
-      true;
-    `);
-    results.push(await capture(agentWindow, '11-task-agent-light.png'));
-    await agentWindow.close();
 
     // 深色主题
     await mainWindow.webContents.executeJavaScript(`

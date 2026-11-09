@@ -84,7 +84,6 @@ function resetScenario(store, scenario) {
   store.getAllMemos().forEach((memo) => store.deleteMemo(memo.id));
   store.emptyMemoTrash();
   store.clearChat();
-  store.updateWorkPreferences({ workdayStart: '09:00', workdayEnd: '23:59' });
   const tasks = store.importTasks((scenario.setup && scenario.setup.tasks || []).map(resolveFixtureEntity));
   store.importMemos((scenario.setup && scenario.setup.memos || []).map(resolveFixtureEntity));
   (scenario.setup && scenario.setup.deletedTasks || []).forEach((title) => {
