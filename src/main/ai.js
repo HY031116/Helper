@@ -862,6 +862,59 @@ function execute(intent, params) {
   return toolRegistry.execute(intent, params) || { type: 'unknown', message: buildHelp() };
 }
 
+/**
+ * 外部调用入口（MCP 等无人值守客户端）。与 execute 的三点关键差异：
+ * 1. 不借用应用内「最近提到」隐式选目标，必须显式给 taskId/memoId 或标题，
+ *    避免外部 agent 误操作用户在应用里刚看过的那一项；
+ * 2. 不经过 finalizeResult / rememberOutcome，不写 agentState.pending，
+ *    避免外部确认流程劫持应用侧边栏的下一句话；
+ * 3. 参数深拷贝后再交给 handler，调用方持有的对象不会被就地修改。
+ * 破坏性操作仍由各 handler 返回 confirm，调用方必须取得用户同意后带 confirmed 再调用。
+ */
+function executeExternalTool(intent, params) {
+  const definition = getToolDefinition(intent);
+  if (!definition) return { type: 'error', message: `未知工具 ${String(intent || '')}` };
+  const safeParams = cloneUndoValue(params && typeof params === 'object' && !Array.isArray(params) ? params : {});
+
+  if (definition.requiresTarget) {
+    const isMemo = definition.targetType === 'memo';
+    const hasTarget = isMemo
+      ? Boolean(safeParams.memoId || String(safeParams.target || '').trim())
+      : Boolean(safeParams.taskId || String(safeParams.target || '').trim());
+    if (!hasTarget) {
+      return clarification(
+        intent,
+        safeParams,
+        'target',
+        isMemo ? '请提供 memoId 或准确的备忘录标题。' : '请提供 taskId 或准确的任务标题。'
+      );
+    }
+  }
+
+  if (intent === 'plan' && Array.isArray(safeParams.actions)) {
+    // 组合计划内部会复用 execute，这里先挡住缺少显式目标的步骤，杜绝隐式指代。
+    for (const action of safeParams.actions) {
+      const stepDefinition = action && getToolDefinition(action.intent);
+      if (!stepDefinition || !stepDefinition.requiresTarget) continue;
+      const stepParams = action.params && typeof action.params === 'object' ? action.params : {};
+      const isMemo = stepDefinition.targetType === 'memo';
+      const hasTarget = isMemo
+        ? Boolean(stepParams.memoId || String(stepParams.target || '').trim())
+        : Boolean(stepParams.taskId || String(stepParams.target || '').trim());
+      if (!hasTarget) {
+        return clarification(
+          intent,
+          safeParams,
+          'actions',
+          `组合计划的每个步骤都要有明确目标，「${action.intent}」缺少 ${isMemo ? 'memoId' : 'taskId'} 或标题。`
+        );
+      }
+    }
+  }
+
+  return toolRegistry.execute(intent, safeParams) || { type: 'error', message: `工具 ${intent} 没有返回结果` };
+}
+
 const toolRegistry = createToolRegistry({
   create: doCreate,
   memo_create: doMemoCreate,
@@ -4821,4 +4874,4 @@ function applyTaskAction(action) {
   return Object.assign({ ok: true }, result);
 }
 
-module.exports = { handle, handleAuto, resolve, parse, parseWithLLM, generateReport, previewDailyPlan, previewTaskAction, applyTaskAction, taskActionFingerprint, undoAction, getSessionState, testConnection, isLLMConfigured, getLLMConfig, callLLM, INTENTS, PROVIDERS };
+module.exports = { handle, handleAuto, resolve, executeExternalTool, parse, parseWithLLM, generateReport, previewDailyPlan, previewTaskAction, applyTaskAction, taskActionFingerprint, undoAction, getSessionState, testConnection, isLLMConfigured, getLLMConfig, callLLM, INTENTS, PROVIDERS };

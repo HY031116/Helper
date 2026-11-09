@@ -917,6 +917,17 @@ test('工作时间：周末速记与排到今天也使用配置的结束时间',
   assert.ok(moved.task && moved.task.due && moved.task.due.endsWith('17:30'), `due=${moved.task && moved.task.due}`);
 });
 
+test('外观主题：默认液态玻璃，显式主题值可持久化', () => {
+  reset();
+  assert.strictEqual(store.getSettings().theme, 'glass');
+  store.updateSettings({ theme: 'mono' });
+  assert.strictEqual(store.getSettings().theme, 'mono');
+  store.updateSettings({ theme: 'dark' });
+  assert.strictEqual(store.getSettings().theme, 'dark');
+  store.updateSettings({ theme: 'glass' });
+  assert.strictEqual(store.getSettings().theme, 'glass');
+});
+
 test('工作时间：非法配置回退默认 18:00', () => {
   reset();
   store.updateSettings({ workHours: { start: '18:00', end: '09:00', days: [9] } });

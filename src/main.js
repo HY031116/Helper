@@ -25,6 +25,8 @@ if (isolatedDataArg) {
 const store = require('./main/store');
 const ai = require('./main/ai');
 const { RequestCoordinator } = require('./main/agent/request-coordinator');
+const { createMcpBridge } = require('./mcp/bridge');
+const { version: APP_VERSION } = require('../package.json');
 
 const APP_ICON_PATH = path.join(__dirname, 'assets', 'app-icon-256.png');
 const TRAY_ICON_PATH = path.join(__dirname, 'assets', 'app-icon-32.png');
@@ -484,6 +486,48 @@ function broadcastAgentWorkflowResult(result) {
   return result;
 }
 
+/* ---------- MCP 服务：供本机其他 AI agent 调用 ---------- */
+function broadcastMcpMutation(intent) {
+  const name = String(intent || '');
+  // 桌宠与面板只订阅 workflow:changed，广播一次即可让它们重新取数。
+  broadcastWorkflowState();
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  const crossType = ['undo', 'plan', 'batch', 'memo_to_task', 'memo_split'].includes(name);
+  const memoOnly = name.startsWith('memo_') && !crossType;
+  if (!memoOnly) mainWindow.webContents.send('tasks:changed');
+  if (name.startsWith('memo_') || crossType) mainWindow.webContents.send('memos:changed');
+}
+
+const mcpBridge = createMcpBridge({
+  version: APP_VERSION,
+  dataDir: store.getDataDir(),
+  execPath: process.execPath,
+  proxyPath: path.join(__dirname, 'mcp', 'stdio-proxy.js'),
+  // 外部入口不写应用会话状态、不隐式选目标，破坏性操作仍走 handler 的确认返回。
+  executeTool: (intent, params) => ai.executeExternalTool(intent, params),
+  undoTool: (undo) => ai.undoAction(undo),
+  onMutation: broadcastMcpMutation,
+  logger: { warn: (...args) => console.warn(...args), error: (...args) => console.error(...args) }
+});
+
+function getMcpStatus() {
+  return Object.assign({}, mcpBridge.status(), { enabled: !!store.getSettings().mcpEnabled });
+}
+
+async function syncMcpService(enabled) {
+  if (enabled) {
+    try {
+      await mcpBridge.start();
+    } catch (error) {
+      // 启动失败时保留开关状态并暴露 lastError，设置页不会假装已开启。
+      console.error('[mcp] 启动失败:', error && error.message);
+    }
+  } else {
+    await mcpBridge.stop();
+  }
+  return getMcpStatus();
+}
+
 const aiRequestCoordinator = new RequestCoordinator({ ttlMs: 5 * 60 * 1000, maxCompleted: 100 });
 const taskActionPreviews = new Map();
 const TASK_ACTION_PREVIEW_TTL = 10 * 60 * 1000;
@@ -598,10 +642,11 @@ function registerIpc() {
 
   // 设置
   ipcMain.handle('settings:get', () => store.getSettings());
-  ipcMain.handle('settings:update', (e, patch) => {
+  ipcMain.handle('settings:update', async (e, patch) => {
     const s = store.updateSettings(patch);
     if (patch.shortcuts) registerShortcuts();
     if (patch.autoStart !== undefined) applyAutoStart();
+    if (patch && patch.mcpEnabled !== undefined) await syncMcpService(s.mcpEnabled);
     if (patch.theme !== undefined && petWindow && !petWindow.isDestroyed()) {
       petWindow.webContents.send('pet:theme', s.theme);
     }
@@ -762,6 +807,17 @@ function registerIpc() {
   ipcMain.handle('chat:get', () => store.getChatLog());
   ipcMain.handle('chat:clear', () => store.clearChat());
 
+  // MCP 服务开关与连接信息（渲染端只经 window.api.mcp 访问）
+  ipcMain.handle('mcp:status', () => getMcpStatus());
+  ipcMain.handle('mcp:setEnabled', async (e, enabled) => {
+    store.updateSettings({ mcpEnabled: !!enabled });
+    return syncMcpService(!!enabled);
+  });
+  ipcMain.handle('mcp:rotateToken', async () => {
+    await mcpBridge.rotateToken();
+    return getMcpStatus();
+  });
+
   // 数据
   ipcMain.handle('data:exportJSON', () => store.exportJSON());
   ipcMain.handle('data:exportCSV', () => store.exportCSV());
@@ -917,6 +973,10 @@ app.whenReady().then(() => {
   registerShortcuts();
   applyAutoStart();
   startReminderEngine();
+  // MCP 默认关闭，只有用户显式开启过才监听本机回环端口。
+  if (store.getSettings().mcpEnabled) {
+    syncMcpService(true).catch((error) => console.error('[mcp] 启动失败:', error && error.message));
+  }
   screen.on('display-removed', ensurePetVisible);
   screen.on('display-metrics-changed', ensurePetVisible);
 
@@ -946,6 +1006,8 @@ app.on('before-quit', () => {
 app.on('will-quit', () => {
   globalShortcut.unregisterAll();
   if (reminderTimer) clearInterval(reminderTimer);
+  // stop() 会先同步删除端点文件，进程立即退出也不会让代理连到失效端口。
+  mcpBridge.stop();
 });
 
 app.on('window-all-closed', () => {

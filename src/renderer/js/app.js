@@ -10,6 +10,7 @@
 let tasks = [];
 let memos = [];
 let settings = {};
+let mcpStatus = null;
 let currentView = 'today';
 const viewScrollPositions = new Map();
 let currentFilter = 'all';
@@ -87,13 +88,13 @@ const dataLoadErrors = { tasks: null, memos: null };
 const taskMutationLocks = new Set();
 const MOTION_MS = Object.freeze({ instant: 80, fast: 140, base: 220, slow: 320 });
 const FEEDBACK_HOLD_MS = 1200;
-const systemTheme = typeof window.matchMedia === 'function'
-  ? window.matchMedia('(prefers-color-scheme: dark)')
-  : { matches: false, addEventListener() {} };
+/* 外观主题：液态玻璃 / 极简单色 / 暗色。
+   旧版本的 light、auto 以及未知值统一归一为液态玻璃，用户手动切换后才会写入新值。 */
+const THEME_VALUES = ['glass', 'mono', 'dark'];
 
-systemTheme.addEventListener('change', () => {
-  if ((settings.theme || 'auto') === 'auto') applyTheme();
-});
+function normalizeTheme(value) {
+  return THEME_VALUES.includes(value) ? value : 'glass';
+}
 
 /* ---------- 工具 ---------- */
 const $ = (sel) => document.querySelector(sel);
@@ -2271,6 +2272,55 @@ function renderStat() {
 }
 
 /* ---------- 视图：设置 ---------- */
+/* ---------- MCP 服务设置 ---------- */
+function mcpStatusText(status) {
+  if (!status) return '正在读取…';
+  if (!status.enabled) return '已关闭，没有监听任何端口。';
+  if (status.running) {
+    const sessions = status.clientSessions ? ` · ${status.clientSessions} 个客户端会话` : '';
+    return `运行中 · ${status.url} · ${status.toolCount} 个工具${sessions}`;
+  }
+  return `已开启但启动失败：${status.lastError || '未知原因'}`;
+}
+
+function renderMcpStatus() {
+  const node = $('#mcp-status');
+  if (!node) return;
+  node.textContent = mcpStatusText(mcpStatus);
+  const running = !!(mcpStatus && mcpStatus.running);
+  const preview = $('#mcp-config-preview');
+  if (preview) {
+    const config = running && mcpStatus.configs && mcpStatus.configs.stdio ? mcpStatus.configs.stdio.json : '';
+    preview.hidden = !config;
+    preview.textContent = config;
+  }
+  ['#btn-mcp-copy-stdio', '#btn-mcp-copy-http', '#btn-mcp-rotate'].forEach((selector) => {
+    const button = $(selector);
+    // 同组互斥锁生效期间不要抢回控件状态，交给 beginSettingsScope 统一恢复。
+    if (button && !button.hasAttribute('data-scope-locked')) button.disabled = !running;
+  });
+}
+
+async function refreshMcpStatus() {
+  try {
+    const status = await window.api.mcp.status();
+    const node = $('#mcp-status');
+    // 设置页可能已被重渲染，丢弃过期结果，避免写进新的 DOM。
+    if (!node || node.isConnected === false) return;
+    mcpStatus = status;
+    settings.mcpEnabled = !!status.enabled;
+    const toggle = $('#mcp-enabled');
+    if (toggle && !toggle.hasAttribute('data-scope-locked')) {
+      toggle.classList.toggle('on', !!status.enabled);
+      toggle.setAttribute('aria-checked', String(!!status.enabled));
+    }
+    renderMcpStatus();
+  } catch (error) {
+    const node = $('#mcp-status');
+    if (node && node.isConnected !== false) node.textContent = `读取 MCP 状态失败：${error.message}`;
+  }
+}
+
 function renderSettings() {
   const s = settings;
   const copilot = workflowState.copilot || { enabled: true, quietStart: '20:00', quietEnd: '08:00' };
@@ -2345,11 +2395,11 @@ function renderSettings() {
       </div>
     </div>
     <div class="set-row">
-      <div><div class="sr-t">外观主题</div><div class="sr-d">浅色 / 深色 / 跟随系统</div></div>
+      <div><div class="sr-t">外观主题</div><div class="sr-d">液态玻璃 / 极简单色 / 暗色</div></div>
       <div class="seg" id="theme-seg" role="radiogroup" aria-label="外观主题">
-        <button type="button" role="radio" aria-checked="${s.theme === 'light'}" class="seg-it ${s.theme === 'light' ? 'active' : ''}" data-theme="light">浅色</button>
-        <button type="button" role="radio" aria-checked="${s.theme === 'dark'}" class="seg-it ${s.theme === 'dark' ? 'active' : ''}" data-theme="dark">深色</button>
-        <button type="button" role="radio" aria-checked="${s.theme === 'auto'}" class="seg-it ${s.theme === 'auto' ? 'active' : ''}" data-theme="auto">自动</button>
+        <button type="button" role="radio" aria-checked="${normalizeTheme(s.theme) === 'glass'}" class="seg-it ${normalizeTheme(s.theme) === 'glass' ? 'active' : ''}" data-theme="glass">液态玻璃</button>
+        <button type="button" role="radio" aria-checked="${normalizeTheme(s.theme) === 'mono'}" class="seg-it ${normalizeTheme(s.theme) === 'mono' ? 'active' : ''}" data-theme="mono">极简单色</button>
+        <button type="button" role="radio" aria-checked="${normalizeTheme(s.theme) === 'dark'}" class="seg-it ${normalizeTheme(s.theme) === 'dark' ? 'active' : ''}" data-theme="dark">暗色</button>
       </div>
     </div>
   </section>
@@ -2406,6 +2456,25 @@ function renderSettings() {
       <div><div class="sr-t">保存配置</div><div class="sr-d">保存后 AI 面板将使用所选引擎</div></div>
       <button type="button" class="btn mini icon-text" id="btn-ai-save" data-settings-scope="ai">${uiIcon('save')}<span>保存 AI 配置</span></button>
     </div>
+    <div class="set-row mcp-row">
+      <div><div class="sr-t">MCP 服务（供其他 AI agent 调用）</div><div class="sr-d" id="mcp-desc">开启后，本机其他 AI agent 可经 MCP 读写任务、备忘录、日计划与报告，共 ${mcpStatus && mcpStatus.toolCount ? mcpStatus.toolCount : 32} 个工具。只监听 127.0.0.1 并校验 token，删除等破坏性操作仍需二次确认。内容会经对方 agent 离开本机，请只连接你信任的客户端。</div></div>
+      <button type="button" class="switch ${s.mcpEnabled ? 'on' : ''}" id="mcp-enabled" role="switch" aria-checked="${!!s.mcpEnabled}" aria-label="MCP 服务" aria-describedby="mcp-desc" data-settings-scope="mcp"></button>
+    </div>
+    <div class="set-row">
+      <div><div class="sr-t">连接状态</div><div class="sr-d" id="mcp-status" role="status" aria-live="polite">正在读取…</div></div>
+      <div class="setting-actions">
+        <button type="button" class="btn mini ghost icon-text" id="btn-mcp-refresh" data-settings-scope="mcp">${uiIcon('refresh')}<span>刷新</span></button>
+        <button type="button" class="btn mini ghost icon-text" id="btn-mcp-rotate" data-settings-scope="mcp">${uiIcon('refresh')}<span>轮换 token</span></button>
+      </div>
+    </div>
+    <div class="set-row">
+      <div><div class="sr-t">客户端配置</div><div class="sr-d" id="mcp-config-hint">stdio 适配所有客户端，用应用自带运行时，无需另装 Node；HTTP 适配支持 streamable HTTP 的客户端。配置含 token，请勿分享。</div></div>
+      <div class="setting-actions">
+        <button type="button" class="btn mini ghost icon-text" id="btn-mcp-copy-stdio" data-settings-scope="mcp">${uiIcon('copy')}<span>复制 stdio</span></button>
+        <button type="button" class="btn mini ghost icon-text" id="btn-mcp-copy-http" data-settings-scope="mcp">${uiIcon('copy')}<span>复制 HTTP</span></button>
+      </div>
+    </div>
+    <pre class="mcp-config-preview" id="mcp-config-preview" tabindex="0" aria-label="MCP 客户端配置预览" hidden></pre>
   </section>
 
   <section class="set-group" id="settings-shortcuts" tabindex="-1" aria-labelledby="settings-shortcuts-title">
@@ -2430,6 +2499,8 @@ function renderSettings() {
 
   $('#settings-body').innerHTML = html;
   bindSettingsEvents();
+  renderMcpStatus();
+  refreshMcpStatus();
 }
 
 function setSettingsNavActive(targetId) {
@@ -2643,6 +2714,93 @@ function bindSettingsEvents() {
       return true;
     }, '工作日保存失败，请稍后重试', 'data');
   });
+
+  // MCP 服务开关：与主进程同一步完成设置写入与端口启停，失败回滚开关
+  $('#mcp-enabled')?.addEventListener('click', async (event) => {
+    const control = event.currentTarget;
+    const previous = control.classList.contains('on');
+    const enabled = !previous;
+    const releaseScope = beginSettingsScope('mcp');
+    if (!releaseScope) return;
+    control.classList.toggle('on', enabled);
+    control.setAttribute('aria-checked', String(enabled));
+    control.setAttribute('aria-busy', 'true');
+    try {
+      mcpStatus = await window.api.mcp.setEnabled(enabled);
+      settings.mcpEnabled = !!mcpStatus.enabled;
+      renderMcpStatus();
+      if (!enabled) toast('MCP 服务已关闭，端口已释放', 2600, null, 'ok');
+      else if (mcpStatus.running) toast(`MCP 服务已开启：${mcpStatus.url}`, 3200, null, 'ok');
+      else toast('MCP 已开启但启动失败，请查看连接状态', 4000, null, 'err');
+    } catch (error) {
+      settings.mcpEnabled = previous;
+      control.classList.toggle('on', previous);
+      control.setAttribute('aria-checked', String(previous));
+      toast('MCP 设置保存失败，已恢复原状态', 3500, null, 'err');
+    } finally {
+      releaseScope();
+      control.setAttribute('aria-busy', 'false');
+    }
+  });
+
+  $('#btn-mcp-refresh')?.addEventListener('click', () => {
+    const button = $('#btn-mcp-refresh');
+    runSettingsAction(button, '读取中…', async () => {
+      mcpStatus = await window.api.mcp.status();
+      settings.mcpEnabled = !!mcpStatus.enabled;
+      const toggle = $('#mcp-enabled');
+      if (toggle && !toggle.hasAttribute('data-scope-locked')) {
+        toggle.classList.toggle('on', !!mcpStatus.enabled);
+        toggle.setAttribute('aria-checked', String(!!mcpStatus.enabled));
+      }
+      renderMcpStatus();
+      return true;
+    }, '读取 MCP 状态失败，请重试', 'mcp');
+  });
+
+  $('#btn-mcp-rotate')?.addEventListener('click', () => {
+    const button = $('#btn-mcp-rotate');
+    runSettingsAction(button, '轮换中…', async () => {
+      mcpStatus = await window.api.mcp.rotateToken();
+      renderMcpStatus();
+      toast('token 已轮换，旧配置立即失效，请重新复制到客户端', 4200, null, 'ok');
+      return true;
+    }, 'token 轮换失败，请重试', 'mcp');
+  });
+
+  async function copyMcpConfig(kind, button) {
+    if (!mcpStatus || !mcpStatus.running) {
+      toast('请先开启 MCP 服务', 3000, null, 'warn');
+      return;
+    }
+    const configs = mcpStatus.configs || {};
+    const entry = kind === 'http' ? configs.http : configs.stdio;
+    if (!entry || !entry.json) {
+      toast('暂时拿不到客户端配置，请先刷新连接状态', 3200, null, 'warn');
+      return;
+    }
+    const text = entry.json;
+    const releaseScope = beginSettingsScope('mcp', [button]);
+    if (!releaseScope) return;
+    try {
+      await navigator.clipboard.writeText(text);
+      toast(kind === 'http' ? 'HTTP 配置已复制，含 token，请勿分享' : 'stdio 配置已复制', 2800, null, 'ok');
+    } catch (error) {
+      // 复制失败时把配置摊开并聚焦，用户仍可手动选择复制。
+      const preview = $('#mcp-config-preview');
+      if (preview) {
+        preview.hidden = false;
+        preview.textContent = text;
+        preview.focus({ preventScroll: true });
+      }
+      toast('复制失败，已展开配置，请手动选择复制', 3500, null, 'err');
+    } finally {
+      releaseScope();
+    }
+  }
+
+  $('#btn-mcp-copy-stdio')?.addEventListener('click', (event) => copyMcpConfig('stdio', event.currentTarget));
+  $('#btn-mcp-copy-http')?.addEventListener('click', (event) => copyMcpConfig('http', event.currentTarget));
 
   $$('#settings-body .switch[data-switch]').forEach((sw) => {
     sw.addEventListener('click', async () => {
@@ -2942,17 +3100,18 @@ function bindSettingsEvents() {
       const releaseScope = beginSettingsScope('theme', controls);
       if (!releaseScope) return;
       group.setAttribute('aria-busy', 'true');
-      const previous = settings.theme || 'auto';
+      const previous = normalizeTheme(settings.theme);
+      const next = normalizeTheme(seg.dataset.theme);
       $$('#theme-seg .seg-it').forEach((x) => {
         x.classList.remove('active');
         x.setAttribute('aria-checked', 'false');
       });
       seg.classList.add('active');
       seg.setAttribute('aria-checked', 'true');
-      settings.theme = seg.dataset.theme;
+      settings.theme = next;
       applyTheme();
       try {
-        await window.api.settings.update({ theme: seg.dataset.theme });
+        await window.api.settings.update({ theme: next });
         toast(`主题已切换为「${seg.textContent}」`);
       } catch (error) {
         settings.theme = previous;
@@ -3068,9 +3227,10 @@ function shortcutRow(id, label, accelerator) {
 }
 
 function applyTheme() {
-  const t = settings.theme || 'auto';
-  const dark = t === 'dark' || (t === 'auto' && window.matchMedia('(prefers-color-scheme: dark)').matches);
-  document.body.classList.toggle('dark', dark);
+  const t = normalizeTheme(settings.theme);
+  const root = document.documentElement;
+  if (root) root.dataset.theme = t;
+  document.body.classList.toggle('dark', t === 'dark');
 }
 
 /* ---------- 备忘录 ---------- */
@@ -5776,10 +5936,14 @@ function bindEvents() {
     renderWorkflowPanel();
     refreshDailyCopilot();
   });
-  // 任务对话小窗等外部入口修改任务后，主窗口同步刷新列表与编辑弹窗
+  // 任务对话小窗、MCP 等外部入口修改任务后，主窗口同步刷新列表与编辑弹窗
   window.api.on('tasks:changed', async () => {
-    await refreshTasksAfterMutation('任务已在对话小窗修改，但列表刷新失败');
+    await refreshTasksAfterMutation('任务已在其他入口修改，但列表刷新失败');
     if (editingTask) refreshOpenTaskModal(tasks.find((item) => item.id === editingTask.id));
+  });
+  // MCP 等外部入口修改备忘录后同步刷新，避免主窗口停留在旧列表
+  window.api.on('memos:changed', async () => {
+    await refreshMemosAfterMutation('备忘录已在其他入口修改，但列表刷新失败');
   });
 
   // 应用内快捷键（不抢输入框焦点）
@@ -6560,7 +6724,7 @@ async function init() {
 
     settings = settingsResult.status === 'fulfilled'
       ? (settingsResult.value || {})
-      : { theme: 'auto', aiStage: 'local', shortcuts: {} };
+      : { theme: 'glass', aiStage: 'local', shortcuts: {} };
     tasks = tasksResult.status === 'fulfilled' ? tasksResult.value : [];
     memos = memosResult.status === 'fulfilled' ? memosResult.value : [];
     trashList = taskTrashResult.status === 'fulfilled' ? taskTrashResult.value : [];

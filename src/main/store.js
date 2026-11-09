@@ -155,7 +155,7 @@ function getDefaultSettings() {
     autoBackup: true,
     autoStart: false,
     notify: true,
-    theme: 'auto',
+    theme: 'glass', // 'glass' | 'mono' | 'dark' 默认液态玻璃；旧 light/auto 由渲染端归一为 glass
     aiStage: 'mock', // 'mock' | 'llm' 默认本地规则引擎，用户显式选择后才调用真实模型
     aiProvider: 'openai', // 'openai' | 'deepseek' | 'custom'
     aiBaseUrl: '',
@@ -164,6 +164,7 @@ function getDefaultSettings() {
     aiTemperature: 0.2,
     petPosition: null, // { x, y } 桌宠位置
     petEnabled: true, // 桌宠是否显示
+    mcpEnabled: false, // MCP 服务默认关闭：开启后本机其他 AI agent 可读写任务与备忘录
     workHours: {
       start: '09:00',
       end: '18:00',
@@ -937,6 +938,7 @@ function getSettings() {
 function updateSettings(patch) {
   const next = Object.assign({}, settings, patch);
   if (patch && patch.workHours) next.workHours = normalizeWorkHours(patch.workHours);
+  if (patch && patch.mcpEnabled !== undefined) next.mcpEnabled = !!patch.mcpEnabled;
   settings = next;
   saveSettings();
   return getSettings();

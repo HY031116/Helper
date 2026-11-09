@@ -1929,7 +1929,58 @@ test('主题和 AI 引擎分段控件暴露并同步选中状态', () => {
   assert.match(app, /function syncAiCollapseControl\(collapsed\)/);
   assert.match(app, /uiIcon\(collapsed \? 'chevrons-left' : 'chevrons-right'\)/);
   assert.match(html, /id="ai-collapse"[^>]*>[\s\S]*?href="#ui-i-chevrons-right"/);
-  assert.match(app, /systemTheme\.addEventListener\('change'/);
+});
+
+test('外观主题提供液态玻璃、极简单色与暗色并归一旧设置值', () => {
+  assert.match(app, /const THEME_VALUES = \['glass', 'mono', 'dark'\]/);
+  assert.match(app, /return THEME_VALUES\.includes\(value\) \? value : 'glass';/);
+  assert.match(app, /document\.body\.classList\.toggle\('dark', t === 'dark'\)/);
+  assert.match(app, /data-theme="glass"[^>]*>液态玻璃</);
+  assert.match(app, /data-theme="mono"[^>]*>极简单色</);
+  assert.match(app, /data-theme="dark"[^>]*>暗色</);
+  assert.match(app, /const previous = normalizeTheme\(settings\.theme\)/);
+  assert.match(app, /await window\.api\.settings\.update\(\{ theme: next \}\)/);
+  assert.match(html, /href="css\/app\.css"[\s\S]*?href="css\/themes\.css"/);
+  assert.match(petApp, /\['light', 'dark', 'auto', 'glass', 'mono'\]\.includes\(theme\)/);
+  assert.match(petPanelApp, /\['light', 'dark', 'auto', 'glass', 'mono'\]\.includes\(theme\)/);
+
+  const themesCss = fs.readFileSync(path.join(ROOT, 'src/renderer/css/themes.css'), 'utf8');
+  assert.match(themesCss, /html\[data-theme="glass"\] body:not\(\.dark\) \{/);
+  assert.match(themesCss, /html\[data-theme="mono"\] body:not\(\.dark\) \{/);
+  assert.match(themesCss, /glassAurora/);
+  assert.doesNotMatch(themesCss, /html\[data-theme="glass"\] body\.dark/);
+
+  // 行为验证：旧值 light/auto/未知值归一为 glass，dark 仍走 body.dark
+  const body = { classList: fakeClassList([]), insertAdjacentHTML() {} };
+  const run = loadRendererRuntime({ __body: body });
+  const result = run(`(function () {
+    const out = {};
+    settings = { theme: 'light' };
+    applyTheme();
+    out.lightTheme = normalizeTheme(settings.theme);
+    out.lightDark = document.body.classList.contains('dark');
+    settings = { theme: 'auto' };
+    out.autoTheme = normalizeTheme(settings.theme);
+    settings = { theme: 'mono' };
+    applyTheme();
+    out.monoDark = document.body.classList.contains('dark');
+    settings = { theme: 'dark' };
+    applyTheme();
+    out.darkTheme = normalizeTheme(settings.theme);
+    out.darkDark = document.body.classList.contains('dark');
+    settings = { theme: '未知值' };
+    out.unknownTheme = normalizeTheme(settings.theme);
+    return JSON.stringify(out);
+  })()`);
+  assert.deepStrictEqual(JSON.parse(result), {
+    lightTheme: 'glass',
+    lightDark: false,
+    autoTheme: 'glass',
+    monoDark: false,
+    darkTheme: 'dark',
+    darkDark: true,
+    unknownTheme: 'glass'
+  });
 });
 
 test('分段控件支持方向键移动并维持单一 Tab 停靠点', () => {
@@ -3462,4 +3513,140 @@ test('模型流被中断时思考块在轮次收尾处折叠而不是悬浮成�
   assert.strictEqual(taBlock.classList.contains('is-done'), true);
   assert.strictEqual(taBlock.open, false);
   assert.strictEqual(taBlock.querySelector('.ta-reasoning-body').textContent, '小窗里的思考…');
+});
+
+/* ---------- MCP 服务设置 ---------- */
+test('MCP 服务设置：开关、状态与配置预览的结构、提示与样式', () => {
+  assert.match(app, /<div class="set-row mcp-row">/);
+  assert.match(app, /<div class="sr-d" id="mcp-desc">开启后，本机其他 AI agent 可经 MCP 读写任务、备忘录、日计划与报告/);
+  assert.match(app, /class="switch \$\{s\.mcpEnabled \? 'on' : ''\}" id="mcp-enabled" role="switch" aria-checked="\$\{!!s\.mcpEnabled\}" aria-label="MCP 服务" aria-describedby="mcp-desc" data-settings-scope="mcp"/);
+  assert.match(app, /<div class="sr-d" id="mcp-status" role="status" aria-live="polite">正在读取…<\/div>/);
+  ['btn-mcp-refresh', 'btn-mcp-rotate', 'btn-mcp-copy-stdio', 'btn-mcp-copy-http'].forEach((id) => {
+    assert.match(app, new RegExp(`id="${id}" data-settings-scope="mcp"`));
+  });
+  assert.match(app, /<pre class="mcp-config-preview" id="mcp-config-preview" tabindex="0" aria-label="MCP 客户端配置预览" hidden><\/pre>/);
+  assert.match(app, /只监听 127\.0\.0\.1 并校验 token/);
+  assert.match(app, /破坏性操作仍需二次确认/);
+  assert.match(app, /请只连接你信任的客户端/);
+  assert.match(app, /stdio 适配所有客户端，用应用自带运行时，无需另装 Node/);
+  assert.match(app, /配置含 token，请勿分享/);
+  assert.match(app, /function mcpStatusText\(status\)/);
+  assert.match(app, /function renderMcpStatus\(\)/);
+  assert.match(app, /async function refreshMcpStatus\(\)/);
+  assert.match(app, /if \(!node \|\| node\.isConnected === false\) return;/);
+  assert.match(app, /hasAttribute\('data-scope-locked'\)\) button\.disabled = !running/);
+  assert.match(app, /toast\('请先开启 MCP 服务', 3000, null, 'warn'\)/);
+  assert.match(app, /复制失败，已展开配置，请手动选择复制/);
+  assert.match(app, /token 已轮换，旧配置立即失效，请重新复制到客户端/);
+  assert.match(app, /window\.api\.on\('memos:changed', async \(\) => \{[\s\S]*?refreshMemosAfterMutation\('备忘录已在其他入口修改，但列表刷新失败'\)/);
+  assert.match(css, /\.mcp-config-preview \{[\s\S]{0,400}?max-height: 220px; overflow: auto;/);
+  assert.match(css, /\.mcp-config-preview \{[^}]*overflow-wrap: anywhere;/);
+  assert.match(css, /\.mcp-config-preview\[\s*hidden\] \{ display: none; \}/);
+  assert.match(css, /\.mcp-config-preview:focus-visible \{ border-color: var\(--accent2\); box-shadow: 0 0 0 3px rgba\(var\(--accent2-rgb\), 0\.14\); outline: none; \}/);
+});
+
+function makeMcpControl(initialAttrs) {
+  const attrs = Object.assign({}, initialAttrs);
+  return {
+    attrs,
+    disabled: false,
+    isConnected: true,
+    hidden: false,
+    textContent: '',
+    focused: false,
+    classList: fakeClassList(),
+    hasAttribute(name) { return Object.prototype.hasOwnProperty.call(attrs, name); },
+    setAttribute(name, value) { attrs[name] = value; },
+    removeAttribute(name) { delete attrs[name]; },
+    focus() { this.focused = true; },
+    addEventListener() {},
+    closest() { return null; }
+  };
+}
+
+test('MCP 状态渲染：运行态、关闭态、失败态与互斥锁期间不抢控件', async () => {
+  const statusEl = makeMcpControl();
+  const previewEl = makeMcpControl();
+  const copyStdio = makeMcpControl();
+  const copyHttp = makeMcpControl();
+  const rotate = makeMcpControl();
+  const run = loadRendererRuntime({
+    '#mcp-status': statusEl,
+    '#mcp-config-preview': previewEl,
+    '#btn-mcp-copy-stdio': copyStdio,
+    '#btn-mcp-copy-http': copyHttp,
+    '#btn-mcp-rotate': rotate,
+    '#mcp-enabled': makeMcpControl()
+  });
+
+  run(`mcpStatus = { running: true, enabled: true, url: 'http://127.0.0.1:4571/mcp', toolCount: 32, clientSessions: 1, configs: { stdio: { json: 'STDIO_CONFIG' }, http: { json: 'HTTP_CONFIG' } } }; renderMcpStatus();`);
+  assert.strictEqual(statusEl.textContent, '运行中 · http://127.0.0.1:4571/mcp · 32 个工具 · 1 个客户端会话');
+  assert.strictEqual(previewEl.hidden, false);
+  assert.strictEqual(previewEl.textContent, 'STDIO_CONFIG');
+  assert.strictEqual(copyStdio.disabled, false);
+  assert.strictEqual(copyHttp.disabled, false);
+  assert.strictEqual(rotate.disabled, false);
+
+  run(`mcpStatus = { running: false, enabled: false }; renderMcpStatus();`);
+  assert.strictEqual(statusEl.textContent, '已关闭，没有监听任何端口。');
+  assert.strictEqual(previewEl.hidden, true);
+  assert.strictEqual(previewEl.textContent, '');
+  assert.strictEqual(copyStdio.disabled, true);
+  assert.strictEqual(copyHttp.disabled, true);
+  assert.strictEqual(rotate.disabled, true);
+
+  run(`mcpStatus = { running: false, enabled: true, lastError: '端口被占用' }; renderMcpStatus();`);
+  assert.strictEqual(statusEl.textContent, '已开启但启动失败：端口被占用');
+
+  // 同组操作互斥锁生效期间，renderMcpStatus 不得抢回控件状态
+  copyHttp.attrs['data-scope-locked'] = 'true';
+  copyHttp.disabled = true;
+  run(`mcpStatus = { running: true, enabled: true, url: 'http://127.0.0.1:4571/mcp', toolCount: 32, clientSessions: 0, configs: { stdio: { json: 'S' }, http: { json: 'H' } } }; renderMcpStatus();`);
+  assert.strictEqual(copyHttp.disabled, true, '互斥锁期间控件应保持锁定');
+  assert.strictEqual(copyStdio.disabled, false, '其余控件恢复正常');
+  delete copyHttp.attrs['data-scope-locked'];
+});
+
+test('MCP 状态刷新：同步开关与设置，过期结果不写入', async () => {
+  const statusEl = makeMcpControl();
+  const previewEl = makeMcpControl();
+  const toggle = makeMcpControl();
+  let statusResult = {
+    running: true, enabled: true, url: 'http://127.0.0.1:4571/mcp', toolCount: 32,
+    clientSessions: 0, configs: { stdio: { json: 'STDIO_CONFIG' }, http: { json: 'HTTP_CONFIG' } }
+  };
+  const run = loadRendererRuntime({
+    '#mcp-status': statusEl,
+    '#mcp-config-preview': previewEl,
+    '#mcp-enabled': toggle,
+    '#btn-mcp-copy-stdio': makeMcpControl(),
+    '#btn-mcp-copy-http': makeMcpControl(),
+    '#btn-mcp-rotate': makeMcpControl(),
+    __window: { api: { mcp: { status: async () => statusResult } } }
+  });
+
+  await run(`refreshMcpStatus()`);
+  assert.strictEqual(run(`mcpStatus && mcpStatus.running`), true);
+  assert.strictEqual(run(`settings.mcpEnabled`), true);
+  assert.strictEqual(toggle.classList.contains('on'), true);
+  assert.strictEqual(toggle.attrs['aria-checked'], 'true');
+  assert.strictEqual(statusEl.textContent, '运行中 · http://127.0.0.1:4571/mcp · 32 个工具');
+  assert.strictEqual(previewEl.textContent, 'STDIO_CONFIG');
+
+  // 设置页已重渲染（元素被替换）后，旧结果不得写入新状态
+  statusResult = { running: false, enabled: false };
+  statusEl.isConnected = false;
+  await run(`refreshMcpStatus()`);
+  assert.strictEqual(run(`mcpStatus && mcpStatus.enabled`), true, '过期结果必须被丢弃');
+
+  // 读取失败时把错误写进状态行，而不是抛出
+  statusEl.isConnected = true;
+  const failing = loadRendererRuntime({
+    '#mcp-status': statusEl,
+    '#mcp-config-preview': previewEl,
+    '#mcp-enabled': toggle,
+    __window: { api: { mcp: { status: async () => { throw new Error('连接断开'); } } } }
+  });
+  await failing(`refreshMcpStatus()`);
+  assert.strictEqual(statusEl.textContent, '读取 MCP 状态失败：连接断开');
 });

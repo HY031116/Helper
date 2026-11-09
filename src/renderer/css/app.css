@@ -1760,6 +1760,17 @@ mark { background: rgba(var(--warn-rgb), 0.25); color: inherit; border-radius: 2
 .setting-actions { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
 .setting-actions .btn.ghost { border: 1px solid var(--rule); background: var(--bg3); color: var(--ink2); }
 .setting-actions .btn.ghost:hover { border-color: rgba(var(--accent2-rgb), 0.36); background: rgba(var(--accent2-rgb), 0.07); color: var(--accent2); }
+.mcp-row .sr-d { max-width: 68ch; }
+.mcp-config-preview {
+  margin: 4px 0 10px; padding: 10px 12px;
+  max-height: 220px; overflow: auto;
+  border: 1px solid var(--rule); border-radius: 8px;
+  background: var(--bg2); color: var(--ink2);
+  font: 11.5px/1.6 var(--font-num);
+  white-space: pre-wrap; overflow-wrap: anywhere; tab-size: 2;
+}
+.mcp-config-preview[hidden] { display: none; }
+.mcp-config-preview:focus-visible { border-color: var(--accent2); box-shadow: 0 0 0 3px rgba(var(--accent2-rgb), 0.14); outline: none; }
 .data-path { overflow-wrap: anywhere; }
 .test-result.success { color: var(--ok); }
 .test-result.failure { color: var(--danger); }

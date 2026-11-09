@@ -1,0 +1,221 @@
+/* ============ 外观主题层 ============ */
+/* 在 app.css 令牌系统之上叠加两套浅色主题：
+   - 液态玻璃 glass：极光壁纸 + 半透明面板 + backdrop-filter，圆角与柔影放大
+   - 极简单色 mono：纯平白面板 + 发丝线 + 单一蓝色强调，去投影去网格
+   暗色主题沿用 app.css 既有 body.dark 令牌块，不在此文件处理。
+   所有覆盖都挂在 html[data-theme="…"] body:not(.dark) 上：
+   - 视觉回归与桌宠直接切换 body.dark 时不会被玻璃/单色结构规则盖住；
+   - 真实路径下 dark 由 applyTheme 写入 data-theme="dark"，两套浅色规则自然失效。
+   token 块同样限定在 body 上，保证 body.dark 的令牌始终赢过继承。 */
+
+/* ---------- 主题 A 液态玻璃 ---------- */
+html[data-theme="glass"] body:not(.dark) {
+  /* 颜色：晨雾蓝底，墨色带一点蓝紫，强调色为玻璃蓝渐变的两端 */
+  --bg: #EDF2FC;
+  --bg2: rgba(255, 255, 255, 0.55);
+  --bg3: rgba(255, 255, 255, 0.72);
+  --ink: #1C1D2E;
+  --ink-rgb: 28, 29, 46;
+  --ink2: #3D3F55;
+  --muted: rgba(28, 29, 46, 0.62);
+  --muted-rgb: 28, 29, 46;
+  --rule: rgba(122, 132, 165, 0.28);
+  --rule2: rgba(76, 111, 255, 0.24);
+  --accent: #C92F26;
+  --accent-hover: #B02820;
+  --accent-rgb: 201, 47, 38;
+  --accent2: #4C6FFF;
+  --accent2-rgb: 76, 111, 255;
+  --ok: #1E8E4A;
+  --ok-rgb: 30, 142, 74;
+  --warn: #A86400;
+  --warn-rgb: 168, 100, 0;
+  --danger: #C92F26;
+  --danger-rgb: 201, 47, 38;
+  --neutral: #6E7488;
+  --solid-accent: #C92F26;
+  --solid-info: #4C6FFF;
+  --solid-ok: #1E8E4A;
+  --solid-warn: #A86400;
+  --solid-danger: #E5484D;
+  --solid-neutral: #7A8095;
+  --surface-rgb: 255, 255, 255;
+  --inverse: #262A44;
+  --grad: linear-gradient(135deg, #0A84FF, #5E5CE6);
+  /* 签名元素：极光壁纸。底稿网格退为极淡的蓝线 */
+  --paper-ai: rgba(255, 255, 255, 0.5);
+  --grid-line: rgba(76, 111, 255, 0.07);
+  /* 圆角：面板 18 / 卡片与控件 12，玻璃质感依赖大圆角 */
+  --radius: 12px;
+  --radius-sm: 10px;
+  --radius-lg: 18px;
+  /* 阴影：冷靛蓝柔影代替描边分层 */
+  --shadow-sm: 0 1px 2px rgba(60, 72, 140, 0.08);
+  --shadow: 0 2px 8px rgba(60, 72, 140, 0.1);
+  --shadow-md: 0 4px 16px rgba(60, 72, 140, 0.12);
+  --shadow-lg: 0 10px 34px rgba(60, 72, 140, 0.16);
+}
+
+/* html 放出背景（让 body 背景传播到画布底层），body 铺晨雾渐变兜底 */
+html[data-theme="glass"] { background: transparent; }
+html[data-theme="glass"] body:not(.dark) {
+  background: linear-gradient(135deg, #EEF3FF, #F2ECFF 46%, #EDF6FF);
+}
+/* 签名元素：极光壁纸（径向光斑），挂在 body::before 底层 */
+html[data-theme="glass"] body:not(.dark)::before {
+  content: '';
+  position: fixed; inset: 0; z-index: -1; pointer-events: none;
+  background:
+    radial-gradient(1100px 750px at 12% 18%, rgba(151, 186, 255, 0.6), transparent 62%),
+    radial-gradient(950px 680px at 86% 12%, rgba(255, 183, 222, 0.52), transparent 60%),
+    radial-gradient(900px 880px at 72% 88%, rgba(166, 240, 214, 0.48), transparent 62%),
+    radial-gradient(780px 580px at 20% 92%, rgba(255, 224, 178, 0.52), transparent 64%);
+}
+@media (prefers-reduced-motion: no-preference) {
+  html[data-theme="glass"] body:not(.dark)::before {
+    animation: glassAurora 46s ease-in-out infinite alternate;
+  }
+  @keyframes glassAurora {
+    0% { transform: scale(1) translate(0, 0); }
+    50% { transform: scale(1.06) translate(-1.2%, 1%); }
+    100% { transform: scale(1.02) translate(1.4%, -0.8%); }
+  }
+}
+
+/* 主内容区透出壁纸；侧栏与助手栏是悬浮玻璃板 */
+html[data-theme="glass"] body:not(.dark) .content { background: transparent; }
+html[data-theme="glass"] body:not(.dark) .sidebar,
+html[data-theme="glass"] body:not(.dark) .ai-panel {
+  background: rgba(255, 255, 255, 0.42);
+  backdrop-filter: blur(22px) saturate(1.5);
+  -webkit-backdrop-filter: blur(22px) saturate(1.5);
+}
+html[data-theme="glass"] body:not(.dark) .sidebar { border-right-color: rgba(255, 255, 255, 0.55); }
+html[data-theme="glass"] body:not(.dark) .ai-panel { border-left-color: rgba(255, 255, 255, 0.55); }
+html[data-theme="glass"] body:not(.dark) .ai-head { background: transparent; }
+html[data-theme="glass"] body:not(.dark) .ai-chat { background-image: none; }
+
+/* 图板签名让位玻璃签名：图纸编号章与 2px 墨线换成发丝线 */
+html[data-theme="glass"] body:not(.dark) .view-head { border-bottom: 1px solid rgba(122, 132, 165, 0.35); }
+html[data-theme="glass"] body:not(.dark) .view-head h2::before { display: none; }
+html[data-theme="glass"] body:not(.dark) .set-group { border-top: 1px solid rgba(122, 132, 165, 0.35); }
+
+/* 今日计划：半透玻璃面板，去掉网格底纹 */
+html[data-theme="glass"] body:not(.dark) .workflow-panel,
+html[data-theme="glass"] body:not(.dark) .daily-copilot {
+  background-image: none;
+  background-color: rgba(255, 255, 255, 0.5);
+  backdrop-filter: blur(14px) saturate(1.3);
+  -webkit-backdrop-filter: blur(14px) saturate(1.3);
+  border-radius: var(--radius-lg);
+}
+
+/* 助手消息：玻璃泡；用户消息沿用 --grad 渐变泡 */
+html[data-theme="glass"] body:not(.dark) .msg.ai {
+  background: rgba(255, 255, 255, 0.6);
+  border-radius: 0 12px 12px 12px;
+  box-shadow: var(--shadow-sm);
+}
+
+/* 统计：印刷报表带换成玻璃卡片 */
+html[data-theme="glass"] body:not(.dark) .stat-grid { gap: 10px; }
+html[data-theme="glass"] body:not(.dark) .stat-card {
+  background: rgba(255, 255, 255, 0.45);
+  border: 1px solid rgba(255, 255, 255, 0.55);
+  border-radius: var(--radius-lg);
+  padding: 10px 18px;
+  box-shadow: var(--shadow-sm);
+  backdrop-filter: blur(10px) saturate(1.2);
+  -webkit-backdrop-filter: blur(10px) saturate(1.2);
+}
+
+/* 看板：整列玻璃化，卡片再提一档不透明度保证可读 */
+html[data-theme="glass"] body:not(.dark) .board-col {
+  background: rgba(255, 255, 255, 0.4);
+  backdrop-filter: blur(10px) saturate(1.2);
+  -webkit-backdrop-filter: blur(10px) saturate(1.2);
+}
+html[data-theme="glass"] body:not(.dark) .bc-card-item { background: rgba(255, 255, 255, 0.65); }
+
+/* 弹窗与通知：浮层玻璃 */
+html[data-theme="glass"] body:not(.dark) .modal {
+  background: rgba(255, 255, 255, 0.86);
+  backdrop-filter: blur(22px) saturate(1.4);
+  -webkit-backdrop-filter: blur(22px) saturate(1.4);
+  border-radius: var(--radius-lg);
+}
+html[data-theme="glass"] body:not(.dark) .toast {
+  background: rgba(38, 42, 68, 0.9);
+  backdrop-filter: blur(18px) saturate(1.3);
+  -webkit-backdrop-filter: blur(18px) saturate(1.3);
+  border-radius: 14px;
+}
+
+/* 圆角统一抬升：app.css 中硬编码 8px 的控件跟随玻璃节奏 */
+html[data-theme="glass"] body:not(.dark) .btn,
+html[data-theme="glass"] body:not(.dark) .nav-item,
+html[data-theme="glass"] body:not(.dark) .board-col,
+html[data-theme="glass"] body:not(.dark) .bc-card-item,
+html[data-theme="glass"] body:not(.dark) .cal-cell,
+html[data-theme="glass"] body:not(.dark) .task-row,
+html[data-theme="glass"] body:not(.dark) .danger-zone,
+html[data-theme="glass"] body:not(.dark) .seg,
+html[data-theme="glass"] body:not(.dark) .task-tools #search-input,
+html[data-theme="glass"] body:not(.dark) .quick-add input,
+html[data-theme="glass"] body:not(.dark) .mcp-config-preview {
+  border-radius: 12px;
+}
+html[data-theme="glass"] body:not(.dark) .seg-it { border-radius: 8px; }
+
+/* ---------- 主题 B 极简单色 ---------- */
+html[data-theme="mono"] body:not(.dark) {
+  /* 颜色：纸白 + 墨黑 + 唯一蓝，其余语义色取扁平色板 */
+  --bg: #FAFAFA;
+  --bg2: #FFFFFF;
+  --bg3: #F4F4F5;
+  --ink: #16171A;
+  --ink-rgb: 22, 23, 26;
+  --ink2: #3F4247;
+  --muted: #6E7076;
+  --muted-rgb: 110, 112, 118;
+  --rule: #E9E9EB;
+  --rule2: rgba(37, 99, 235, 0.22);
+  --accent: #B91C1C;
+  --accent-hover: #991B1B;
+  --accent-rgb: 185, 28, 28;
+  --accent2: #2563EB;
+  --accent2-rgb: 37, 99, 235;
+  --ok: #047857;
+  --ok-rgb: 4, 120, 87;
+  --warn: #B45309;
+  --warn-rgb: 180, 83, 9;
+  --danger: #B91C1C;
+  --danger-rgb: 185, 28, 28;
+  --neutral: #6B7078;
+  --solid-accent: #B91C1C;
+  --solid-info: #2563EB;
+  --solid-ok: #047857;
+  --solid-warn: #B45309;
+  --solid-danger: #B91C1C;
+  --solid-neutral: #9DA0A6;
+  --surface-rgb: 255, 255, 255;
+  --inverse: #16171A;
+  --grad: #2563EB;
+  --paper-ai: #F1F2F4;
+  --grid-line: rgba(22, 23, 26, 0.045);
+  /* 阴影：零投影。组合阴影里需要合法值，用透明零影代替 none */
+  --shadow-sm: 0 0 0 rgba(22, 23, 26, 0);
+  --shadow: 0 0 0 rgba(22, 23, 26, 0);
+  --shadow-md: 0 4px 14px rgba(22, 23, 26, 0.08);
+  --shadow-lg: 0 10px 30px rgba(22, 23, 26, 0.16);
+}
+
+/* 单色签名：去编号章、墨线与网格，只留发丝线与层级 */
+html[data-theme="mono"] body:not(.dark) .view-head { border-bottom: 1px solid var(--rule); }
+html[data-theme="mono"] body:not(.dark) .view-head h2::before { display: none; }
+html[data-theme="mono"] body:not(.dark) .set-group { border-top: 1px solid var(--rule); }
+html[data-theme="mono"] body:not(.dark) .workflow-panel,
+html[data-theme="mono"] body:not(.dark) .daily-copilot,
+html[data-theme="mono"] body:not(.dark) .ai-chat { background-image: none; }
+/* 完成勾选框从圆章变回方框，呼应克制几何 */
+html[data-theme="mono"] body:not(.dark) .task-check { border-radius: 4px; }

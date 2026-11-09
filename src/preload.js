@@ -53,6 +53,12 @@ contextBridge.exposeInMainWorld('api', {
     get: () => ipcRenderer.invoke('settings:get'),
     update: (patch) => ipcRenderer.invoke('settings:update', patch)
   },
+  /* MCP 服务：供本机其他 AI agent 连接，默认关闭 */
+  mcp: {
+    status: () => ipcRenderer.invoke('mcp:status'),
+    setEnabled: (enabled) => ipcRenderer.invoke('mcp:setEnabled', !!enabled),
+    rotateToken: () => ipcRenderer.invoke('mcp:rotateToken')
+  },
   /* AI */
   ai: {
     // 兼容旧版调用形态：previewTaskAction: (taskId, text, requestId) => ipcRenderer.invoke('ai:previewTaskAction', ...)
@@ -137,7 +143,7 @@ contextBridge.exposeInMainWorld('api', {
   },
   /* 事件订阅 */
   on: (channel, cb) => {
-    const valid = ['app:new-task', 'app:focus-ai', 'app:open-task', 'app:reminder', 'app:switch-view', 'window:maximized', 'pet:remind', 'pet:theme', 'pet-panel:shown', 'pet-panel:visibility', 'workflow:changed', 'task-agent:session', 'tasks:changed'];
+    const valid = ['app:new-task', 'app:focus-ai', 'app:open-task', 'app:reminder', 'app:switch-view', 'window:maximized', 'pet:remind', 'pet:theme', 'pet-panel:shown', 'pet-panel:visibility', 'workflow:changed', 'task-agent:session', 'tasks:changed', 'memos:changed'];
     if (!valid.includes(channel)) return;
     const listener = (_e, data) => cb(data);
     ipcRenderer.on(channel, listener);

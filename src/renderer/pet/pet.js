@@ -40,7 +40,8 @@ const systemTheme = typeof window.matchMedia === 'function'
   : { matches: false, addEventListener() {} };
 
 function applyTheme(theme) {
-  themePreference = ['light', 'dark', 'auto'].includes(theme) ? theme : 'auto';
+  // 桌宠只有浅色/暗色两套外观；液态玻璃与极简单色都按浅色处理
+  themePreference = ['light', 'dark', 'auto', 'glass', 'mono'].includes(theme) ? theme : 'auto';
   const dark = themePreference === 'dark' || (themePreference === 'auto' && systemTheme.matches);
   document.body.classList.toggle('dark', dark);
 }

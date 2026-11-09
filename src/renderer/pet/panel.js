@@ -22,7 +22,8 @@ let overviewBusy = false;
 let focusClock = null;
 
 function applyTheme(theme) {
-  themePreference = ['light', 'dark', 'auto'].includes(theme) ? theme : 'auto';
+  // 桌宠小窗只有浅色/暗色两套外观；液态玻璃与极简单色都按浅色处理
+  themePreference = ['light', 'dark', 'auto', 'glass', 'mono'].includes(theme) ? theme : 'auto';
   document.body.classList.toggle('dark', themePreference === 'dark' || (themePreference === 'auto' && systemTheme.matches));
 }
 
