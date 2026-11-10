@@ -33,15 +33,10 @@ const MEMO_TARGET_INTENTS = new Set(
 const PLAN_SAFE_INTENTS = new Set(
   Object.entries(TOOL_DEFINITIONS).filter(([, definition]) => definition.planSafe).map(([intent]) => intent)
 );
-const CROSS_TYPE_INTENTS = {
-  delete: { task: 'delete', memo: 'memo_delete', action: '删除' },
-  memo_delete: { task: 'delete', memo: 'memo_delete', action: '删除' },
-  split: { task: 'split', memo: 'memo_split', action: '拆分' },
-  memo_split: { task: 'split', memo: 'memo_split', action: '拆分' }
-};
-
 /* ---------- 意图定义 ---------- */
-const INTENTS = ['create', 'memo_create', 'memo_query', 'memo_delete', 'memo_pin', 'memo_to_task', 'memo_split', 'query', 'complete', 'start', 'delete', 'archive', 'split', 'suggest', 'summary', 'stats', 'report', 'batch', 'update', 'child', 'postpone', 'restore', 'chat', 'unknown'];
+// 阶段 2 收缩：start/postpone/archive/restore 并入 update，split/child/suggest/stats/report/
+// memo_delete/memo_pin/memo_split 下线；新增 record_query 承接「做了什么」与日报查询。
+const INTENTS = ['create', 'memo_create', 'memo_query', 'memo_to_task', 'query', 'record_query', 'complete', 'delete', 'batch', 'update', 'summary', 'chat', 'unknown'];
 
 /* ---------- 优先级词 ---------- */
 const PRI_WORDS = {
@@ -193,27 +188,6 @@ function explicitEntityType(text) {
   return null;
 }
 
-function alignCrossTypeIntent(intent, text) {
-  const mapping = CROSS_TYPE_INTENTS[intent];
-  const type = explicitEntityType(text);
-  return mapping && type ? mapping[type] : intent;
-}
-
-function crossTypeConflict(intent, params, text) {
-  const mapping = CROSS_TYPE_INTENTS[intent];
-  if (!mapping || explicitEntityType(text)) return null;
-  const target = normalizedMatchText(params && params.target);
-  if (!target) return null;
-  const task = store.getAllTasks().find((entity) => normalizedMatchText(entity.title) === target);
-  const memo = store.getAllMemos().find((entity) => normalizedMatchText(entity.title) === target);
-  if (!task || !memo) return null;
-  return {
-    message: `「${task.title}」同时存在任务和备忘录。你想${mapping.action}哪一种？`,
-    task,
-    memo
-  };
-}
-
 function isPendingCorrection(text) {
   const raw = String(text || '').trim();
   return /(不对|不，是|不是这个|不是那个|不是|错了|说错了|我说的是|我指的是|应该是|改成|换成|换一个|另一个)/.test(raw) ||
@@ -237,23 +211,6 @@ function hasStableRecentReference(intent, params, text) {
   return matches.length === 1 && matches[0].id === recent.id;
 }
 
-function hasStableRecoveryTarget(intent, params) {
-  if (intent !== 'restore') return false;
-  const target = normalizedMatchText(params && params.target);
-  if (!target) return false;
-  const candidates = [
-    ...store.getDeletedTasks(),
-    ...store.getAllTasks().filter((task) => task.status === 'archived')
-  ].filter((task) => normalizedMatchText(task.title) === target);
-  return candidates.length === 1;
-}
-
-function isRecentMemoSplitRequest(intent, text) {
-  if (intent !== 'split' && intent !== 'memo_split') return false;
-  if (!referencesRecentEntity(text) || !/(拆|分成|变成任务|转成任务)/.test(String(text || ''))) return false;
-  return !!recentMemoContext();
-}
-
 function compoundWriteClauseIntents(text) {
   const raw = String(text || '').trim();
   if (!/(然后|再(?:把|将|建|创|记|删|完成|开始|改|加|顺延|推迟)|同时|并且|另外|并\s*(?:把|将|创建|新建|添加|记|删|完成|开始|归档|修改|改|加|顺延|推迟|拆))/.test(raw)) return [];
@@ -273,7 +230,7 @@ function hasIncompleteCompoundWrite(intent, text) {
 
 /* 复合写里包含破坏性子句（删除/批量/清空）时，禁止进入工具循环：
    循环会先执行安全子句再对危险子句确认，破坏“整组确认、失败回滚”的组合契约 */
-const DESTRUCTIVE_WRITE_INTENTS = new Set(['delete', 'batch', 'memo_delete']);
+const DESTRUCTIVE_WRITE_INTENTS = new Set(['delete', 'batch']);
 
 function hasDestructiveCompoundWrite(text) {
   const intents = compoundWriteClauseIntents(text);
@@ -735,23 +692,6 @@ function continuePending(text) {
   }
 
   if (pending.kind === 'field') {
-    if (pending.field === 'entityType') {
-      const requestedType = explicitEntityType(raw);
-      const mapping = CROSS_TYPE_INTENTS[pending.intent];
-      if (requestedType && mapping) {
-        const intent = mapping[requestedType];
-        const params = Object.assign({}, pending.params);
-        delete params.taskId;
-        delete params.memoId;
-        const entity = explicitEntityMention(params.target, requestedType);
-        if (entity) params[requestedType === 'memo' ? 'memoId' : 'taskId'] = entity.id;
-        params.entityTypeExplicit = true;
-        store.updateAgentState({ pending: null });
-        return { intent, params, result: finalizeResult(intent, params, execute(intent, params)) };
-      }
-      const result = clarification(pending.intent, pending.params, 'entityType', '请告诉我是任务还是备忘录。');
-      return { intent: pending.intent, params: pending.params, result: finalizeResult(pending.intent, pending.params, result) };
-    }
     const conciseChange = pending.field === 'change' ? parseUpdateFieldReply(raw, pending.params) : null;
     const parsed = conciseChange ? { intent: pending.intent, params: conciseChange } : parse(raw);
     if (parsed.intent !== 'chat' && parsed.intent !== 'unknown' && parsed.intent !== pending.intent) {
@@ -762,7 +702,6 @@ function continuePending(text) {
     if (pending.field === 'title' && !params.title) params.title = raw;
     if (pending.field === 'memoContent' && !params.memoContent) params.memoContent = raw;
     if (pending.field === 'target' && !params.target && !params.taskId) params.target = raw;
-    if (pending.field === 'childTitle' && !params.childTitle) params.childTitle = raw;
     store.updateAgentState({ pending: null });
     return { intent: pending.intent, params, result: finalizeResult(pending.intent, params, execute(pending.intent, params)) };
   }
@@ -844,10 +783,8 @@ function execute(intent, params) {
     if (recent.length === 1) params = Object.assign({}, params, { memoId: recent[0].id, target: recent[0].title });
     else if (recent.length > 1) {
       const messages = {
-        memo_delete: '你想删除哪条备忘录？',
-        memo_pin: '你想置顶哪条备忘录？',
-        memo_to_task: '你想把哪条备忘录转为任务？',
-        memo_split: '可以拆。你想拆哪条备忘录？'
+        memo_query: '你想查看哪条备忘录？',
+        memo_to_task: '你想把哪条备忘录转为任务？'
       };
       return { type: 'ask', message: messages[intent] || '你想操作哪条备忘录？', candidates: recent.map(toMemoCandidate) };
     }
@@ -918,25 +855,14 @@ const toolRegistry = createToolRegistry({
   create: doCreate,
   memo_create: doMemoCreate,
   memo_query: doMemoQuery,
-  memo_delete: doMemoDelete,
-  memo_pin: doMemoPin,
   memo_to_task: doMemoToTask,
-  memo_split: doMemoSplit,
   complete: doComplete,
-  start: doStart,
   delete: doDelete,
-  archive: doArchive,
-  split: doSplit,
-  suggest: doSuggest,
+  record_query: doRecordQuery,
   summary: doSummary,
-  stats: doStats,
-  report: doReport,
   query: doQuery,
   batch: doBatch,
   update: doUpdate,
-  child: doChild,
-  postpone: doPostpone,
-  restore: doRestore,
   plan: doPlan,
   greeting: doGreeting,
   thanks: () => ({ type: 'info', message: '不客气。需要继续时，直接告诉我下一步。' }),
@@ -945,7 +871,7 @@ const toolRegistry = createToolRegistry({
 
 /* ---------- 帮助文案（识别失败时引导） ---------- */
 function buildHelp() {
-  return '我还没听懂这句，换个说法试试？\n我可以帮你：\n· 记任务：「明天下午3点 交周报 #工作 紧急」\n· 查任务：「我有哪些紧急任务」「#工作 的任务」\n· 改状态：「完成 交周报」「归档 写方案」\n· 统计：「今天完成了多少」「还剩几条没做」\n· 报告：「生成今日日报」「整理本周周报」\n· 安排：「怎么安排今天的优先级」\n· 闲聊问答：直接问我任何问题，比如「什么是番茄工作法」';
+  return '我还没听懂这句，换个说法试试？\n我可以帮你：\n· 记任务：「明天下午3点 交周报 #工作 紧急」\n· 查任务：「我有哪些紧急任务」「#工作 的任务」\n· 改任务：「完成 交周报」「把 写方案 推到明天」「开始 写方案」\n· 记录：「今天干了啥」「生成今日日报」\n· 备忘录：「记到备忘录 下午两点开会」「看看我的备忘录」\n· 闲聊问答：直接问我任何问题，比如「什么是番茄工作法」';
 }
 
 /* ---------- 内置知识库（未配置 LLM 时的通用问答兜底） ---------- */
@@ -1082,24 +1008,6 @@ function doComplete(params) {
     undoable: true,
     undo: taskFieldUndo(t, before, undoKeys, completionUndoExtras(res.next, tasksBefore))
   };
-}
-
-function doStart(params) {
-  const hits = matchTasks(params.target, params.taskId);
-  if (!hits.length) return taskNotFound(params);
-  if (hits.length > 1) {
-    return {
-      type: 'ask',
-      message: '你说的是哪一个？',
-      candidates: hits.map(toCandidate)
-    };
-  }
-  const t = hits[0];
-  if (t.status === 'doing') return { type: 'info', task: t, message: `「${t.title}」已经在进行中` };
-  const undoKeys = ['status', 'completedAt'];
-  const before = snapshotFields(t, undoKeys);
-  store.updateTask(t.id, { status: 'doing' });
-  return { type: 'start', task: t, message: `已开始「${t.title}」`, undoable: true, undo: taskFieldUndo(t, before, undoKeys) };
 }
 
 function doDelete(params) {
@@ -1277,13 +1185,8 @@ function planActionLabel(action) {
   const labels = {
     create: `创建任务「${params.title || '未命名任务'}」`,
     memo_create: `创建备忘录「${params.memoTitle || params.title || '新备忘录'}」`,
-    memo_pin: `${params.pinned === false ? '取消置顶' : '置顶'}备忘录「${target}」`,
     complete: `完成任务「${target}」`,
-    start: `开始任务「${target}」`,
-    archive: `归档任务「${target}」`,
-    update: `修改任务「${target}」`,
-    child: `给任务「${target}」添加子任务「${params.childTitle || '未指定'}」`,
-    postpone: `将任务「${target}」顺延 ${params.days || 1} 天`
+    update: `修改任务「${target}」`
   };
   return labels[action.intent] || action.intent;
 }
@@ -1307,13 +1210,8 @@ function preparePlanAction(action) {
   if (action.intent === 'memo_create' && !String(params.memoContent || params.desc || params.title || '').trim()) {
     return { error: '新备忘录缺少正文。' };
   }
-  if (action.intent === 'update' && !['pri', 'due', 'project', 'tags', 'desc', 'estimatedMinutes'].some((key) => params[key] !== undefined && params[key] !== null && params[key] !== '')) {
+  if (action.intent === 'update' && !['pri', 'due', 'status', 'days', 'project', 'tags', 'desc', 'estimatedMinutes'].some((key) => params[key] !== undefined && params[key] !== null && params[key] !== '')) {
     return { error: `还不知道要怎样修改「${params.target}」。` };
-  }
-  if (action.intent === 'child' && !String(params.childTitle || '').trim()) return { error: `缺少要添加给「${params.target}」的子任务标题。` };
-  if (action.intent === 'postpone') {
-    const task = store.getTask(params.taskId);
-    if (!task || !task.due) return { error: `「${params.target}」没有截止时间，无法顺延。` };
   }
   return { action: { intent: action.intent, params } };
 }
@@ -1386,34 +1284,6 @@ function doMemoQuery(params) {
   return { type: 'memo_query', memoIds: hits.map((memo) => memo.id), message: `找到 ${hits.length} 条备忘录：\n${lines.join('\n')}${extra}` };
 }
 
-function doMemoDelete(params) {
-  const hits = matchMemos(params.target, params.memoId);
-  if (!hits.length) return memoNotFound(params);
-  if (hits.length > 1) {
-    return { type: 'ask', message: '找到多条匹配的备忘录，你想删除哪一条？', candidates: hits.map(toMemoCandidate) };
-  }
-  const memo = hits[0];
-  if (!params.confirmed) {
-    const nextParams = Object.assign({}, params, { memoId: memo.id, target: memo.title });
-    return confirmation('memo_delete', nextParams, `要删除备忘录「${memo.title}」吗？删除后可以从回收站恢复。`, memo.title);
-  }
-  store.deleteMemo(memo.id);
-  return { type: 'memo_delete', memo, message: `已删除备忘录「${memo.title}」`, undoable: true, undo: { action: 'restoreMemo', id: memo.id } };
-}
-
-function doMemoPin(params) {
-  const hits = matchMemos(params.target, params.memoId);
-  if (!hits.length) return memoNotFound(params);
-  if (hits.length > 1) {
-    return { type: 'ask', message: '找到多条匹配的备忘录，你想操作哪一条？', candidates: hits.map(toMemoCandidate) };
-  }
-  const memo = hits[0];
-  const previousPinned = memo.pinned;
-  const pinned = params.pinned === undefined ? !memo.pinned : !!params.pinned;
-  const updated = store.updateMemo(memo.id, { pinned });
-  return { type: 'memo_pin', memo: updated, message: `已${pinned ? '置顶' : '取消置顶'}备忘录「${updated.title}」`, undoable: true, undo: { action: 'updateMemo', id: memo.id, patch: { pinned: previousPinned }, expected: { pinned } } };
-}
-
 function doMemoToTask(params) {
   const hits = matchMemos(params.target, params.memoId);
   if (!hits.length) return memoNotFound(params);
@@ -1429,62 +1299,6 @@ function doMemoToTask(params) {
     message: `已从备忘录「${memo.title}」创建任务。`,
     undoable: true,
     undo: { action: 'removeCreatedAdditions', tasks: [cloneUndoValue(task)], memos: [] }
-  };
-}
-
-function memoSplitSteps(memo, requestedSteps) {
-  const supplied = Array.isArray(requestedSteps)
-    ? [...new Set(requestedSteps.map((step) => String(step || '').trim()).filter(Boolean))]
-    : [];
-  if (supplied.length >= 2) return supplied.slice(0, 8);
-
-  const fromContent = String(memo.content || '')
-    .split(/\r?\n|[；;]/)
-    .map((line) => line.replace(/^\s*[-*·•\d一二三四五六七八九十]+[.、）)]?\s*/, '').trim())
-    .filter((line) => line.length >= 2 && line.length <= 80);
-  const unique = [...new Set(fromContent)];
-  if (unique.length >= 2) return unique.slice(0, 8);
-
-  const topic = String(memo.title || '这项工作').replace(/备忘录$/, '').trim() || '这项工作';
-  return [`梳理${topic}的目标与范围`, `制定${topic}的实施方案`, `验证并记录${topic}的结果`];
-}
-
-function doMemoSplit(params) {
-  const hits = matchMemos(params.target, params.memoId);
-  if (!hits.length) return memoNotFound(params);
-  if (hits.length > 1) {
-    return { type: 'ask', message: '可以拆。你想拆哪条备忘录？', candidates: hits.map(toMemoCandidate) };
-  }
-  const memo = hits[0];
-  const steps = memoSplitSteps(memo, params.steps);
-  const nextParams = Object.assign({}, params, { memoId: memo.id, target: memo.title, steps });
-  if (!params.confirmed) {
-    const lines = steps.map((step, index) => `${index + 1}. ${step}`).join('\n');
-    return confirmation(
-      'memo_split',
-      nextParams,
-      `可以。我建议把「${memo.title}」拆成 ${steps.length} 个独立任务：\n${lines}\n\n确认后会创建这些任务，原备忘录会保留。`,
-      memo.title
-    );
-  }
-  const additions = store.createAdditions({
-    tasks: steps.map((title) => ({
-      title,
-      desc: `来自备忘录「${memo.title}」${memo.content ? `\n\n${memo.content}` : ''}`,
-      tags: memo.tags || [],
-      pri: 2,
-      status: 'todo'
-    }))
-  });
-  const tasks = additions.tasks;
-  return {
-    type: 'memo_split',
-    memo,
-    tasks,
-    taskIds: tasks.map((task) => task.id),
-    message: `已保留原备忘录，并创建 ${tasks.length} 个任务：\n${tasks.map((task) => `· ${task.title}`).join('\n')}`,
-    undoable: true,
-    undo: { action: 'removeCreatedAdditions', tasks: cloneUndoValue(tasks), memos: [] }
   };
 }
 
@@ -1555,7 +1369,49 @@ function undoAction(undo) {
 }
 
 /* ---------- 精细修改：改优先级/截止/项目/标签/描述 ---------- */
+/* 恢复语义（恢复/还原/找回/撤销删除 → status todo）：先查回收站再查归档，保留原 doRestore 的安全网。
+ * 找不到时返回 null，交回普通 update 流程（例如把进行中任务改回待办）。 */
+function restoreFromTrashOrArchive(params) {
+  const deleted = store.getDeletedTasks();
+  if (params.taskId) {
+    const deletedTask = deleted.find((task) => task.id === Number(params.taskId));
+    if (deletedTask) {
+      store.restoreTask(deletedTask.id);
+      return { type: 'update', task: store.getTask(deletedTask.id), message: `已从回收站恢复「${deletedTask.title}」`, undoable: false };
+    }
+    const archivedTask = store.getAllTasks().find((task) => task.id === Number(params.taskId) && task.status === 'archived');
+    if (archivedTask) {
+      store.unarchiveTask(archivedTask.id);
+      return { type: 'update', task: store.getTask(archivedTask.id), message: `已从归档恢复「${archivedTask.title}」`, undoable: false };
+    }
+    return null;
+  }
+  const q = String(params.target || '').toLowerCase().trim();
+  const fromTrash = q ? deleted.filter((t) => t.title.toLowerCase().includes(q)) : deleted;
+  if (fromTrash.length === 1) {
+    store.restoreTask(fromTrash[0].id);
+    return { type: 'update', task: store.getTask(fromTrash[0].id), message: `已从回收站恢复「${fromTrash[0].title}」`, undoable: false };
+  }
+  if (fromTrash.length > 1) {
+    return { type: 'ask', message: '回收站里有多个匹配，你说的是哪一个？', candidates: fromTrash.map(toCandidate) };
+  }
+  const archived = store.getAllTasks().filter((t) => t.status === 'archived');
+  const fromArch = q ? archived.filter((t) => t.title.toLowerCase().includes(q)) : archived;
+  if (fromArch.length === 1) {
+    store.unarchiveTask(fromArch[0].id);
+    return { type: 'update', task: store.getTask(fromArch[0].id), message: `已从归档恢复「${fromArch[0].title}」`, undoable: false };
+  }
+  if (fromArch.length > 1) {
+    return { type: 'ask', message: '归档里有多个匹配，你说的是哪一个？', candidates: fromArch.map(toCandidate) };
+  }
+  return null;
+}
+
 function doUpdate(params) {
+  if (params.status === 'todo') {
+    const restored = restoreFromTrashOrArchive(params);
+    if (restored) return restored;
+  }
   const hits = matchTasks(params.target, params.taskId);
   if (!hits.length) return taskNotFound(params);
   if (hits.length > 1) {
@@ -1566,10 +1422,17 @@ function doUpdate(params) {
     };
   }
   const t = hits[0];
+  // 改为已完成并入 update 语义：委托 doComplete，保证 completedAt、子任务推进与重复任务生成一致。
+  if (params.status === 'done') {
+    return doComplete(Object.assign({}, params, { taskId: t.id, target: t.title }));
+  }
+  if (params.days > 0 && !t.due) {
+    return { type: 'error', message: `「${t.title}」没有截止时间，无法顺延。可以先说“把「${t.title}」的截止时间改成某天某点”。` };
+  }
   const { patch, changes } = buildTaskUpdate(params, t);
 
   if (!Object.keys(patch).length) {
-    return clarification('update', params, 'change', `想怎样修改「${t.title}」？例如改优先级、截止时间、项目、标签或备注。`);
+    return clarification('update', params, 'change', `想怎样修改「${t.title}」？例如改状态、改期、优先级、截止时间、项目、标签或备注。`);
   }
   const keys = Object.keys(patch);
   // 必须在 updateTask 之前保存原值，因为 updateTask 会原地修改 t。
@@ -1585,175 +1448,6 @@ function doUpdate(params) {
   };
 }
 
-/* ---------- 子任务管理：加子任务 ---------- */
-function doChild(params) {
-  const hits = matchTasks(params.target, params.taskId);
-  if (!hits.length) return taskNotFound(params);
-  if (hits.length > 1) {
-    return {
-      type: 'ask',
-      message: '你说的是哪一个？',
-      candidates: hits.map(toCandidate)
-    };
-  }
-  const t = hits[0];
-  if (!params.childTitle) return clarification('child', params, 'childTitle', `要给「${t.title}」添加什么子任务？`);
-  const prevChildren = cloneUndoValue((t.children || []).map((c) => (typeof c === 'string' ? { title: c, done: false } : c)));
-  const children = prevChildren.slice();
-  children.push({ title: params.childTitle, done: false });
-  store.updateTask(t.id, { children });
-  return {
-    type: 'child',
-    task: t,
-    message: `已给「${t.title}」添加子任务「${params.childTitle}」`,
-    undoable: true,
-    undo: {
-      action: 'update',
-      id: t.id,
-      patch: { children: prevChildren },
-      expected: { children: cloneUndoValue(t.children) }
-    }
-  };
-}
-
-/* ---------- 顺延：推迟任务 ---------- */
-function doPostpone(params) {
-  const hits = matchTasks(params.target, params.taskId);
-  if (!hits.length) return taskNotFound(params);
-  if (hits.length > 1) {
-    return {
-      type: 'ask',
-      message: '你说的是哪一个？',
-      candidates: hits.map(toCandidate)
-    };
-  }
-  const t = hits[0];
-  if (!t.due) return { type: 'error', message: `「${t.title}」没有截止时间，无法顺延` };
-  const days = params.days || 1;
-  const prevDue = t.due;
-  const updated = store.postponeTask(t.id, days);
-  return {
-    type: 'postpone',
-    task: t,
-    message: `已把「${t.title}」顺延到 ${updated.due}`,
-    undoable: true,
-    undo: { action: 'update', id: t.id, patch: { due: prevDue }, expected: { due: updated.due } }
-  };
-}
-
-/* ---------- 恢复：从回收站/归档恢复 ---------- */
-function doRestore(params) {
-  // 先查回收站
-  const deleted = store.getDeletedTasks();
-  if (params.taskId) {
-    const deletedTask = deleted.find((task) => task.id === params.taskId);
-    if (deletedTask) {
-      store.restoreTask(deletedTask.id);
-      return { type: 'restore', task: deletedTask, message: `已从回收站恢复「${deletedTask.title}」`, undoable: false };
-    }
-    const archivedTask = store.getAllTasks().find((task) => task.id === params.taskId && task.status === 'archived');
-    if (archivedTask) {
-      store.unarchiveTask(archivedTask.id);
-      return { type: 'restore', task: archivedTask, message: `已从归档恢复「${archivedTask.title}」`, undoable: false };
-    }
-    return { type: 'error', message: '这个任务已经不在回收站或归档中，请重新查找。' };
-  }
-  const q = String(params.target || '').toLowerCase().trim();
-  const fromTrash = q ? deleted.filter((t) => t.title.toLowerCase().includes(q)) : deleted;
-  if (fromTrash.length === 1) {
-    store.restoreTask(fromTrash[0].id);
-    return { type: 'restore', task: fromTrash[0], message: `已从回收站恢复「${fromTrash[0].title}」`, undoable: false };
-  }
-  if (fromTrash.length > 1) {
-    return {
-      type: 'ask',
-      message: '回收站里有多个匹配，你说的是哪一个？',
-      candidates: fromTrash.map(toCandidate)
-    };
-  }
-  // 再查归档
-  const archived = store.getAllTasks().filter((t) => t.status === 'archived');
-  const fromArch = q ? archived.filter((t) => t.title.toLowerCase().includes(q)) : archived;
-  if (fromArch.length === 1) {
-    store.unarchiveTask(fromArch[0].id);
-    return { type: 'restore', task: fromArch[0], message: `已从归档恢复「${fromArch[0].title}」`, undoable: false };
-  }
-  if (fromArch.length > 1) {
-    return {
-      type: 'ask',
-      message: '归档里有多个匹配，你说的是哪一个？',
-      candidates: fromArch.map(toCandidate)
-    };
-  }
-  return { type: 'error', message: '回收站和归档里都没有找到匹配的任务' };
-}
-
-function doArchive(params) {
-  const hits = matchTasks(params.target, params.taskId);
-  if (!hits.length) return taskNotFound(params);
-  if (hits.length > 1) {
-    return {
-      type: 'ask',
-      message: '你说的是哪一个？',
-      candidates: hits.map(toCandidate)
-    };
-  }
-  const t = hits[0];
-  if (t.status === 'archived') return { type: 'info', message: `「${t.title}」已经在归档里了` };
-  const undoKeys = ['status', 'completedAt'];
-  const before = snapshotFields(t, undoKeys);
-  store.archiveTask(t.id);
-  return { type: 'archive', task: t, message: `已归档「${t.title}」`, undoable: true, undo: taskFieldUndo(t, before, undoKeys) };
-}
-
-function doSplit(params) {
-  const hits = matchTasks(params.target, params.taskId);
-  if (!hits.length) return taskNotFound(params);
-  if (hits.length > 1) {
-    return {
-      type: 'ask',
-      message: '你说的是哪一个？',
-      candidates: hits.map(toCandidate)
-    };
-  }
-  const t = hits[0];
-  const requestedCount = Math.max(2, Math.min(8, Number(params.count) || 3));
-  const taskKey = normalizedMatchText(t.title);
-  const steps = [...new Set((Array.isArray(params.steps) ? params.steps : [])
-    .map((step) => String(step || '').replace(/^\s*[-*·•\d一二三四五六七八九十]+[.、）)]?\s*/, '').trim())
-    .filter((step) => {
-      if (step.length < 2 || step.length > 100) return false;
-      const key = normalizedMatchText(step);
-      if (!key || key === taskKey) return false;
-      const suffix = key.startsWith(taskKey) ? key.slice(taskKey.length) : '';
-      return !(suffix && /^(?:第)?(?:步骤)?[一二三四五六七八九十\d]+$/.test(suffix)) &&
-        !/^(?:第)?[一二三四五六七八九十\d]+(?:个)?步骤$/.test(key);
-    }))];
-  if (steps.length !== requestedCount) {
-    return clarification(
-      'split',
-      Object.assign({}, params, { taskId: t.id, target: t.title }),
-      'steps',
-      `我还没有生成 ${requestedCount} 个足够具体的执行步骤，因此没有修改「${t.title}」。请重新说一次拆分要求。`
-    );
-  }
-  const nextParams = Object.assign({}, params, { taskId: t.id, target: t.title, count: requestedCount, steps });
-  if (!params.confirmed) {
-    const lines = steps.map((step, index) => `${index + 1}. ${step}`).join('\n');
-    const replacement = Array.isArray(t.children) && t.children.length ? `\n现有 ${t.children.length} 个子任务会被替换。` : '';
-    return confirmation(
-      'split',
-      nextParams,
-      `我建议把「${t.title}」拆成：\n${lines}${replacement}\n\n确认后再写入子任务。`,
-      t.title
-    );
-  }
-  const undoKeys = ['children'];
-  const before = snapshotFields(t, undoKeys);
-  store.updateTask(t.id, { children: steps });
-  return { type: 'split', task: store.getTask(t.id), message: `已把「${t.title}」拆成 ${steps.length} 个具体步骤`, undoable: true, undo: taskFieldUndo(t, before, undoKeys) };
-}
-
 function buildTaskUpdate(params, task) {
   const patch = {};
   const changes = [];
@@ -1765,6 +1459,19 @@ function buildTaskUpdate(params, task) {
     patch.due = params.due;
     changes.push(`截止时间改为 ${params.due}`);
   }
+  if (params.status && params.status !== task.status) {
+    patch.status = params.status;
+    changes.push(`状态改为「${{ todo: '待办', doing: '进行中', archived: '已归档' }[params.status]}」`);
+  }
+  if (params.days > 0 && !params.due) {
+    // 与 postponeTask 相同的顺延逻辑：保留原时刻，仅平移日期。
+    const [datePart, timePart] = String(task.due).split(' ');
+    const base = new Date(`${datePart}T00:00:00`);
+    base.setDate(base.getDate() + params.days);
+    const pad = (n) => (n < 10 ? '0' + n : '' + n);
+    patch.due = `${base.getFullYear()}-${pad(base.getMonth() + 1)}-${pad(base.getDate())} ${timePart}`;
+    changes.push(`截止时间顺延 ${params.days} 天`);
+  }
   if (params.project) {
     patch.project = params.project;
     changes.push(`项目改为「${params.project}」`);
@@ -1773,8 +1480,8 @@ function buildTaskUpdate(params, task) {
     patch.tags = Array.from(new Set([...(task.tags || []), ...params.tags])).slice(0, 5);
     changes.push(`添加标签 ${params.tags.map((x) => '#' + x).join(' ')}`);
   }
-  if (params.desc) {
-    patch.desc = params.desc;
+  if (params.desc || params.note) {
+    patch.desc = params.desc || params.note;
     changes.push('更新了备注');
   }
   if (params.estimatedMinutes) {
@@ -1795,64 +1502,6 @@ function taskPriorityReason(task, now) {
   if (task.pri === 3) return '高优先级';
   if (task.due) return `截止时间较近（${relDueText(task.due)}）`;
   return '在当前待办中排序最靠前';
-}
-
-function relevantPinnedMemo(task) {
-  if (!task) return null;
-  const taskTags = new Set(task.tags || []);
-  return store.getAllMemos()
-    .filter((memo) => memo.pinned)
-    .map((memo) => {
-      const tagMatch = (memo.tags || []).some((tag) => taskTags.has(tag));
-      const score = Math.max(relatedScore(task.title, memo.title), tagMatch ? 0.8 : 0);
-      return { memo, score };
-    })
-    .filter((item) => item.score >= 0.45)
-    .sort((a, b) => b.score - a.score)[0]?.memo || null;
-}
-
-function doSuggest() {
-  const sorted = getActionableTasks();
-  if (!sorted.length) {
-    const pinned = store.getAllMemos().find((memo) => memo.pinned);
-    return {
-      type: 'suggest',
-      message: pinned
-        ? `当前没有未完成任务。置顶备忘录「${pinned.title}」还在，如果它需要行动，可以直接转为任务。`
-        : '当前没有未完成任务。可以直接告诉我下一件要做的事。'
-    };
-  }
-
-  const now = new Date();
-  const focus = sorted[0];
-  const doingCount = sorted.filter((task) => task.status === 'doing').length;
-  const overdueCount = sorted.filter((task) => dueTimestamp(task) < now.getTime()).length;
-  const todayCount = sorted.filter(isDueToday).length;
-  const lines = sorted.slice(0, 3).map((task, index) =>
-    `${index + 1}. ${task.title}：${taskPriorityReason(task, now)}`
-  );
-  const workload = [
-    doingCount ? `${doingCount} 项进行中` : '',
-    overdueCount ? `${overdueCount} 项已逾期` : '',
-    todayCount ? `${todayCount} 项今天截止` : ''
-  ].filter(Boolean);
-  const memo = relevantPinnedMemo(focus);
-  const notes = [];
-  if (doingCount > 1) notes.push(`现在有 ${doingCount} 项同时进行，完成一项前先不要再开新任务。`);
-  else if (workload.length) notes.push(`当前状态：${workload.join('，')}。`);
-  if (memo) {
-    const insight = String(memo.content || '').split(/[。！？!?\n；;]/).map((item) => item.trim()).find(Boolean);
-    notes.push(insight
-      ? `置顶备忘录「${memo.title}」提到「${insight.slice(0, 80)}」，可以先按这条推进。`
-      : `置顶备忘录「${memo.title}」与首项相关，可以一起参考。`);
-  }
-
-  return {
-    type: 'suggest',
-    task: focus,
-    taskIds: sorted.slice(0, 3).map((task) => task.id),
-    message: `建议先处理「${focus.title}」，因为它${taskPriorityReason(focus, now)}。\n\n接下来的顺序：\n${lines.join('\n')}${notes.length ? `\n\n${notes.join('\n')}` : ''}`
-  };
 }
 
 function doSummary() {
@@ -1882,21 +1531,23 @@ function doSummary() {
   return { type: 'summary', message: lines.join('\n') };
 }
 
-function doReport(params) {
+function doRecordQuery(params) {
   const source = params && typeof params === 'object' ? params : {};
-  const period = source.period === 'daily' ? 'daily' : 'weekly';
-  const offset = Number.isInteger(source.offset) ? source.offset : 0;
+  let offset = Number.isInteger(source.offset) ? source.offset : 0;
+  const date = String(source.date || '').trim();
+  // 模型可能只给 date：折算成 offset，超出昨天/今天/明天的落回今天。
+  if (!Number.isInteger(source.offset) && /^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    const now = new Date();
+    const target = new Date(`${date}T00:00:00`);
+    offset = Math.round((target - new Date(now.getFullYear(), now.getMonth(), now.getDate())) / 86400000);
+    if (offset < -1 || offset > 1) offset = 0;
+  }
+  const period = source.period === 'weekly' ? 'weekly' : 'daily';
   const markdown = store.generateReport({ period, offset });
-  const periodLabel = period === 'daily'
-    ? (offset === -1 ? '昨天日报' : offset === 1 ? '明天日报' : '今日日报')
-    : (offset === -1 ? '上周周报' : offset === 1 ? '下周周报' : '本周周报');
-  return {
-    type: 'report',
-    reportPeriod: period,
-    reportOffset: offset,
-    markdown,
-    message: `${periodLabel}已生成。你可以在下方预览、复制或下载 Markdown。`
-  };
+  const when = period === 'weekly'
+    ? (offset === -1 ? '上周' : offset === 1 ? '下周' : '本周')
+    : (offset === -1 ? '昨天' : offset === 1 ? '明天' : '今天');
+  return { type: 'record_query', recordOffset: offset, markdown, message: `${when}的工作记录：\n\n${markdown}` };
 }
 
 function reportPeriodLabel(period, offset) {
@@ -2405,48 +2056,6 @@ function relDueText(due) {
 }
 
 /* ---------- 统计问答 ---------- */
-function doStats(params) {
-  const all = store.getAllTasks().filter((t) => t.status !== 'archived');
-  const done = all.filter((t) => t.status === 'done').length;
-  const doing = all.filter((t) => t.status === 'doing').length;
-  const todo = all.filter((t) => t.status === 'todo').length;
-  const rate = all.length ? Math.round(done / all.length * 100) : 0;
-  // 今日完成
-  const now = new Date();
-  const pad = (n) => (n < 10 ? '0' + n : '' + n);
-  const todayKey = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
-  const doneToday = all.filter((t) => t.status === 'done' && t.completedAt && localDateKey(t.completedAt) === todayKey).length;
-  // 剩几天内到期
-  const soon = all.filter((t) => t.status !== 'done' && t.due && (() => {
-    const d = new Date(t.due.replace(' ', 'T') + ':00');
-    return d.getTime() - Date.now() < 3 * 86400000 && d.getTime() >= Date.now();
-  })()).length;
-  // 已过期
-  const overdue = all.filter((t) => t.status !== 'done' && t.due && new Date(t.due.replace(' ', 'T') + ':00') < now).length;
-  // 按项目分布（Top3）
-  const projAcc = {};
-  all.forEach((t) => {
-    const p = t.project || '未分类';
-    projAcc[p] = (projAcc[p] || 0) + 1;
-  });
-  const projTop = Object.keys(projAcc)
-    .map((k) => ({ name: k, count: projAcc[k] }))
-    .sort((a, b) => b.count - a.count)
-    .slice(0, 3);
-
-  const lines = [
-    `· 任务总数 ${all.length}（已完成 ${done}，进行中 ${doing}，待办 ${todo}）`,
-    `· 完成率 ${rate}%`,
-    `· 今天已完成 ${doneToday} 项`,
-    `· 已过期 ${overdue} 项`,
-    `· 未来 3 天内到期 ${soon} 项`
-  ];
-  if (projTop.length) {
-    lines.push('· 项目分布：' + projTop.map((p) => `${p.name} ${p.count}`).join(' / '));
-  }
-  return { type: 'stats', message: '📊 当前统计：\n' + lines.join('\n') };
-}
-
 function dueTimestamp(task) {
   if (!task || !task.due) return Number.POSITIVE_INFINITY;
   const timestamp = new Date(task.due.replace(' ', 'T') + ':00').getTime();
@@ -2486,64 +2095,26 @@ function buildContextualFollowUps(result, activeTasks) {
       add('转为任务', `把备忘录 ${result.memo.title} 转为任务`);
       break;
     case 'memo_query':
-      if (result.memo) {
-        add(result.memo.pinned ? '取消置顶' : '置顶', `${result.memo.pinned ? '取消置顶' : '置顶'}备忘录 ${result.memo.title}`);
-        add('转为任务', `把备忘录 ${result.memo.title} 转为任务`);
-      }
-      break;
-    case 'memo_pin':
-      add('查看备忘录', `查看备忘录 ${result.memo.title}`);
-      add('转为任务', `把备忘录 ${result.memo.title} 转为任务`);
-      break;
-    case 'memo_delete':
-      add('查看全部备忘录', '查看我的备忘录');
+      if (result.memo) add('转为任务', `把备忘录 ${result.memo.title} 转为任务`);
       break;
     case 'memo_to_task':
       add('开始这个任务', actionPrompt('开始', task));
       add('查看原备忘录', `查看备忘录 ${result.memo.title}`);
       break;
-    case 'memo_split':
-      if (Array.isArray(result.tasks) && result.tasks[0]) add('开始第一个任务', actionPrompt('开始', result.tasks[0]));
-      add('查看原备忘录', `查看备忘录 ${result.memo.title}`);
-      break;
     case 'create':
       add('开始这个任务', actionPrompt('开始', task));
       if (isDueToday(task)) add('查看今日安排', '今天我要做什么');
-      else add('拆成步骤', `把 ${task.title} 拆成三步`);
       break;
     case 'complete':
-      if (next) {
-        add(next.id === task.id ? '继续这个任务' : '开始下一项', actionPrompt('开始', next));
-        add('重新安排', '怎么安排今天的优先级');
-      } else {
-        add('查看完成情况', '今天完成了多少');
-      }
-      break;
-    case 'start':
-      if (!task.children || !task.children.length) add('拆成步骤', `把 ${task.title} 拆成三步`);
-      add('查看进行中', '我有哪些进行中的任务');
+      if (next && next.id !== task.id) add('开始下一项', actionPrompt('开始', next));
+      add('查看记录', '今天干了啥');
       break;
     case 'update':
-    case 'postpone':
       add(isDueToday(task) ? '查看今日安排' : '查看任务', isDueToday(task) ? '今天我要做什么' : '查看刚说的那个任务');
-      add('重新安排', '怎么安排今天的优先级');
-      break;
-    case 'child':
-    case 'split':
-      add('开始这个任务', actionPrompt('开始', task));
-      add('查看任务', '查看刚说的那个任务');
-      break;
-    case 'restore':
-      if (task.status === 'todo') add('开始这个任务', actionPrompt('开始', task));
-      else if (task.status === 'doing') add('查看进行中', '我有哪些进行中的任务');
-      else if (task.status === 'done') add('查看完成情况', '今天完成了多少');
-      else if (task.status === 'archived') add('移出归档', `恢复 ${task.title}`);
-      add('查看全部任务', '查看我的任务');
       break;
     case 'delete':
-    case 'archive':
     case 'batch':
-      add(activeTasks.length ? '安排剩余任务' : '查看完成情况', activeTasks.length ? '怎么安排今天的优先级' : '今天完成了多少');
+      add(activeTasks.length ? '安排剩余任务' : '查看记录', activeTasks.length ? '怎么安排今天的优先级' : '今天干了啥');
       break;
     case 'query':
       {
@@ -2553,12 +2124,7 @@ function buildContextualFollowUps(result, activeTasks) {
         if (scopedNext && scopedNext.status !== 'doing') add('开始优先任务', actionPrompt('开始', scopedNext));
       }
       break;
-    case 'suggest':
-      if (next) add(next.status === 'doing' ? '继续第一项' : '开始第一项', actionPrompt('开始', next));
-      add('查看今日安排', '今天我要做什么');
-      break;
     case 'summary':
-    case 'stats':
       if (activeTasks.length) add('安排剩余任务', '怎么安排今天的优先级');
       break;
     default:
@@ -2579,34 +2145,16 @@ function buildContextualMessage(result, activeTasks) {
     if (result.task && next.id === result.task.id) return `${result.message}\n可以继续完成它的剩余步骤。`;
     return `${result.message}\n接下来优先处理「${next.title}」，因为它${nextReason}。`;
   }
-  if (result.type === 'start') {
-    const doingCount = activeTasks.filter((task) => task.status === 'doing').length;
-    if (doingCount > 1) return `${result.message}\n目前共有 ${doingCount} 项正在进行，建议先完成一项再开启新的任务。`;
-    if (result.task && result.task.estimatedMinutes) {
-      return `${result.message}\n它已成为当前焦点，预计用时 ${result.task.estimatedMinutes} 分钟。`;
-    }
-    const remainingChildren = result.task && Array.isArray(result.task.children)
-      ? result.task.children.filter((child) => child && !child.done)
-      : [];
-    if (remainingChildren.length) return `${result.message}\n先推进「${remainingChildren[0].title}」，还剩 ${remainingChildren.length} 个步骤。`;
-    return `${result.message}\n它已成为当前焦点。`;
-  }
   if (result.type === 'create' && isDueToday(result.task)) {
     const todayCount = activeTasks.filter(isDueToday).length;
     return `${result.message}\n它已加入今天的安排；今天共有 ${todayCount} 项到期。`;
   }
-  if (['delete', 'archive', 'batch'].includes(result.type)) {
+  if (['delete', 'batch'].includes(result.type)) {
     return `${result.message}\n${activeTasks.length
       ? `当前还剩 ${activeTasks.length} 项未完成，优先项是「${next.title}」，因为它${nextReason}。`
       : '当前没有未完成任务了。'}`;
   }
-  if (result.type === 'restore') {
-    if (result.task && result.task.status === 'done') {
-      return `${result.message}\n它仍保持完成状态，不会重新进入待办。`;
-    }
-    return `${result.message}\n当前共有 ${activeTasks.length} 项未完成${next ? `，优先项是「${next.title}」` : ''}。`;
-  }
-  if (['update', 'postpone'].includes(result.type) && isDueToday(result.task)) {
+  if (result.type === 'update' && isDueToday(result.task)) {
     return `${result.message}\n它现在位于今天的任务中。`;
   }
   return result.message;
@@ -2700,11 +2248,16 @@ function parse(text) {
   if (mentionedMinutes && /预计|估计|大概|需要/.test(raw)) params.estimatedMinutes = mentionedMinutes;
 
   // 按意图抽取标题/目标
-  if (intent === 'report') {
-    params.period = /日报|日总结|今天.*报告|昨天.*报告|明天.*报告/.test(raw) ? 'daily' : 'weekly';
-    if (/上周|上个星期|昨天/.test(raw)) params.offset = -1;
-    else if (/下周|下个星期|明天/.test(raw)) params.offset = 1;
-    else params.offset = 0;
+  if (intent === 'record_query') {
+    params.text = raw;
+    if (/周报|本周|这周|上周|上个星期|下周|下个星期/.test(raw)) params.period = 'weekly';
+    if (/昨天|上周|上个星期/.test(raw)) params.offset = -1;
+    else if (/明天|下周|下个星期/.test(raw)) params.offset = 1;
+    const dateMatch = raw.match(/(\d{1,2})月(\d{1,2})日/);
+    if (dateMatch) {
+      const now = new Date();
+      params.date = `${now.getFullYear()}-${String(dateMatch[1]).padStart(2, '0')}-${String(dateMatch[2]).padStart(2, '0')}`;
+    }
   } else if (intent === 'memo_create') {
     const content = raw
       .replace(/^(请)?(帮我)?\s*(把)?\s*/g, '')
@@ -2714,28 +2267,22 @@ function parse(text) {
       .trim();
     params.memoContent = content;
     params.memoTitle = content.split(/[。！？!?\n]/)[0].trim().slice(0, 36);
-  } else if (['memo_query', 'memo_delete', 'memo_pin', 'memo_to_task', 'memo_split'].includes(intent)) {
+  } else if (['memo_query', 'memo_to_task'].includes(intent)) {
     const recentMemo = recentMemoContext();
     const usesPronoun = /(这条|这篇|那个|刚才那条|刚说的|它)/.test(raw);
-    const collectionMatch = intent === 'memo_split' ? recentMemoMatch(raw) : null;
-    if (collectionMatch) {
-      params.target = collectionMatch.title;
-      params.memoId = collectionMatch.id;
-      params.useLastMention = true;
-    } else if (usesPronoun && recentMemo) {
+    if (usesPronoun && recentMemo) {
       params.target = recentMemo.title;
       params.memoId = recentMemo.id;
       params.useLastMention = true;
     } else {
       params.target = raw
         .replace(/^(请)?(帮我)?\s*(把|将)?\s*/g, '')
-        .replace(/(删除|删掉|移除|查找|搜索|查看|看看|看一下|列出|置顶|取消置顶|不再置顶|转为任务|转成任务|变成任务|可以拆分吗|能拆分吗|拆成任务|拆分|就拆|拆一下)/g, '')
+        .replace(/(删除|删掉|移除|查找|搜索|查看|看看|看一下|列出|置顶|取消置顶|不再置顶|转为任务|转成任务|变成任务)/g, '')
         .replace(/(我的)?(备忘录|笔记)/g, '')
         .replace(/(有哪些|有多少|哪一条|这条|这篇|那个|刚才那条|刚说的|它|你觉得|可以|能不能|吗|吧)/g, '')
         .replace(/\s+/g, ' ')
         .trim();
     }
-    if (intent === 'memo_pin') params.pinned = !/(取消置顶|不再置顶)/.test(raw);
   } else if (intent === 'create') {
     let title = capturedTodayTask || raw
       .replace(/^(创建|添加|帮我记一下|记一下|安排|新建|帮我记|加一个|建一个|记个|记得|提醒我|要交|要去)\s*(?:一个|一项|个|项)?(?:任务|待办)?\s*[:：]?\s*/g, '')
@@ -2752,14 +2299,9 @@ function parse(text) {
       .trim();
     params.title = title;
     if (/^(任务|一个任务|新任务)$/.test(params.title)) params.title = '';
-  } else if (intent === 'split') {
-    const m = raw.match(/拆成\s*(\d+)\s*步|拆成\s*(\d+)\s*部分/);
-    params.count = m ? parseInt(m[1] || m[2], 10) : 3;
-    const target = raw.replace(/^(把|将)?\s*/, '').replace(/拆成.*$/, '').trim();
-    params.target = target;
-  } else if (intent === 'query' || intent === 'stats') {
-    // 查询/统计：抽取筛选条件
-    const explicitTask = intent === 'query' ? explicitEntityMention(raw, 'task') : null;
+  } else if (intent === 'query') {
+    // 查询：抽取筛选条件
+    const explicitTask = explicitEntityMention(raw, 'task');
     if (explicitTask) {
       params.target = explicitTask.title;
       params.taskId = explicitTask.id;
@@ -2784,15 +2326,20 @@ function parse(text) {
     const projMatch = raw.match(/(?:项目|◈)\s*([\u4e00-\u9fa5A-Za-z0-9_-]{1,12})/);
     if (projMatch) params.project = projMatch[1];
     // 范围：明天/过期
-    if (/明天|明日/.test(raw) && intent === 'query') params.range = 'tomorrow';
+    if (/明天|明日/.test(raw)) params.range = 'tomorrow';
     if (/过期|逾期|晚了/.test(raw)) params.range = 'overdue';
   } else if (intent === 'update') {
-    // 精细修改：提取目标任务 + 修改内容
-    // 目标：在「把X」「将X」「给X」之后、修改动词之前
+    // 精细修改：提取目标任务 + 修改内容（改期/改状态/开始/恢复也并入 update）
+    // 目标：先锚定剥离开头动词，再在「把X」「将X」「给X」之后、修改动词之前截取；
+    // 修改动词只有出现在目标之后才剥离，避免吃掉标题本身含的 cue 词（如「恢复候选」）。
+    const UPDATE_CUES = /(改成|改为|改到|改优先级|改截止|改时间|改项目|移到|移动到|加标签|加个标签|加备注|加个备注|改描述|改备注|设为|优先级改成|截止改成|时间改成|顺延|推迟|延后|延期|归档|收起来|移入归档|恢复|还原|找回|撤销删除|开始|动手做|着手|启动)/;
+    const leadVerb = raw.match(/^(?:把|将|请把|请将|给|为|请给)?\s*(恢复|还原|找回|撤销删除|归档|收起来|移入归档|开始|动手做|着手|启动|顺延|推迟|延后|延期)/);
     let target = raw
       .replace(/^(把|将|请把|请将|给|为|请给)\s*/g, '')
-      .replace(/(改成|改为|改到|移到|移动到|加标签|加个标签|加备注|加个备注|改描述|改备注|设为|优先级改成|截止改成|时间改成).*$/g, '')
+      .replace(/^(恢复|还原|找回|撤销删除|归档|收起来|移入归档|开始|动手做|着手|启动|顺延|推迟|延后|延期)\s*/g, '')
       .trim();
+    const cueHit = target.match(UPDATE_CUES);
+    if (cueHit && cueHit.index > 0) target = target.slice(0, cueHit.index).trim();
     // 去掉优先级/时间/项目等修饰词
     target = target
       .replace(/(紧急|加急|立刻|马上|高优先级|中优先级|低优先级|重要|优先|高|中|低|不急|随便)/g, '')
@@ -2814,37 +2361,23 @@ function parse(text) {
     // 改描述：加备注/改描述 X
     const descMatch = raw.match(/(?:加备注|加个备注|改描述|改备注|备注为|备注是)\s*[:：]?\s*(.+)/);
     if (descMatch) params.desc = descMatch[1].trim();
-  } else if (intent === 'child') {
-    // 加子任务：目标 + 子任务标题
-    let target = raw
-      .replace(/^(给|为|把|将|请给)\s*/g, '')
-      .replace(/(加子任务|添加子任务|加个步骤|加步骤|加一步|加个|添加).*$/g, '')
-      .trim();
-    params.target = target;
-    const childMatch = raw.match(/(?:加子任务|添加子任务|加个步骤|加步骤|加一步|加个|添加)\s*[:：]?\s*(.+)/);
-    if (childMatch) params.childTitle = childMatch[1].trim();
-  } else if (intent === 'postpone') {
-    // 顺延：目标 + 天数
-    let target = raw
-      .replace(/^(把|将|请把|请将)\s*/g, '')
-      .replace(/(顺延|推迟|延后|延期|改到明天).*$/g, '')
-      .trim();
-    params.target = target;
-    // 天数：推迟X天/顺延X天
+    // 改状态：开头动词优先（避免标题里的 cue 词干扰），否则扫描「把X归档/恢复」等后置形式。
+    // 恢复/还原 → 待办（回收站/归档恢复由 doUpdate 处理）；改为已完成由 doUpdate 委托完成。
+    if (leadVerb && /^(恢复|还原|找回|撤销删除)$/.test(leadVerb[1])) params.status = 'todo';
+    else if (leadVerb && /^(归档|收起来|移入归档)$/.test(leadVerb[1])) params.status = 'archived';
+    else if (leadVerb && /^(开始|动手做|着手|启动)$/.test(leadVerb[1])) params.status = 'doing';
+    else if (/归档|收起来|移入归档/.test(raw)) params.status = 'archived';
+    else if (/恢复|还原|找回|撤销删除/.test(raw)) params.status = 'todo';
+    else if (/(开始|动手做|着手|启动)/.test(raw) && !/(改成|改为|改到|加标签|加备注|改描述|设为|归档|恢复|还原)/.test(raw)) params.status = 'doing';
+    // 改期：顺延/推迟 X 天；「改到明天」等由前面的截止时间抽取覆盖
     const dayMatch = raw.match(/(?:推迟|顺延|延后|延期)\s*(\d+)\s*天/);
     if (dayMatch) params.days = parseInt(dayMatch[1], 10);
-    else params.days = 1;
-  } else if (intent === 'restore') {
-    // 恢复：目标
-    let target = raw
-      .replace(/^(恢复|还原|找回|撤销删除)\s*/g, '')
-      .trim();
-    params.target = target;
+    else if (/顺延|推迟|延后|延期/.test(raw) && !params.due) params.days = 1;
   } else {
-    // complete/start/delete/archive: 去掉意图词后的文本作为目标
+    // complete/delete: 去掉意图词后的文本作为目标
     // 支持「那个任务」「刚说的那个」指代
     const target = raw
-      .replace(/^(完成|搞定|做完了|办完了|勾掉|结束了|弄完了|做好了|开始|动手做|着手|启动|删除|去掉|不做了|取消这个|移除|删掉|划掉|归档|收起来|移入归档)\s*/g, '')
+      .replace(/^(完成|搞定|做完了|办完了|勾掉|结束了|弄完了|做好了|删除|去掉|不做了|取消这个|移除|删掉|划掉)\s*/g, '')
       .replace(/#[\u4e00-\u9fa5A-Za-z0-9_-]+/g, '')
       .trim();
     const recentTask = recentTaskContext();
@@ -2858,7 +2391,7 @@ function parse(text) {
   }
 
   // 查询范围
-  if (intent === 'query' || intent === 'stats') {
+  if (intent === 'query') {
     if (!params.range) {
       if (/今天|今日/.test(raw)) params.range = 'today';
       else if (/最近一周|本周|这周|最近/.test(raw)) params.range = 'week';
@@ -2885,10 +2418,7 @@ function handle(text) {
   const continued = continuePending(text);
   if (continued) return Object.assign({ intent: continued.intent, raw: text, params: continued.params }, continued.result);
   const { intent, params } = parse(text);
-  const conflict = crossTypeConflict(intent, params, text);
-  const result = finalizeResult(intent, params, conflict
-    ? clarification(intent, params, 'entityType', conflict.message)
-    : execute(intent, params));
+  const result = finalizeResult(intent, params, execute(intent, params));
   return Object.assign({ intent, raw: text, params }, result);
 }
 
@@ -3271,28 +2801,26 @@ ${workspaceSnapshot}
 请把用户输入解析为结构化 JSON，只输出 JSON，不要输出其他内容。必须遵循版本 ${MODEL_CONTRACT_VERSION} 的格式：
 {
   "schemaVersion": ${MODEL_CONTRACT_VERSION},
-  "intent": "create|memo_create|memo_query|memo_delete|memo_pin|memo_to_task|memo_split|query|complete|start|delete|archive|split|suggest|summary|stats|report|batch|update|child|postpone|restore|unknown",
+  "intent": "create|memo_create|memo_query|memo_to_task|query|record_query|complete|delete|batch|update|summary|chat|unknown",
   "confidence": "high|medium|low",
   "clarification": "只有信息不足或实体类型不明确时填写的一个简短追问",
   "title": "任务标题（create 时必填，去掉时间/优先级/标签等修饰）",
   "memoTitle": "备忘录标题（memo_create 时填，简短概括正文）",
   "memoContent": "备忘录正文（memo_create 时填，保留用户要记录的完整信息）",
-  "pinned": true|false（memo_pin 时填）,
   "target": "目标任务或备忘录标题关键词（操作已有内容时填，参考上面的列表精确匹配）",
-  "count": 拆分步数（split 时填，默认 3）,
-  "steps": ["拆分后的具体步骤"]（split 和 memo_split 时必填 2-8 项；split 的数量必须等于 count。每项都要是结合目标内容生成的可执行动作，禁止使用“原标题·步骤1”“步骤2”等占位文本）,
   "pri": 1|2|3|4（1低 2中 3高 4紧急，create 或 update 改优先级时填）,
   "due": "截止时间，格式 YYYY-MM-DD HH:mm（create 或 update 改截止时填，相对日期按今天 ${today} 推算）",
   "tags": ["标签数组，create 或 update 加标签时填"],
   "project": "项目名（update 改项目时填）",
   "desc": "备注/描述（update 加备注时填）",
-  "childTitle": "子任务标题（child 加子任务时填）",
-  "days": 顺延天数（postpone 时填，默认 1）,
+  "note": "工作记录备注（update 加备注时也可填 note，与 desc 等价）",
+  "days": 顺延天数（update 顺延时填，默认 1）,
   "estimatedMinutes": 任务预计用时分钟数（create 或 update 时用户明确提及时填，5-480）,
-  "period": "daily|weekly（report 时填，日报或周报）",
-  "offset": -1|0|1（report 时填，昨天/上周=-1，今天/本周=0，明天/下周=1）,
-  "status": "todo|doing|done（按状态筛选时填）",
-  "range": "today|tomorrow|week|overdue|all（query 时填）",
+  "date": "日期 YYYY-MM-DD（record_query 查指定日期时填）",
+  "offset": -1|0|1（record_query 时填，昨天/上周=-1，今天/本周=0，明天/下周=1）,
+  "period": "daily|weekly（record_query 时填，用户说周报/本周/上周填 weekly，默认 daily）",
+  "status": "todo|doing|done（query/batch 按状态筛选时填；update 时还可填 archived，done 表示完成任务，archived 表示归档）",
+  "range": "today|tomorrow|week|yesterday|overdue|all（query 时填）",
   "reply": "仅在 intent 为 unknown 时填写，直接回答用户的非任务问题"
 }
 
@@ -3305,38 +2833,27 @@ ${workspaceSnapshot}
     { "intent": "create", "title": "...", "due": "YYYY-MM-DD HH:mm" }
   ]
 }
-actions 包含 2 到 5 项，可使用 create、memo_create、memo_pin、complete、start、archive、update、child、postpone。每个操作都必须包含完整参数和准确目标；不要使用 delete、batch、restore、转化、拆分、今日计划或专注控制。当 semantic_envelope 的 entityType 是 task（用户正锚定某个任务对话）时，对当前任务的连续操作还可用 split（steps 必须是结合任务目标生成的具体步骤），例如“先拆成三步，然后把第一步开始”。后一步需要引用前一步新建结果时不要生成 actions，改为 low confidence 并追问。系统会在执行前展示整组确认，并保证任一步失败时整体回滚。
+actions 包含 2 到 5 项，可使用 create、memo_create、complete、update。每个操作都必须包含完整参数和准确目标；不要使用 delete、batch、转化、拆分、今日计划或专注控制。后一步需要引用前一步新建结果时不要生成 actions，改为 low confidence 并追问。系统会在执行前展示整组确认，并保证任一步失败时整体回滚。
 
 意图判断规则：
 - 创建任务：包含任务内容，如「明天下午3点 交周报 #工作 紧急」「提醒我 明天 10 点开会」「帮我记一下 买牛奶」
 - 今日任务速记：「今日任务：核查发布配置」「今天待办 整理验收材料」表示创建一项今天工作结束时刻截止的任务；只有「今日任务有哪些」「查看今日任务」「今日任务」这类没有新任务内容的表达才是查询
 - 创建备忘录：用户明确说「记到备忘录」「写进备忘录」「新建备忘录」，使用 memo_create，不要创建任务
 - 查询备忘录：如「查看备忘录」「找一下客户那条笔记」，使用 memo_query
-- 删除备忘录：如「删除客户记录那条备忘录」，使用 memo_delete
-- 置顶备忘录：如「把这条备忘录置顶」「取消置顶客户记录」，使用 memo_pin
 - 备忘录转任务：如「把这条备忘录转为任务」，使用 memo_to_task
-- 拆分备忘录：用户要把备忘录内容拆成多个任务，或在刚查看备忘录后问「可以拆分吗」「就拆构筑那个」，使用 memo_split；不要误用任务 split
-- 查询：如「今天我要做什么」「我有哪些紧急任务」「#工作 的任务」「进行中的任务」「我有什么任务」
-- 完成：如「完成 交周报」「搞定 写方案」
-- 开始：如「开始 写方案」
-- 删除：如「删除 整理报销单据」
-- 归档：如「归档 写季度方案」
-- 拆分：如「把 写方案 拆成三步」。必须根据任务标题、描述和用户要求生成与 count 数量一致的具体 steps；如果无法生成可靠步骤，使用 low confidence 追问，绝不能返回占位步骤
-- 建议：如「怎么安排今天的优先级」「先做什么」「帮我排一下优先级」
+- 查询：如「今天我要做什么」「我有哪些紧急任务」「#工作 的任务」「进行中的任务」「我有什么任务」「完成了多少」
+- 完成任务：「完成 交周报」「搞定 写方案」
+- 工作记录查询：如「今天干了啥」「昨天做了什么」「生成今日日报」「整理本周周报」「看看工作记录」，使用 record_query；日报 period=daily、周报 period=weekly；昨天/上周 offset=-1，今天/本周 offset=0，明天/下周 offset=1。只读查询，不修改任何数据
 - 小结：如「今天完成了什么」「今日小结」「总结一下今天的进展」
-- 统计：如「今天完成了多少」「完成率多少」「还剩几条没做」「统计一下」
-- 报告：如「生成今日日报」「整理昨天日报」「生成本周周报」「看看上周周报」，使用 report；日报 period=daily，周报 period=weekly；昨天/上周 offset=-1，今天/本周 offset=0，明天/下周 offset=1。报告是只读预览，不执行写操作
+- 删除：如「删除 整理报销单据」
 - 批量：如「清除所有任务」「全部完成」「把紧急任务都删掉」「清空回收站」「把所有工作标签的任务删掉」
-- 精细修改（update）：如「把 交周报 改成紧急」「把 写方案 改到明天下午3点」「把 写方案 移到 Q3 规划」「给 写方案 加标签 重要」「给 写方案 加备注 记得带资料」
-- 加子任务（child）：如「给 写方案 加子任务 搭框架」「给 写方案 加个步骤 写初稿」
-- 顺延（postpone）：如「把 交周报 顺延到明天」「把 写方案 推迟 3 天」
-- 恢复（restore）：如「恢复 交周报」（从回收站或归档恢复）
+- 精细修改（update）：如「把 交周报 改成紧急」「把 写方案 改到明天下午3点」「把 写方案 移到 Q3 规划」「给 写方案 加标签 重要」「给 写方案 加备注 记得带资料」「把 写方案 推迟 3 天」「把 写方案 顺延到明天」「归档 写季度方案」「恢复 交周报」「开始 写方案」。update 支持 pri/due/status/days/tags/project/desc/note：status 可填 todo/doing/done/archived（done 表示完成，archived 表示归档）；days 表示顺延天数
 - 问候、感谢、知识问答、闲聊或工作建议等非任务内容：intent 填 unknown，并在 reply 中直接回答用户
 - reply 要自然承接最近对话，先回应用户真正关心的事；默认简洁，复杂问题可适当展开，不强制使用 emoji 或固定句数
 - 只有用户目标、实体类型和关键参数都明确时 confidence 才是 high
 - 能判断大致操作但仍存在一种关键歧义时 confidence 填 medium；无法可靠区分任务/备忘录或动作时填 low，并用 clarification 追问
 - 不得因为标题相似就把备忘录当作任务，也不得把任务当作备忘录；指代只能从 recentFocus 或 recentCollection 中解析
-- 如果 taskEntities 和 memoEntities 中存在完全同名项目，而用户使用删除、拆分等两类实体都支持的动作且没有明确说“任务”或“备忘录”，必须返回 low confidence 并直接追问实体类型
+- 如果 taskEntities 和 memoEntities 中存在完全同名项目，而用户使用删除等两类实体都支持的动作且没有明确说“任务”或“备忘录”，必须返回 low confidence 并直接追问实体类型
 
 批量操作时，请根据任务列表智能判断筛选条件：
 - 「清除所有任务」→ intent=batch（无筛选）
@@ -3356,6 +2873,12 @@ actions 包含 2 到 5 项，可使用 create、memo_create、memo_pin、complet
 - 「把 写方案 移到 Q3 规划」→ intent=update, target="写方案", project="Q3 规划"
 - 「给 写方案 加标签 重要」→ intent=update, target="写方案", tags=["重要"]
 - 「给 写方案 加备注 记得带资料」→ intent=update, target="写方案", desc="记得带资料"
+- 「把 写方案 推迟 3 天」→ intent=update, target="写方案", days=3
+- 「把 写方案 顺延到明天」→ intent=update, target="写方案", days=1
+- 「归档 写季度方案」→ intent=update, target="写季度方案", status="archived"
+- 「恢复 交周报」→ intent=update, target="交周报", status="todo"
+- 「开始 写方案」→ intent=update, target="写方案", status="doing"
+- 「把 写方案 标记为完成」→ intent=update, target="写方案", status="done"
 
 时间解析规则：
 - 「下午/晚上/傍晚/夜里 X点」→ X+12 点（X<12 时）
@@ -3368,21 +2891,20 @@ actions 包含 2 到 5 项，可使用 create、memo_create、memo_pin、complet
 注意：
 - 用户说「提醒我 X」或「记得 X」通常是创建带截止时间的任务
 - 用户提到任务列表里已有的任务标题时，优先匹配 target（如「完成 交周报」中的「交周报」）
-- 用户说「安排」「排优先级」→ suggest
+- 用户说「安排」「排优先级」「先做什么」→ intent=query（列出任务即可）
 - 用户说「进展」「小结」「总结」→ summary
-- 用户说「多少」「几个」「完成率」「占比」→ stats`;
+- 用户说「干了什么」「做了什么」「工作记录」「日报」「周报」→ record_query`;
 }
 
 /* ---------- LLM 解析 ---------- */
 /* ---------- Agent 主循环：模型自主决定调用哪些工具，多步执行后给出答复 ---------- */
 const AGENT_MAX_STEPS = 8;
 const AGENT_TOOL_LABELS = {
-  query: '查询任务', stats: '统计进度', suggest: '分析优先级', summary: '汇总进展',
-  create: '创建任务', complete: '完成任务', start: '开始任务', update: '更新任务',
-  child: '添加子任务', postpone: '顺延任务', delete: '删除任务', archive: '归档任务',
-  split: '拆分任务', batch: '批量操作',
-  memo_create: '创建备忘录', memo_query: '查询备忘录', memo_pin: '置顶备忘录',
-  memo_to_task: '备忘转任务', memo_split: '拆分备忘录', memo_delete: '删除备忘录'
+  query: '查询任务', summary: '汇总进展', record_query: '查询工作记录',
+  create: '创建任务', complete: '完成任务', update: '更新任务',
+  delete: '删除任务', batch: '批量操作',
+  memo_create: '创建备忘录', memo_query: '查询备忘录',
+  memo_to_task: '备忘转任务'
 };
 const AGENT_TOOL_PROMPT_SUFFIX = `
 
@@ -3471,7 +2993,7 @@ function finishAgentLoop(text, primary, executedSteps, finalMessage, conversatio
   const summary = String(finalMessage || '').trim();
   if (primary) {
     // 对话入口的循环：模型用只读工具调查后给出回答，语义是“聊天回复”而不是查询结果
-    const readOnlyTypes = ['query', 'stats', 'memo_query', 'suggest', 'summary'];
+    const readOnlyTypes = ['query', 'memo_query', 'summary', 'record_query'];
     const answerOnly = conversational && summary && readOnlyTypes.includes(primary.result && primary.result.type);
     const result = answerOnly
       ? finalizeResult('chat', { text }, { type: 'chat', message: summary })
@@ -3684,7 +3206,6 @@ async function parseWithLLM(text, continuation, requestContext, semanticOptions)
   const normalized = normalizeModelResponse(content, INTENTS);
   let { intent } = normalized;
   const { params, reply, confidence, clarification } = normalized;
-  intent = isRecentMemoSplitRequest(intent, text) ? 'memo_split' : alignCrossTypeIntent(intent, text);
   const definition = getToolDefinition(intent);
   if (definition && definition.targetType) {
     const explicit = explicitEntityMention(text, definition.targetType);
@@ -3692,15 +3213,6 @@ async function parseWithLLM(text, continuation, requestContext, semanticOptions)
       params.target = explicit.title;
       params[definition.targetType === 'memo' ? 'memoId' : 'taskId'] = explicit.id;
       params.explicitMention = true;
-    }
-  }
-  if (intent === 'split' && (/(备忘录|笔记)/.test(text) || recentMemoMatch(text))) intent = 'memo_split';
-  if (intent === 'memo_split' && !params.target) {
-    const memo = recentMemoMatch(text) || recentMemoContext();
-    if (memo) {
-      params.target = memo.title;
-      params.memoId = memo.id;
-      params.useLastMention = true;
     }
   }
   // 批量操作需要原文判断操作类型
@@ -3718,10 +3230,9 @@ async function parseWithLLM(text, continuation, requestContext, semanticOptions)
 function localFallbackLabel(intent, params) {
   const target = params.target || params.title || params.memoTitle || '';
   const labels = {
-    create: '创建任务', memo_create: '创建备忘录', memo_delete: '删除备忘录', memo_pin: '修改备忘录置顶状态',
-    memo_to_task: '把备忘录转为任务', memo_split: '拆分备忘录', complete: '完成任务', start: '开始任务',
-    delete: '删除任务', archive: '归档任务', split: '拆分任务', batch: '批量处理任务', update: '修改任务',
-    child: '添加子任务', postpone: '顺延任务', restore: '恢复内容', report: '生成工作报告'
+    create: '创建任务', memo_create: '创建备忘录', memo_to_task: '把备忘录转为任务',
+    complete: '完成任务', delete: '删除任务', batch: '批量处理任务', update: '修改任务',
+    record_query: '查询工作记录', summary: '汇总进展', query: '查询任务'
   };
   return `${labels[intent] || '执行本地操作'}${target ? `「${target}」` : ''}`;
 }
@@ -3731,19 +3242,14 @@ function isExplicitLocalReadRequest(intent, text) {
   if (intent === 'greeting' || intent === 'thanks') return true;
   if (intent === 'memo_query') return /(备忘录|笔记)/.test(raw);
   if (intent === 'query') {
-    return /(任务|待办|过期|逾期|进行中|未完成|已完成|#[\u4e00-\u9fa5A-Za-z0-9_-]+)/.test(raw) ||
-      /^(?:今天|明天)?(?:我)?(?:有|要)?(?:做什么|干嘛|有什么)[？?]?$/.test(raw);
-  }
-  if (intent === 'suggest') {
-    return /(任务|待办|优先级)/.test(raw) ||
-      /^(?:我)?(?:现在|接下来)?(?:该)?(?:先做什么|做什么|下一步|接下来呢|然后呢)[？?]?$/.test(raw);
+    return /(任务|待办|过期|逾期|进行中|未完成|已完成|优先级|#[\u4e00-\u9fa5A-Za-z0-9_-]+)/.test(raw) ||
+      /^(?:今天|明天)?(?:我)?(?:有|要)?(?:做什么|干嘛|有什么|先做什么)[？?]?$/.test(raw);
   }
   if (intent === 'summary') {
     return /(任务|待办|工作|进展|今天|今日|本周|这周)/.test(raw);
   }
-  if (intent === 'report') return /(日报|周报|工作报告|工作总结)/.test(raw);
-  if (intent === 'stats') {
-    return /(任务|待办|完成率|还剩.*(?:个|条|项)|完成了多少|做了多少)/.test(raw);
+  if (intent === 'record_query') {
+    return /(干了|做了|工作记录|工作日志|日报|周报|工作总结)/.test(raw);
   }
   return false;
 }
@@ -3752,9 +3258,9 @@ function isFastLocalRequest(text, parsed) {
   if (!parsed || !parsed.intent) return false;
   if (isConversationalRequest(text)) return false;
   const { intent, params } = parsed;
-  if (hasIncompleteCompoundWrite(intent, text) || crossTypeConflict(intent, params, text)) return false;
+  if (hasIncompleteCompoundWrite(intent, text)) return false;
   if (intent === 'greeting' || intent === 'thanks') return true;
-  if (['query', 'memo_query', 'stats', 'report'].includes(intent)) return isExplicitLocalReadRequest(intent, text);
+  if (['query', 'memo_query', 'record_query'].includes(intent)) return isExplicitLocalReadRequest(intent, text);
   if (intent === 'memo_create') return !!params.memoContent;
   if (intent === 'create') {
     const raw = String(text || '').trim();
@@ -3764,7 +3270,7 @@ function isFastLocalRequest(text, parsed) {
     const explicitVerb = /创建|新建|添加|帮我记|记一下|记个|记得|提醒我|加一个|建一个|要交|要去/.test(raw);
     return !!params.title && (quickCapture || explicitVerb);
   }
-  return !!params.explicitMention && ['complete', 'start', 'delete', 'archive', 'update', 'child', 'postpone', 'restore', 'memo_delete', 'memo_pin', 'memo_to_task'].includes(intent);
+  return !!params.explicitMention && ['complete', 'delete', 'update', 'memo_to_task'].includes(intent);
 }
 
 function isConversationalRequest(text) {
@@ -3948,9 +3454,6 @@ async function handleWithLLM(text, requestContext) {
     return outcome;
   }
   if (semanticPending) store.updateAgentState({ pending: null });
-  if (intent === 'report') {
-    return Object.assign({ intent: 'report', raw: text, params, engine: 'llm' }, await generateAgentReport(text, params, requestContext));
-  }
   if (hasIncompleteCompoundWrite(intent, text)) {
     const planParams = { originalIntent: intent };
     try {
@@ -3966,9 +3469,8 @@ async function handleWithLLM(text, requestContext) {
       return Object.assign({ raw: text }, localExecutionFailure('plan', planParams, error));
     }
   }
-  const conflict = semanticConflict || crossTypeConflict(intent, params, text);
-  const trustedTarget = hasStableRecoveryTarget(intent, params) ||
-    (hasStableRecentReference(intent, params, text) && PLAN_SAFE_INTENTS.has(intent));
+  const conflict = semanticConflict || null;
+  const trustedTarget = hasStableRecentReference(intent, params, text) && PLAN_SAFE_INTENTS.has(intent);
   const effectiveConfidence = conflict ? 'low' : (confidence === 'medium' && trustedTarget ? 'high' : confidence);
   const modelAction = conflict ? 'clarify' : decideModelAction(intent, effectiveConfidence);
   if (modelAction === 'clarify') {
@@ -4152,15 +3654,11 @@ async function handleAuto(text, requestContext) {
       message: '这次报告修改已结束。报告预览仍保留在对话中，工作数据没有变化。'
     };
   }
+  // 报告按钮产生的会话仍可修订；聊天里的日报/周报查询已由 record_query 承接。
   const isReportRevision = !previousPending && reportRevisionRequest(text, reportSession);
-  if (!previousPending && (localParsed && localParsed.intent === 'report' || isReportRevision)) {
-    const sameRequest = reportSession && localParsed && localParsed.intent === 'report' &&
-      String(reportSession.instruction || '').trim() === String(text || '').trim();
-    const previousSession = isReportRevision || sameRequest ? reportSession : null;
-    const params = previousSession
-      ? { period: previousSession.period, offset: previousSession.offset }
-      : localParsed.params;
-    const result = await generateAgentReport(text, params, requestContext, { previousSession });
+  if (isReportRevision) {
+    const params = { period: reportSession.period, offset: reportSession.offset };
+    const result = await generateAgentReport(text, params, requestContext, { previousSession: reportSession });
     return Object.assign({ intent: 'report', raw: text, params, engine: result.authoredBy === 'model' ? 'llm' : 'mock' }, result);
   }
   if (requestContext && s.aiStage === 'llm' && isLLMConfigured() && localParsed && isFastLocalRequest(text, localParsed)) {
@@ -4298,14 +3796,6 @@ function contextualParsedAction(taskId, text, parsed, context) {
     }
   } else if (previous && previous.intent === 'update' && action.intent === 'update' && action.params && action.params.due && previous.params && previous.params.due && /^(?:凌晨|早上|上午|中午|下午|晚上|傍晚|夜里)?\s*[0-9一二两三四五六七八九十]+[:：点]/.test(followUpText)) {
     action.params.due = `${previous.params.due.slice(0, 10)} ${action.params.due.slice(11)}`;
-  } else if (previous && previous.intent === 'child' && (!hasUsefulParams(action.params) || action.intent === 'chat' || action.intent === 'unknown') && followUpText) {
-    action = { intent: 'child', params: { childTitle: followUpText } };
-  } else if (previous && previous.intent === 'split' && (!hasUsefulParams(action.params) || action.intent === 'chat' || action.intent === 'unknown')) {
-    const steps = followUpText.split(/\r?\n|[；;，,、]/).map((item) => item.replace(/^\s*[-*·•\d一二三四五六七八九十]+[.、）)]?\s*/, '').trim()).filter((item) => item.length >= 2);
-    if (steps.length >= 2) action = { intent: 'split', params: { steps, count: steps.length } };
-  } else if (previous && previous.intent === 'postpone' && (!hasUsefulParams(action.params) || action.intent === 'chat' || action.intent === 'unknown') && followUpText) {
-    const synthetic = parse(`顺延${followUpText}`);
-    if (synthetic.params && synthetic.params.days) action = { intent: 'postpone', params: synthetic.params };
   }
   if (/安排(?:到|在)?今天|今天安排|排到今天/.test(raw)) {
     action = { intent: 'update', params: Object.assign({}, action.params, { due: todayDueEnd() }) };
@@ -4329,7 +3819,7 @@ function formatPreviewField(label, before, after) {
 }
 
 /* 任务内组合步骤允许的意图：排除 delete 与工作流记录，破坏性与上下文强的操作保持单步预览 */
-const TASK_MULTI_INTENTS = new Set(['update', 'child', 'split', 'postpone', 'start', 'complete', 'archive']);
+const TASK_MULTI_INTENTS = new Set(['update', 'complete']);
 
 function buildTaskActionPreview(task, intent, params) {
   const fields = [];
@@ -4347,36 +3837,16 @@ function buildTaskActionPreview(task, intent, params) {
     const built = buildTaskUpdate(params, task);
     if (!Object.keys(built.patch).length) return { error: '我没有识别到要修改的内容。可以说“改到明天”“设为紧急”或“加标签工作”。' };
     Object.keys(built.patch).forEach((key) => fields.push(formatPreviewField(
-      { pri: '优先级', due: '截止时间', project: '项目', tags: '标签', desc: '备注', estimatedMinutes: '预计用时' }[key] || key,
+      { pri: '优先级', due: '截止时间', status: '状态', project: '项目', tags: '标签', desc: '备注', estimatedMinutes: '预计用时' }[key] || key,
       task[key], built.patch[key]
     )));
     summary = `准备更新「${task.title}」`;
-  } else if (intent === 'child') {
-    if (!params.childTitle) return { error: '请告诉我要添加的子任务内容。' };
-    fields.push({ label: '新增子任务', before: '无', after: params.childTitle });
-    summary = `准备给「${task.title}」添加 1 个子任务`;
-  } else if (intent === 'split') {
-    const steps = Array.isArray(params.steps) ? params.steps.filter(Boolean).slice(0, 8) : [];
-    if (steps.length < 2) return { error: '我还没有生成足够具体的步骤。请说明“拆成三步”并补充目标，或直接把步骤写出来。' };
-    fields.push({ label: '子任务', before: task.children && task.children.length ? `${task.children.length} 个` : '无', after: steps.map((step, i) => `${i + 1}. ${step}`).join('\n') });
-    summary = `准备把「${task.title}」拆成 ${steps.length} 步`;
-    params.steps = steps;
-  } else if (intent === 'postpone') {
-    if (!task.due) return { error: '这项任务没有截止时间，无法顺延。' };
-    const days = Math.max(1, Math.min(30, Number(params.days) || 1));
-    const next = new Date(task.due.replace(' ', 'T') + ':00');
-    next.setDate(next.getDate() + days);
-    const pad = (n) => (n < 10 ? '0' + n : String(n));
-    const due = `${next.getFullYear()}-${pad(next.getMonth() + 1)}-${pad(next.getDate())} ${pad(next.getHours())}:${pad(next.getMinutes())}`;
-    fields.push(formatPreviewField('截止时间', task.due, due));
-    params.days = days;
-    summary = `准备把「${task.title}」顺延 ${days} 天`;
   } else {
-    const labels = { start: ['状态', task.status, '进行中'], complete: ['状态', task.status, '已完成'], archive: ['状态', task.status, '已归档'], delete: ['任务', task.title, '移入回收站'] };
+    const labels = { complete: ['状态', task.status, '已完成'], delete: ['任务', task.title, '移入回收站'] };
     const item = labels[intent];
     if (!item) return { error: '我还不能在任务内执行这类操作。' };
     fields.push(formatPreviewField(item[0], item[1], item[2]));
-    summary = `准备${intent === 'start' ? '开始' : intent === 'complete' ? '完成' : intent === 'archive' ? '归档' : '删除'}「${task.title}」`;
+    summary = `准备${intent === 'complete' ? '完成' : '删除'}「${task.title}」`;
     params.confirmed = true;
   }
   return { fields, summary, params };
@@ -4442,7 +3912,7 @@ async function previewTaskAction(taskId, text, requestContext, context) {
   if (intent === 'plan' && Array.isArray(params && params.actions)) {
     return buildTaskMultiPreview(task, params.actions, degraded);
   }
-  const supported = new Set(['update', 'child', 'split', 'postpone', 'start', 'complete', 'archive', 'delete', 'worklog_add', 'worklog_update', 'worklog_delete']);
+  const supported = new Set(['update', 'complete', 'delete', 'worklog_add', 'worklog_update', 'worklog_delete']);
   if (!supported.has(intent)) return { ok: false, type: 'error', message: '我还不能在任务内执行这类操作。可以修改任务，或说“进展：…”“阻塞：…”“成果：…”。' };
   const built = buildTaskActionPreview(task, intent, params);
   if (built.error) return { ok: false, type: 'error', message: built.error };

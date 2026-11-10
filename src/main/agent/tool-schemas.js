@@ -4,13 +4,16 @@
  * Agent 工具清单（OpenAI function-calling 格式）。
  * name 与 tool-registry 的 intent key 一一对应，params 由模型生成后直接交给 execute()。
  * 每个 schema 里的参数名必须与各 handler 实际读取的 params 字段保持一致。
+ * 阶段 2 收缩：stats/suggest 并入 query 与 chat，start/postpone/archive/split/child 并入 update，
+ * memo_pin/memo_split/memo_delete 下线（备忘录只保留捕获箱级操作），新增 record_query。
+ * pri/tags/project/estimatedMinutes 等字段仅 UI 隐藏，AI 与数据层继续可用。
  */
 const AGENT_TOOLS = Object.freeze([
   {
     type: 'function',
     function: {
       name: 'query',
-      description: '查询任务列表。支持按标签、优先级（1紧急/2普通/3低）、状态（todo/doing/done/archived）、项目、截止日筛选。回答「我有哪些任务」类问题前先用它拿实时数据。',
+      description: '查询任务列表。支持按标签、优先级（1紧急/2普通/3低）、状态（todo/doing/done/archived）、项目、截止日筛选。回答「我有哪些任务」「完成了多少」类问题前先用它拿实时数据。',
       parameters: {
         type: 'object',
         properties: {
@@ -26,17 +29,17 @@ const AGENT_TOOLS = Object.freeze([
   {
     type: 'function',
     function: {
-      name: 'stats',
-      description: '统计任务数量与完成率。回答「今天完成了多少」「还剩几条」类问题。',
-      parameters: { type: 'object', properties: { text: { type: 'string', description: '用户原始语句' } } }
-    }
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'suggest',
-      description: '基于当前任务列表给出下一步优先级建议。回答「我该先做什么」类问题。',
-      parameters: { type: 'object', properties: { text: { type: 'string', description: '用户原始语句' } } }
+      name: 'record_query',
+      description: '查询工作记录：今天（或指定日期/周期）做了什么，完成与推进的任务。回答「今天干了啥」「生成今日日报」「整理本周周报」类问题，只读不改数据。',
+      parameters: {
+        type: 'object',
+        properties: {
+          period: { type: 'string', description: 'daily=按日（默认），weekly=按周（用户说周报/本周/上周时）' },
+          offset: { type: 'integer', description: '周期偏移：-1=昨天/上周，0=今天/本周，1=明天/下周' },
+          date: { type: 'string', description: '可选，日期 YYYY-MM-DD，缺省为今天' },
+          text: { type: 'string', description: '用户的原始语句' }
+        }
+      }
     }
   },
   {
@@ -82,22 +85,8 @@ const AGENT_TOOLS = Object.freeze([
   {
     type: 'function',
     function: {
-      name: 'start',
-      description: '把一个任务标记为进行中。需要 target（任务标题）或 taskId。',
-      parameters: {
-        type: 'object',
-        properties: {
-          target: { type: 'string', description: '任务标题或关键词' },
-          taskId: { type: 'string', description: '任务 ID' }
-        }
-      }
-    }
-  },
-  {
-    type: 'function',
-    function: {
       name: 'update',
-      description: '修改任务字段：优先级、截止时间、标签、项目、备注等。',
+      description: '修改任务：状态（开始/完成）、改期（如推到明天）、优先级、标签、项目、备注、归档等。',
       parameters: {
         type: 'object',
         properties: {
@@ -107,37 +96,9 @@ const AGENT_TOOLS = Object.freeze([
           due: { type: 'string', description: '新截止时间' },
           tags: { type: 'array', items: { type: 'string' }, description: '新标签' },
           project: { type: 'string', description: '新项目名' },
-          note: { type: 'string', description: '新备注' }
-        }
-      }
-    }
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'child',
-      description: '给一个已有任务添加子任务。',
-      parameters: {
-        type: 'object',
-        properties: {
-          target: { type: 'string', description: '父任务标题或关键词' },
-          taskId: { type: 'string', description: '父任务 ID' },
-          childTitle: { type: 'string', description: '子任务标题（必填）' }
-        }
-      }
-    }
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'postpone',
-      description: '把任务截止时间顺延（默认明天）。',
-      parameters: {
-        type: 'object',
-        properties: {
-          target: { type: 'string', description: '任务标题或关键词' },
-          taskId: { type: 'string', description: '任务 ID' },
-          days: { type: 'integer', description: '顺延天数，默认 1' }
+          note: { type: 'string', description: '新备注' },
+          status: { type: 'string', description: '新状态：todo/doing/done/archived' },
+          days: { type: 'integer', description: '改期用：相对顺延天数，如 1=明天' }
         }
       }
     }
@@ -152,35 +113,6 @@ const AGENT_TOOLS = Object.freeze([
         properties: {
           target: { type: 'string', description: '任务标题或关键词' },
           taskId: { type: 'string', description: '任务 ID' }
-        }
-      }
-    }
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'archive',
-      description: '归档一个任务（不删除）。',
-      parameters: {
-        type: 'object',
-        properties: {
-          target: { type: 'string', description: '任务标题或关键词' },
-          taskId: { type: 'string', description: '任务 ID' }
-        }
-      }
-    }
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'split',
-      description: '把一个大任务拆成多个子任务。',
-      parameters: {
-        type: 'object',
-        properties: {
-          target: { type: 'string', description: '任务标题或关键词' },
-          taskId: { type: 'string', description: '任务 ID' },
-          steps: { type: 'array', items: { type: 'string' }, description: '拆分出的子步骤标题' }
         }
       }
     }
@@ -236,51 +168,8 @@ const AGENT_TOOLS = Object.freeze([
   {
     type: 'function',
     function: {
-      name: 'memo_pin',
-      description: '置顶或取消置顶一条备忘录。',
-      parameters: {
-        type: 'object',
-        properties: {
-          target: { type: 'string', description: '备忘录标题或关键词' },
-          memoId: { type: 'string', description: '备忘录 ID' }
-        }
-      }
-    }
-  },
-  {
-    type: 'function',
-    function: {
       name: 'memo_to_task',
-      description: '把一条备忘录转成任务。',
-      parameters: {
-        type: 'object',
-        properties: {
-          target: { type: 'string', description: '备忘录标题或关键词' },
-          memoId: { type: 'string', description: '备忘录 ID' }
-        }
-      }
-    }
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'memo_split',
-      description: '把一条备忘录按要点拆成多条任务。',
-      parameters: {
-        type: 'object',
-        properties: {
-          target: { type: 'string', description: '备忘录标题或关键词' },
-          memoId: { type: 'string', description: '备忘录 ID' },
-          steps: { type: 'array', items: { type: 'string' }, description: '拆分出的任务标题' }
-        }
-      }
-    }
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'memo_delete',
-      description: '删除一条备忘录（可从回收站恢复）。需要用户确认后才会真正执行。',
+      description: '把一条备忘录转成任务（查询到备忘录后的跟进动作）。',
       parameters: {
         type: 'object',
         properties: {

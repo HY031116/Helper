@@ -3,11 +3,9 @@
 const SEMANTIC_ENVELOPE_VERSION = 1;
 
 const WRITE_INTENTS = new Set([
-  'create', 'memo_create', 'memo_delete', 'memo_pin', 'memo_to_task', 'memo_split',
-  'complete', 'start', 'delete', 'archive', 'split', 'batch', 'update', 'child',
-  'postpone', 'restore', 'plan'
+  'create', 'memo_create', 'memo_to_task', 'complete', 'delete', 'batch', 'update', 'plan'
 ]);
-const READ_INTENTS = new Set(['memo_query', 'query', 'suggest', 'summary', 'stats', 'report', 'greeting', 'thanks']);
+const READ_INTENTS = new Set(['memo_query', 'query', 'record_query', 'summary', 'greeting', 'thanks']);
 
 function clean(value) {
   return String(value || '').trim();
@@ -49,25 +47,13 @@ function hasCompoundOperationCue(text) {
 function isProtectedCommand(intent, text) {
   const raw = clean(text);
   if (!raw || hasCompoundOperationCue(raw)) return false;
-  if (['greeting', 'thanks', 'report', 'memo_query', 'summary', 'stats'].includes(intent)) return true;
-  if (intent === 'suggest') {
-    return !/(你觉得|聊聊|谈谈)/.test(raw) && (/(任务|待办|优先级)/.test(raw) || /^(?:今天|今日|我|现在|接下来)?\s*(?:该)?\s*(?:先做什么|做什么|下一步|怎么安排)/.test(raw));
-  }
+  if (['greeting', 'thanks', 'memo_query', 'summary', 'record_query'].includes(intent)) return true;
   if (intent === 'query') return /(查|看看|看一下|查看|列出|有哪些|有什么|做什么|干嘛|完成了吗|做完了吗)/.test(raw);
   if (surfaceQuestionCue(raw)) return false;
   const direct = {
     complete: '完成|搞定|勾掉',
-    start: '开始|启动',
     delete: '删除|删掉|移除',
-    archive: '归档|收起来',
-    restore: '恢复|还原|找回',
-    update: '改成|改为|改到|改优先级|改截止|改时间|改项目|移到|移动到|加标签|加备注|改描述|改备注|设为|安排到|排到',
-    child: '加子任务|添加子任务|加个步骤|加步骤|加一步',
-    postpone: '顺延|推迟|延后|延期',
-    split: '拆成|拆分|分解|分成',
-    memo_split: '拆成|拆分|分解|分成',
-    memo_delete: '删除|删掉|移除',
-    memo_pin: '置顶|取消置顶',
+    update: '改成|改为|改到|改优先级|改截止|改时间|改项目|移到|移动到|加标签|加备注|改描述|改备注|设为|安排到|排到|顺延|推迟|延后|延期|归档|收起来|恢复|还原|找回|撤销删除|开始|动手做|着手|启动',
     memo_to_task: '转为|转成|变成',
     batch: '清除|清空|清掉|删光|全删|全部|所有|批量|一键'
   }[intent];
@@ -164,32 +150,25 @@ function routeSemanticInput(text, options) {
   if (/^(你好|您好|嗨|哈喽|早上好|下午好|晚上好|嗨喽|hello|hi)\s*[，。！!?？]?\s*$/.test(intentText)) set('greeting', 'greeting', { confidence: 'high' });
   else if (/^(谢谢|感谢|多谢|辛苦了|ok|好的|谢谢啦)\s*[。！!]?\s*$/.test(intentText)) set('thanks', 'thanks', { confidence: 'high' });
   else if (/(备忘录|笔记|这条|它).*(转为|转成|变成).*任务|(把|将).*(备忘录|笔记).*(转为|转成).*任务/.test(intentText)) set('memo_to_task', 'memo_to_task', { entityType: 'memo', protected: true, confidence: 'high' });
-  else if (/(删除|删掉|移除).*(备忘录|笔记)|(备忘录|笔记).*(删除|删掉|移除)/.test(intentText)) set('memo_delete', 'memo_delete', { entityType: 'memo', protected: true, confidence: 'high' });
-  else if (/(置顶|取消置顶|不再置顶).*(备忘录|笔记|这条)|(备忘录|笔记).*(置顶|取消置顶)/.test(intentText)) set('memo_pin', 'memo_pin', { entityType: 'memo', protected: true, confidence: 'high' });
+  else if (/(删除|删掉|移除).*(备忘录|笔记)|(备忘录|笔记).*(删除|删掉|移除)/.test(intentText)) set('chat', 'memo_delete_request', { confidence: 'medium' });
+  else if (/(置顶|取消置顶|不再置顶).*(备忘录|笔记|这条)|(备忘录|笔记).*(置顶|取消置顶)/.test(intentText)) set('chat', 'memo_pin_request', { confidence: 'medium' });
   else if (/(记到|记进|写到|写进|存到|存进|放到|放进|添加到|加入)(我的)?备忘录|新建备忘录|备忘一下/.test(intentText)) set('memo_create', 'memo_create', { entityType: 'memo', protected: true, confidence: 'high' });
   else if (/(查|找|搜索|看|查看|列出|有哪些|多少).*(备忘录|笔记)|(备忘录|笔记).*(查|找|搜索|看|查看|列出|有哪些|多少)/.test(intentText)) set('memo_query', 'memo_query', { entityType: 'memo', protected: true, confidence: 'high' });
-  else if (/((生成|写|整理|汇总|导出|查看|看看|给我|做一份|出一份).*(日报|周报|工作报告|工作总结)|(日报|周报|工作报告|工作总结).*(生成|查看|看看|写|整理|汇总|导出))/.test(intentText)) set('report', 'report', { confidence: 'high' });
-  else if (/怎么安排|先做什么|排序|建议|安排一下|接下来呢|然后呢|下一步|现在该做什么|我该做什么|优先级.*(怎么|如何|排序)|怎么.*优先级|推荐.*顺序/.test(intentText)) set('suggest', 'suggest');
+  else if (/((生成|写|整理|汇总|导出|查看|看看|给我|做一份|出一份).*(日报|周报|工作报告|工作总结)|(日报|周报|工作报告|工作总结).*(生成|查看|看看|写|整理|汇总|导出))/.test(intentText)) set('record_query', 'report_request', { confidence: 'high' });
+  else if (/怎么安排|先做什么|排序|建议|安排一下|接下来呢|然后呢|下一步|现在该做什么|我该做什么|优先级.*(怎么|如何|排序)|怎么.*优先级|推荐.*顺序/.test(intentText)) set('query', 'advice_query', { entityType: 'task' });
   else if (/小结|总结|复盘|进展|今天完成了什么|今天做了什么/.test(intentText)) set('summary', 'summary');
-  else if (/(多少个|几条|几项|完成率|有几个|占比|还剩.*(个|条|项)|还有.*(个|条|项)没|完成了多少|做了多少|完成.*多少)/.test(intentText)) set('stats', 'stats');
+  else if (/干了什么|干了啥|做了哪些|做了什么|工作记录|工作日志|记录了什么|昨天做了|这周做了|本周做了|上周做了/.test(intentText)) set('record_query', 'record_query', { confidence: 'medium' });
+  else if (/(多少个|几条|几项|完成率|有几个|占比|还剩.*(个|条|项)|还有.*(个|条|项)没|完成了多少|做了多少|完成.*多少)/.test(intentText)) set('query', 'stats_query', { entityType: 'task' });
   else if (/完成了吗|做完了吗|搞定了吗|结束了没/.test(intentText)) set('query', 'status_query', { entityType: 'task', protected: true, confidence: 'high' });
   else if (/^(?:为什么|什么是|如何|怎么|怎样|为何)/.test(intentText)) set('chat', 'knowledge_question', { confidence: 'medium' });
   else if (surfaceQuestion && !(config.hasRecentMemoContext && /拆分|拆成/.test(intentText)) && /(?:可以|能否|能不能|要不要|该不该|应该|是否|会不会|怎么|如何).*(?:删除|删掉|修改|拆分|完成|归档)|(?:删除|删掉|修改|拆分|完成|归档).*(?:可以|能否|能不能|吗|怎么|如何)/.test(intentText)) set('chat', 'operation_question', { confidence: 'medium' });
-  else if (/拆成|拆分|分解|分成.*步|拆一下|就拆|拆这个|拆那个|拆它/.test(intentText)) {
-    if (/(备忘录|笔记)/.test(intentText) || config.matchedRecentMemo || (!config.mentionsTask && config.hasRecentMemoContext)) set('memo_split', 'split', { entityType: 'memo' });
-    else set('split', 'split', { entityType: entityType === 'unknown' ? 'task' : entityType });
-  }
-  else if (/归档|收起来|移入归档/.test(intentText)) set('archive', 'archive', { entityType: 'task' });
-  else if (/恢复|还原|找回|撤销删除/.test(intentText)) set('restore', 'restore', { entityType: 'task' });
   else if (/(所有|全部|剩下的|剩余).*(任务|待办).*(时间|截止).*(改|调|挪|移|设)|把.*(所有|全部|剩下的|剩余).*(任务|待办).*(改|调|挪|移|设)/.test(intentText)) set('batch', 'batch_reschedule', { entityType: 'task' });
-  else if (/(改成|改为|改到|改成紧急|改成高|改成中|改成低|改优先级|改截止|改时间|改项目|移到|移动到|加标签|加个标签|加备注|加个备注|改描述|改备注|设为紧急|设为高|设为中|设为低|优先级改成|截止改成|时间改成|安排到|排到)/.test(intentText)) set('update', 'update', { entityType: 'task' });
-  else if (/顺延|推迟|延后|延期/.test(intentText)) set('postpone', 'postpone', { entityType: 'task' });
-  else if (/加子任务|添加子任务|加个步骤|加步骤|加一步|子任务.*(加|添加)/.test(intentText)) set('child', 'child', { entityType: 'task' });
+  else if (/(改成|改为|改到|改成紧急|改成高|改成中|改成低|改优先级|改截止|改时间|改项目|移到|移动到|加标签|加个标签|加备注|加个备注|改描述|改备注|设为紧急|设为高|设为中|设为低|优先级改成|截止改成|时间改成|安排到|排到|顺延|推迟|延后|延期|归档|收起来|移入归档|恢复|还原|找回|撤销删除)/.test(intentText)) set('update', 'update', { entityType: 'task' });
+  else if (/加子任务|添加子任务|加个步骤|加步骤|加一步|子任务.*(加|添加)/.test(intentText)) set('chat', 'child_request', { confidence: 'medium' });
   else if (/(清除|清空|清掉|删光|全删|全部.*删|所有.*删|全部.*完成|所有.*完成|批量|一键.*(删|完成|清)|把.*都(删|完成|清)|把.*全(删|完成|清))/.test(intentText)) set('batch', 'batch', { entityType: 'task' });
-  else if (/(所有|全部|剩下的|剩余).*(任务|待办).*(时间|截止).*(改|调|挪|移|设)|把.*(所有|全部|剩下的|剩余).*(任务|待办).*(改|调|挪|移|设)/.test(intentText)) set('batch', 'batch_reschedule', { entityType: 'task' });
   else if (/删除|去掉|不做了|取消这个|移除|删掉|划掉/.test(intentText)) set('delete', 'delete', { entityType: 'task' });
   else if (/完成|搞定|做完了|办完了|勾掉|结束了|弄完了|做好了/.test(intentText)) set('complete', 'complete', { entityType: 'task' });
-  else if (/开始|动手做|着手|启动/.test(intentText)) set('start', 'start', { entityType: 'task' });
+  else if (/开始|动手做|着手|启动/.test(intentText)) set('update', 'update', { entityType: 'task' });
   else if (/创建|添加|记一下|安排|新建|帮我记|加一个|建一个|记个|记得|提醒我|要交|要去/.test(intentText) && !surfaceQuestion) set('create', 'implicit_create', { entityType: 'task' });
   else if (/(今天|明天|后天|周[一二三四五六日天]|\d{1,2}月\d{1,2}日|\d{1,2}[:：点])/.test(intentText) && !/天气|下雨|晴天|气温|温度|星期几|什么|哪些|几个|怎么|怎样|如何|为何|为什么|吗|呢|谁|哪|几|？|\?/.test(intentText)) set('create', 'timed_capture', { entityType: 'task', protected: true, confidence: 'high' });
   else if (/(查|看看|看一下|查看|列|有什么|我的任务|最近|待办|做什么|干嘛|要做|安排|有哪些|都什么|那个任务|完成了吗|做完了吗)/.test(intentText)) set('query', 'task_query', { entityType: entityType === 'unknown' ? 'task' : entityType });
@@ -200,7 +179,7 @@ function routeSemanticInput(text, options) {
     protectedIntent = false;
     confidence = 'medium';
   }
-  if (config.contextEntityType === 'task' && ['update', 'child', 'split', 'postpone', 'start', 'complete', 'archive', 'delete'].includes(intent)) {
+  if (config.contextEntityType === 'task' && ['update', 'complete', 'delete'].includes(intent)) {
     entityType = 'task';
     // 任务锚定的复合句（“顺延两天然后开始做”）允许模型返回组合操作；
     // 预览层会逐项校验意图与任务归属，单句锚定保护仍然生效
@@ -245,8 +224,8 @@ function mergeProtectedParams(envelope, modelParams, localParams) {
       if (local[key] !== undefined) params[key] = local[key];
     });
   }
-  if (['update', 'child', 'postpone'].includes(envelope.intent)) {
-    ['pri', 'due', 'project', 'desc', 'childTitle', 'days', 'estimatedMinutes'].forEach((key) => {
+  if (envelope.intent === 'update') {
+    ['pri', 'due', 'status', 'days', 'project', 'desc'].forEach((key) => {
       if (local[key] !== undefined && local[key] !== null && local[key] !== '') params[key] = local[key];
     });
     if (Array.isArray(local.tags) && local.tags.length) params.tags = local.tags;

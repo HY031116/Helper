@@ -4372,7 +4372,7 @@ async function runAiTurn(request, retry, options) {
     }
 
     try {
-      const operationTypes = ['create', 'memo_create', 'memo_delete', 'memo_pin', 'memo_to_task', 'memo_split', 'complete', 'start', 'delete', 'archive', 'split', 'update', 'child', 'postpone', 'restore', 'plan'];
+      const operationTypes = ['create', 'memo_create', 'memo_to_task', 'complete', 'delete', 'update', 'plan'];
       const reportTypes = ['report'];
       pending.classList.remove('pending', 'error');
       settleAiReasoningBlock(pending);

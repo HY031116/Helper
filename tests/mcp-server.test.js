@@ -76,9 +76,9 @@ function jsonRequest(port, { method = 'POST', urlPath = '/mcp', token = TOKEN, h
 }
 
 /* ---------- 协议核心：目录与映射 ---------- */
-test('MCP 工具目录：24 个工具、注解与前后缀解析一致', () => {
-  // 目录按已注册意图动态生成：阶段 1 下线工作流意图（daily_plan/daily_replan/daily_review/focus_*×5）后 32→24。
-  assert.strictEqual(protocol.TOOL_CATALOG.length, 24);
+test('MCP 工具目录：13 个工具、注解与前后缀解析一致', () => {
+  // 目录按已注册意图动态生成：阶段 2 收缩后 24→13（11 个模型工具 + plan + undo；report/restore 随意图下线动态移除）。
+  assert.strictEqual(protocol.TOOL_CATALOG.length, 13);
   const names = new Set();
   for (const tool of protocol.TOOL_CATALOG) {
     assert.ok(tool.name.startsWith(protocol.TOOL_PREFIX), `工具名缺少前缀：${tool.name}`);
@@ -91,19 +91,19 @@ test('MCP 工具目录：24 个工具、注解与前后缀解析一致', () => {
     assert.strictEqual(tool.annotations.openWorldHint, false);
     assert.strictEqual(tool.annotations.title, tool.title);
   }
-  assert.strictEqual(names.size, 24, '工具名不能重复');
+  assert.strictEqual(names.size, 13, '工具名不能重复');
 
   const readOnly = protocol.TOOL_CATALOG.filter((tool) => tool.annotations.readOnlyHint).map((tool) => tool.name).sort();
   assert.deepStrictEqual(readOnly, [
-    'workhelper_memo_query', 'workhelper_query', 'workhelper_report',
-    'workhelper_stats', 'workhelper_suggest', 'workhelper_summary'
+    'workhelper_memo_query', 'workhelper_query',
+    'workhelper_record_query', 'workhelper_summary'
   ].sort());
   for (const name of readOnly) {
     assert.strictEqual(protocol.TOOL_CATALOG.find((tool) => tool.name === name).annotations.idempotentHint, true);
   }
 
   const destructive = protocol.TOOL_CATALOG.filter((tool) => tool.annotations.destructiveHint).map((tool) => tool.name).sort();
-  assert.deepStrictEqual(destructive, ['workhelper_batch', 'workhelper_delete', 'workhelper_memo_delete'].sort());
+  assert.deepStrictEqual(destructive, ['workhelper_batch', 'workhelper_delete'].sort());
   for (const name of destructive) {
     const tool = protocol.TOOL_CATALOG.find((item) => item.name === name);
     assert.ok(tool.description.includes('confirmation_required'), `${name} 的描述必须写明二次确认`);
@@ -203,12 +203,14 @@ test('外部工具入口：不写 agentState.pending，也不借用「最近提�
   assert.strictEqual(store.getAgentState().pending.kind, 'confirmation');
   store.clearAgentState();
 
-  // memo_delete 缺目标：返回 clarify 而不是拿「最近备忘录」自动顶上
+  // memo_to_task 缺目标：返回 clarify 而不是拿「最近备忘录」自动顶上（memo_delete 已随阶段 2 下线）
   const memo = store.createMemo({ content: '外部安全边界备忘录' });
+  const taskCountBefore = store.getAllTasks().length;
   store.updateAgentState({ lastCollection: { type: 'memo', ids: [memo.id], ts: Date.now() } });
-  const clarify = ai.executeExternalTool('memo_delete', {});
+  const clarify = ai.executeExternalTool('memo_to_task', {});
   assert.strictEqual(clarify.type, 'clarify');
-  assert.ok(store.getMemo(memo.id), '没有目标时绝不能自动选中并删除');
+  assert.ok(store.getMemo(memo.id), '没有目标时绝不能自动选中');
+  assert.strictEqual(store.getAllTasks().length, taskCountBefore, 'clarify 不得顺手转任务');
 
   const missingTarget = ai.executeExternalTool('delete', {});
   assert.strictEqual(missingTarget.type, 'clarify');
@@ -350,7 +352,7 @@ test('HTTP 传输：鉴权、Origin 与 Host 校验', async () => {
   const health = await jsonRequest(info.port, { urlPath: '/health' });
   assert.strictEqual(health.status, 200);
   assert.strictEqual(health.json.ok, true);
-  assert.strictEqual(health.json.tools, 24);
+  assert.strictEqual(health.json.tools, 13);
   const healthNoAuth = await jsonRequest(info.port, { urlPath: '/health', token: '' });
   assert.strictEqual(healthNoAuth.status, 401);
   const notFound = await jsonRequest(info.port, { urlPath: '/other' });
@@ -373,7 +375,7 @@ test('HTTP 传输：完整会话流程与危险操作确认链', async () => {
     body: { jsonrpc: '2.0', id: 't1', method: 'tools/list' },
     headers: { 'Mcp-Session-Id': coreSessionId }
   });
-  assert.strictEqual(tools.json.result.tools.length, 24);
+  assert.strictEqual(tools.json.result.tools.length, 13);
 
   // 写操作经 HTTP 真实落库
   const create = await jsonRequest(transport.port(), {
@@ -445,7 +447,7 @@ test('HTTP 传输：完整会话流程与危险操作确认链', async () => {
   assert.ok(Array.isArray(batch.json));
   assert.strictEqual(batch.json.length, 2);
   assert.strictEqual(batch.json[0].id, 'b1');
-  assert.strictEqual(batch.json[1].result.tools.length, 24);
+  assert.strictEqual(batch.json[1].result.tools.length, 13);
 
   // 请求体超限 → 413
   const oversized = await jsonRequest(transport.port(), { body: 'x'.repeat(MAX_BODY_BYTES + 16), headers: { 'Mcp-Session-Id': coreSessionId } });
@@ -522,7 +524,7 @@ test('stdio 代理：手动 url+token 模式端到端转发', async () => {
   send({ jsonrpc: '2.0', method: 'notifications/initialized' });
   send({ jsonrpc: '2.0', id: 2, method: 'tools/list' });
   const toolsResponse = await onceProxyResponse(child, (message) => message.id === 2);
-  assert.strictEqual(toolsResponse.result.tools.length, 24);
+  assert.strictEqual(toolsResponse.result.tools.length, 13);
 
   const task = store.createTask({ title: 'stdio 代理链路任务' });
   send({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'workhelper_query', arguments: {} } });

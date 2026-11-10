@@ -53,7 +53,7 @@ function contentMessage(text) {
 }
 
 test('工具清单：与 tool-registry 意图对齐且排除对话类与专用管线能力', () => {
-  assert.ok(AGENT_TOOLS.length >= 20);
+  assert.strictEqual(AGENT_TOOLS.length, 11);
   for (const tool of AGENT_TOOLS) {
     assert.strictEqual(tool.type, 'function');
     assert.strictEqual(typeof tool.function.name, 'string');
@@ -79,18 +79,18 @@ test('Agent 主循环：模型多步自主调用工具并给出最终答复', as
     call += 1;
     bodies.push(JSON.parse(options.body));
     if (call === 1) return { ok: true, json: async () => toolCallMessage([{ name: 'query', args: { pri: 1 } }]) };
-    if (call === 2) return { ok: true, json: async () => toolCallMessage([{ name: 'start', args: { taskId: task.id } }]) };
+    if (call === 2) return { ok: true, json: async () => toolCallMessage([{ name: 'update', args: { taskId: task.id, status: 'doing' } }]) };
     return { ok: true, json: async () => contentMessage('已把「整理季度数据」标记为进行中，这是当前唯一的紧急任务。') };
   };
   try {
     const result = await ai.handleAuto('看看我的紧急任务，把最急的那个开始做');
     assert.strictEqual(result.engine, 'agent');
-    assert.deepStrictEqual(result.agentSteps, ['query', 'start']);
-    assert.strictEqual(result.type, 'start');
+    assert.deepStrictEqual(result.agentSteps, ['query', 'update']);
+    assert.strictEqual(result.type, 'update');
     assert.strictEqual(result.task.status, 'doing');
     assert.strictEqual(result.message, '已把「整理季度数据」标记为进行中，这是当前唯一的紧急任务。');
     // 每一轮请求都带工具清单
-    assert.ok(bodies.every((body) => Array.isArray(body.tools) && body.tools.length >= 20));
+    assert.ok(bodies.every((body) => Array.isArray(body.tools) && body.tools.length === 11));
     // observation 以 tool 角色回填给模型
     assert.ok(bodies[1].messages.some((m) => m.role === 'tool' && m.tool_call_id === 'call-0'));
     assert.ok(bodies[1].messages.some((m) => m.role === 'assistant' && Array.isArray(m.tool_calls)));
@@ -253,13 +253,13 @@ test('Agent 主循环：加预算重试仍拿不到正文时走部分收尾', as
   global.fetch = async (url, options) => {
     call += 1;
     bodies.push(JSON.parse(options.body));
-    if (call === 1) return { ok: true, json: async () => toolCallMessage([{ name: 'stats', args: {} }]) };
+    if (call === 1) return { ok: true, json: async () => toolCallMessage([{ name: 'record_query', args: {} }]) };
     return { ok: true, json: async () => contentMessage('') }; // 始终只有思考没有正文
   };
   try {
     const result = await ai.handleAuto('统计一下进度');
     assert.strictEqual(result.engine, 'agent');
-    assert.deepStrictEqual(result.agentSteps, ['stats']);
+    assert.deepStrictEqual(result.agentSteps, ['record_query']);
     assert.match(result.message, /已完成 1 步：/);
     assert.match(result.message, /模型没有返回最终答案/);
     assert.match(result.message, /可重试继续/);

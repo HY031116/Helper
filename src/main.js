@@ -403,7 +403,7 @@ function runTaskMutation(operation) {
 }
 
 const AGENT_MUTATION_RESULT_TYPES = new Set([
-  'complete', 'start', 'delete', 'archive', 'update', 'child', 'split', 'postpone', 'restore'
+  'complete', 'delete', 'update'
 ]);
 
 function syncPetAfterAgentResult(result) {
@@ -416,7 +416,7 @@ function broadcastMcpMutation(intent) {
   const name = String(intent || '');
   syncPetTasksChanged();
   if (!mainWindow || mainWindow.isDestroyed()) return;
-  const crossType = ['undo', 'batch', 'memo_to_task', 'memo_split'].includes(name);
+  const crossType = ['undo', 'batch', 'memo_to_task'].includes(name);
   const memoOnly = name.startsWith('memo_') && !crossType;
   if (!memoOnly) mainWindow.webContents.send('tasks:changed');
   if (name.startsWith('memo_') || crossType) mainWindow.webContents.send('memos:changed');

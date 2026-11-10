@@ -72,24 +72,15 @@ function normalizeAction(parsed, allowedIntents) {
     fail('MODEL_OUTPUT_INVALID_INTENT', '模型返回了未知意图');
   }
 
-  const usesPriority = ['create', 'update', 'query', 'stats', 'batch'].includes(parsed.intent);
+  const usesPriority = ['create', 'update', 'query', 'batch'].includes(parsed.intent);
   const pri = !usesPriority || parsed.pri === undefined || parsed.pri === null ? undefined : Number(parsed.pri);
   if (pri !== undefined && ![1, 2, 3, 4].includes(pri)) {
     fail('MODEL_OUTPUT_INVALID_FIELD', '模型字段 pri 必须是 1 到 4');
   }
-  const usesDays = parsed.intent === 'postpone';
+  const usesDays = parsed.intent === 'update';
   const days = !usesDays || parsed.days === undefined || parsed.days === null ? undefined : Number(parsed.days);
   if (days !== undefined && (!Number.isInteger(days) || days < 1 || days > 3650)) {
     fail('MODEL_OUTPUT_INVALID_FIELD', '模型字段 days 必须是有效正整数');
-  }
-  const usesCount = parsed.intent === 'split' || parsed.intent === 'memo_split';
-  const count = !usesCount ? undefined : (parsed.count === undefined || parsed.count === null ? 3 : Number(parsed.count));
-  if (usesCount && (!Number.isInteger(count) || count < 2 || count > 8)) {
-    fail('MODEL_OUTPUT_INVALID_FIELD', '模型字段 count 必须是 2 到 8');
-  }
-  const usesPinned = parsed.intent === 'memo_pin';
-  if (usesPinned && parsed.pinned !== undefined && typeof parsed.pinned !== 'boolean') {
-    fail('MODEL_OUTPUT_INVALID_FIELD', '模型字段 pinned 必须是布尔值');
   }
 
   const usesDue = parsed.intent === 'create' || parsed.intent === 'update';
@@ -112,27 +103,28 @@ function normalizeAction(parsed, allowedIntents) {
       title: optionalString(parsed.title, 'title', 200),
       memoTitle: optionalString(parsed.memoTitle, 'memoTitle', 200),
       memoContent: optionalString(parsed.memoContent, 'memoContent', 12000),
-      pinned: usesPinned ? parsed.pinned : undefined,
       target: optionalString(parsed.target, 'target', 200),
-      count,
-      steps: optionalStringList(parsed.steps, 'steps', 8, 200),
       pri,
       due: due || null,
       tags: optionalStringList(parsed.tags, 'tags', 5, 40),
       project: optionalString(parsed.project, 'project', 100),
       desc: optionalString(parsed.desc, 'desc', 4000),
-      childTitle: optionalString(parsed.childTitle, 'childTitle', 200),
+      note: optionalString(parsed.note, 'note', 4000),
       days,
       estimatedMinutes: ['create', 'update'].includes(parsed.intent)
         ? optionalInteger(parsed.estimatedMinutes, 'estimatedMinutes', 5, 480) : undefined,
-      period: parsed.intent === 'report' ? optionalEnum(parsed.period, 'period', ['daily', 'weekly'], 'weekly') : undefined,
-      offset: parsed.intent === 'report' ? optionalInteger(parsed.offset, 'offset', -1, 1) : undefined,
-      status: ['query', 'stats', 'batch'].includes(parsed.intent)
-        ? optionalEnum(parsed.status, 'status', ['todo', 'doing', 'done'], undefined) : undefined,
+      date: parsed.intent === 'record_query' ? optionalString(parsed.date, 'date', 10) : undefined,
+      offset: parsed.intent === 'record_query' ? optionalInteger(parsed.offset, 'offset', -1, 1) : undefined,
+      period: parsed.intent === 'record_query'
+        ? optionalEnum(parsed.period, 'period', ['daily', 'weekly'], undefined) : undefined,
+      status: ['query', 'batch'].includes(parsed.intent)
+        ? optionalEnum(parsed.status, 'status', ['todo', 'doing', 'done'], undefined)
+        : parsed.intent === 'update'
+          ? optionalEnum(parsed.status, 'status', ['todo', 'doing', 'done', 'archived'], undefined) : undefined,
       rescheduleTime: usesReschedule ? (rescheduleTime || undefined) : undefined,
       rescheduleScope,
       onlyRemaining,
-      range: ['query', 'stats'].includes(parsed.intent)
+      range: parsed.intent === 'query'
         ? optionalEnum(parsed.range, 'range', ['today', 'tomorrow', 'week', 'yesterday', 'overdue', 'all'], 'all') : 'all'
     }
   };
