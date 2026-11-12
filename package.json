@@ -1,7 +1,7 @@
 {
   "name": "work-helper",
   "productName": "工作台助手",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "个人工作 AI 助手 - 常驻桌面的本地任务管理与 AI 助手（桌宠形态）",
   "main": "src/main.js",
   "scripts": {
