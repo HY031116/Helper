@@ -501,6 +501,9 @@ function registerIpc() {
 
   // 备忘录
   ipcMain.handle('memos:getAll', () => store.getAllMemos());
+  ipcMain.handle('worklog:get', (e, start, end) => store.getWorklog(start, end));
+  ipcMain.handle('worklog:addNote', (e, date, text) => store.addWorklogNote(date, text));
+  ipcMain.handle('worklog:removeNote', (e, date, id) => store.removeWorklogNote(date, id));
   ipcMain.handle('memos:convert', (e, id) => store.convertMemoToTask(id));
   ipcMain.handle('memos:create', (e, data) => store.createMemo(data));
   ipcMain.handle('memos:update', (e, id, patch) => store.updateMemo(id, patch));
@@ -715,8 +718,8 @@ function registerIpc() {
     if (res.canceled || !res.filePaths.length) return { ok: false };
     return { ok: true, file: res.filePaths[0] };
   });
-  ipcMain.handle('data:weeklyReport', (e, weekOffset) => store.generateWeeklyReport(weekOffset));
-  ipcMain.handle('data:dailyReport', (e, dayOffset) => store.generateDailyReport(dayOffset));
+  ipcMain.handle('data:weeklyReport', (e, weekOffset) => store.generateReport({ period: 'weekly', offset: weekOffset }));
+  ipcMain.handle('data:dailyReport', (e, dayOffset) => store.generateReport({ period: 'daily', offset: dayOffset }));
   ipcMain.handle('data:report', (e, input) => store.generateReport(input));
   // 桌宠拖动过程中只移动窗口，结束时再持久化，避免高频写盘。
   ipcMain.handle('pet:setPosition', (e, pos) => {

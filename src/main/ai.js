@@ -1528,7 +1528,7 @@ function doSummary() {
   lines.push('');
   lines.push(`📌 待办 ${todo.length} 项：`);
   lines.push(todo.length ? todo.slice(0, 5).map((t) => '· ' + t.title).join('\n') : '· （暂无）');
-  return { type: 'summary', message: lines.join('\n') };
+  return { type: 'summary', message: lines.join('\n') + '\n\n工作记录：\n' + (store.worklogMarkdown('daily', 0) || '暂无工作记录') };
 }
 
 function doRecordQuery(params) {
@@ -1540,7 +1540,7 @@ function doRecordQuery(params) {
     const now = new Date();
     const target = new Date(`${date}T00:00:00`);
     offset = Math.round((target - new Date(now.getFullYear(), now.getMonth(), now.getDate())) / 86400000);
-    if (offset < -1 || offset > 1) offset = 0;
+
   }
   const period = source.period === 'weekly' ? 'weekly' : 'daily';
   const markdown = store.generateReport({ period, offset });

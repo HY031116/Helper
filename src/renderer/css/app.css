@@ -2587,3 +2587,18 @@ body.dark .ai-head { background: var(--bg2); }
   .due-row input[type="date"] { flex-basis: 100%; }
   .m-actions { flex-wrap: wrap; }
 }
+
+.record-metrics { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:12px; margin-bottom:20px; }
+.record-metrics div { padding:12px; background:var(--bg2); border-radius:8px; }
+.record-metrics strong,.record-metrics span { display:block; }
+.record-metrics strong { font-size:24px; }
+.record-day { padding:12px 0; border-bottom:1px solid var(--border); overflow-wrap:anywhere; }
+.record-day form { display:flex; gap:8px; }
+.record-day input { min-width:0; flex:1; }
+.record-report pre { white-space:pre-wrap; overflow-wrap:anywhere; }
+@media(max-width:640px) { .record-metrics { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+
+.record-day button,.record-report button,.record-day input,.record-report select { font:inherit; color:var(--text); background:var(--bg2); border:1px solid var(--border); border-radius:6px; padding:7px 10px; }
+.record-day button,.record-report button { cursor:pointer; }
+.record-day button:focus-visible,.record-report button:focus-visible,.record-day input:focus-visible,.record-report select:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+.record-day p { padding:5px 0; }

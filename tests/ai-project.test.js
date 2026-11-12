@@ -999,7 +999,7 @@ test('保存并完成：新建和编辑均保留完整完成语义', () => {
   let updated;
   try {
     fs.renameSync = (...args) => {
-      writes++;
+      if (String(args[1]).endsWith('tasks.json')) writes++;
       return originalRename(...args);
     };
     created = store.saveAndCompleteTask(null, {
@@ -4538,4 +4538,48 @@ test('Agent 上下文：最近实体栈可跨重新初始化恢复且自动剔�
   assert.strictEqual(stale.type, 'error');
   assert.match(stale.message, /没有找到与「刚才那个任务」相关的任务/);
   assert.strictEqual(store.getTask(task.id).status, 'done', '过期引用不能让旧任务被重新开始');
+});
+
+test('工作记录：完成幂等、重复生成、开始事件和删除后快照保留', () => {
+  reset();
+  const task = store.createTask({ title: '记录快照测试', repeat: 'daily', due: '2026-11-12 12:00', children: ['旧数据'], project: '保留项目', estimatedMinutes: 20 });
+  store.updateTask(task.id, { status: 'doing' });
+  const result = store.completeTask(task.id);
+  store.completeTask(task.id);
+  assert.ok(result.next);
+  store.updateTask(task.id, { title: '修改后' });
+  store.deleteTask(task.id);
+  const events = Object.values(store.getWorklog()).flatMap(day => day.items).filter(item => item.taskId === task.id && item.title === '记录快照测试');
+  assert.deepStrictEqual(events.map(item => item.type), ['task_start','task_done']);
+  assert.ok(events.every(item => item.title === '记录快照测试'));
+  store.init();
+  assert.ok(Object.values(store.getWorklog()).flatMap(day => day.items).some(item => item.taskId === task.id));
+});
+test('工作记录：事务失败与撤销同时回滚任务及记录', () => {
+  const task = store.createTask({ title: '回滚工作记录' });
+  const before = store.getWorklog();
+  assert.throws(() => store.runAgentTransaction(() => { store.completeTask(task.id); throw new Error('中止'); }), /中止/);
+  assert.deepStrictEqual(store.getWorklog(), before);
+  assert.strictEqual(store.getTask(task.id).status, 'todo');
+  const tx = store.runAgentTransaction(() => store.completeTask(task.id));
+  assert.ok(store.restoreAgentTransaction(tx.transactionId).ok);
+  assert.deepStrictEqual(store.getWorklog(), before);
+});
+test('工作记录：手动补充校验、报告来源与删除边界', () => {
+  assert.throws(() => store.addWorklogNote('2026-02-30','错误日期'), /日期/);
+  assert.throws(() => store.addWorklogNote('2026-11-12',' '), /不能为空/);
+  const note = store.addWorklogNote('2026-11-12','已确认上线范围');
+  const snapshot = store.buildReportSnapshot({ period:'daily', now: new Date('2026-11-12T12:00:00') });
+  assert.ok(snapshot.sources.some(source => source.text === '已确认上线范围'));
+  store.removeWorklogNote('2026-11-12',note.id);
+  assert.throws(() => store.removeWorklogNote('2026-11-12',note.id), /不存在/);
+});
+test('捕获箱：转任务与撤销保留原备忘录字段', () => {
+  const memo = store.createMemo({ title: '捕获箱转任务', content: '正文', tags: ['记录'] });
+  const tx = store.convertMemoToTask(memo.id);
+  assert.strictEqual(tx.value.desc, '正文');
+  assert.ok(!store.getMemo(memo.id));
+  assert.ok(store.restoreAgentTransaction(tx.transactionId).ok);
+  assert.strictEqual(store.getMemo(memo.id).content, '正文');
+  assert.ok(!store.getTask(tx.value.id));
 });

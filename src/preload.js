@@ -7,6 +7,11 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('api', {
+  worklog: {
+    get: (start, end) => ipcRenderer.invoke('worklog:get', start, end),
+    addNote: (date, text) => ipcRenderer.invoke('worklog:addNote', date, text),
+    removeNote: (date, id) => ipcRenderer.invoke('worklog:removeNote', date, id)
+  },
   /* 任务 */
   tasks: {
     getAll: () => ipcRenderer.invoke('tasks:getAll'),

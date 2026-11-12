@@ -897,17 +897,46 @@ function dailyReportFileName(dayOffset) {
 }
 
 /* ---------- 视图：记录 ---------- */
-/* 阶段 3 占位：本视图在阶段 4 承载工作记录（时间线 + 日报/周报生成）。 */
-function renderRecords() {
-  const sub = $('#records-sub');
-  if (sub) sub.textContent = '工作记录即将上线';
+let recordsRequest = 0;
+async function renderRecords() {
   const body = $('#records-body');
-  if (!body) return;
-  body.innerHTML = `<div class="empty">
-    <div class="big" aria-hidden="true">${uiIcon('stat')}</div>
-    <div class="empty-title">工作记录正在路上</div>
-    <p class="empty-hint">完成任务、写备忘录时，我会自动积累工作记录；也可以直接让我「看看这周做了什么」。</p>
-  </div>`;
+  if (!body || currentView !== 'records') return;
+  const request = ++recordsRequest;
+  try {
+    const days = await window.api.worklog.get();
+    if (request !== recordsRequest || currentView !== 'records') return;
+    const now = new Date();
+    const key = date => `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}-${String(date.getDate()).padStart(2,'0')}`;
+    const today = key(now);
+    const monday = new Date(now); monday.setDate(now.getDate() - ((now.getDay()+6)%7));
+    const done = date => (days[date]?.items || []).filter(item => item.type === 'task_done').length;
+    let streak = 0; const cursor = new Date(now);
+    if (!done(key(cursor))) cursor.setDate(cursor.getDate()-1);
+    while (done(key(cursor))) { streak++; cursor.setDate(cursor.getDate()-1); }
+    const week = Object.keys(days).filter(date => date >= key(monday) && date <= today).reduce((sum,date) => sum + done(date),0);
+    const cards = [['今日完成',done(today)],['全部待办',tasks.filter(t => !t._deleted && ['todo','doing'].includes(t.status)).length],['连续完成天数',streak],['本周完成',week]];
+    $('#records-sub').textContent = '完成的事，都会留下记录';
+    body.innerHTML = `<div class="record-metrics">${cards.map(([label,count]) => `<div><strong>${count}</strong><span>${label}</span></div>`).join('')}</div>
+      <div class="record-report"><label>报告周期 <select id="record-period"><option value="daily">日报</option><option value="weekly">周报</option></select></label> <button type="button" id="record-report">生成报告</button><pre id="record-report-output" aria-live="polite"></pre></div>
+      ${[...new Set([today,...Object.keys(days)])].sort().reverse().map(date => `<section class="record-day"><h3>${date}</h3>${(days[date]?.items || []).slice().reverse().map(item => `<p><time>${new Date(item.at).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}</time> ${item.type === 'task_done' ? '完成' : item.type === 'task_start' ? '开始' : '补充'} · ${esc(item.note || item.title)} ${item.type === 'note' ? `<button type="button" data-note-date="${date}" data-note-id="${item.id}">删除补充</button>` : ''}</p>`).join('') || '<p>暂无记录</p>'}<form data-note-form="${date}"><input aria-label="${date} 补充一句" maxlength="1000" required placeholder="补充一句"><button type="submit">保存补充</button></form></section>`).join('')}`;
+    body.querySelectorAll('[data-note-form]').forEach(form => form.addEventListener('submit', async event => {
+      event.preventDefault(); const button = form.querySelector('button'); button.disabled = true;
+      try { await window.api.worklog.addNote(form.dataset.noteForm, form.querySelector('input').value); await renderRecords(); }
+      catch(error) { toast(error.message, 5000, null, 'err'); } finally { button.disabled = false; }
+    }));
+    body.querySelectorAll('[data-note-id]').forEach(button => button.addEventListener('click', () => confirmDialog('删除这条手动补充？', async () => {
+      await window.api.worklog.removeNote(button.dataset.noteDate, Number(button.dataset.noteId)); await renderRecords();
+    })));
+    $('#record-report').addEventListener('click', async event => {
+      event.target.disabled = true;
+      try { $('#record-report-output').textContent = await window.api.data.report({ period: $('#record-period').value, offset: 0 }); }
+      catch(error) { toast(error.message,5000,null,'err'); } finally { event.target.disabled = false; }
+    });
+  } catch(error) {
+    if (request !== recordsRequest) return;
+    body.innerHTML = '<p role="alert">工作记录读取失败</p><button id="record-retry" type="button">重试</button>';
+    $('#record-retry')?.addEventListener('click', renderRecords);
+  }
 }
 
 /* ---------- 清单页分区切换 ---------- */

@@ -18,6 +18,7 @@ function getDataDir() {
 }
 
 const DATA_DIR = getDataDir();
+const WORKLOG_FILE = path.join(DATA_DIR, 'worklog.json');
 const TASKS_FILE = path.join(DATA_DIR, 'tasks.json');
 const MEMOS_FILE = path.join(DATA_DIR, 'memos.json');
 const SETTINGS_FILE = path.join(DATA_DIR, 'settings.json');
@@ -101,6 +102,7 @@ function seedTasks() {
 }
 
 /* ---------- 状态 ---------- */
+let worklog = { version: 1, days: {}, seq: 0 };
 let tasks = [];
 let memos = [];
 let settings = {};
@@ -114,6 +116,8 @@ const agentTransactions = new Map();
 /* ---------- 初始化 ---------- */
 function init() {
   agentTransactions.clear();
+  const savedLog = readJson(WORKLOG_FILE, null);
+  worklog = savedLog && savedLog.days && typeof savedLog.days === 'object' ? savedLog : { version: 1, days: {}, seq: 0 };
   ensureDir(DATA_DIR);
   ensureDir(BACKUP_DIR);
 
@@ -376,6 +380,7 @@ function cloneData(value) {
 
 function captureAgentDataState() {
   return {
+    worklog: cloneData(worklog),
     tasks: cloneData(tasks),
     memos: cloneData(memos),
     seq,
@@ -384,6 +389,7 @@ function captureAgentDataState() {
 }
 
 function applyAgentDataState(snapshot) {
+  worklog = cloneData(snapshot.worklog || { version: 1, days: {}, seq: 0 });
   tasks = cloneData(snapshot.tasks);
   memos = cloneData(snapshot.memos);
   seq = snapshot.seq;
@@ -391,6 +397,7 @@ function applyAgentDataState(snapshot) {
 }
 
 function persistAgentDataState() {
+  writeJson(WORKLOG_FILE, worklog);
   writeJson(TASKS_FILE, tasks);
   writeJson(MEMOS_FILE, memos);
 }
@@ -543,6 +550,8 @@ function applyTaskPatch(t, patch) {
     // 状态变更时记录完成时间（进入 done 时打点，离开 done 时清除）
     if (patch.status === 'done' && t.status !== 'done') t.completedAt = Date.now();
     if (patch.status !== 'done' && t.status === 'done') t.completedAt = null;
+    if (patch.status === 'doing' && t.status !== 'doing') appendWorklogEvent('task_start', { taskId: t.id, title: t.title });
+    if (patch.status === 'done' && t.status !== 'done') appendWorklogEvent('task_done', { taskId: t.id, title: t.title });
     t.status = patch.status;
   }
   if (patch.completedAt !== undefined) t.completedAt = patch.completedAt || null;
@@ -608,6 +617,7 @@ function removeTaskWorkLog(taskId, logId) {
 }
 
 function updateTask(id, patch) {
+  if (!agentTransactionDepth) return runAgentTransaction(() => updateTask(id, patch)).value;
   const t = getTask(id);
   if (!t) throw new Error('任务不存在');
   applyTaskPatch(t, patch);
@@ -675,6 +685,7 @@ function emptyTrash() {
 
 /* ---------- 批量操作 ---------- */
 function batchUpdate(ids, patch) {
+  if (!agentTransactionDepth) return runAgentTransaction(() => batchUpdate(ids, patch)).value;
   const updated = [];
   ids.forEach((id) => {
     try {
@@ -686,6 +697,7 @@ function batchUpdate(ids, patch) {
 }
 
 function batchComplete(ids) {
+  if (!agentTransactionDepth) return runAgentTransaction(() => batchComplete(ids)).value;
   const results = [];
   let skipped = 0;
   const uniqueIds = [...new Set(Array.isArray(ids) ? ids : [])];
@@ -772,6 +784,7 @@ function completeTaskRecord(t) {
   if (wasDone) {
     return { task: t, next: successor && !successor._deleted ? successor : null, alreadyDone: true };
   }
+  appendWorklogEvent('task_done', { taskId: t.id, title: t.title });
   t.status = 'done';
   t.completedAt = Date.now();
   if (!successor && nextDue) {
@@ -794,6 +807,7 @@ function completeTaskRecord(t) {
 }
 
 function completeTask(id) {
+  if (!agentTransactionDepth) return runAgentTransaction(() => completeTask(id)).value;
   const t = getTask(id);
   if (!t) throw new Error('任务不存在');
   const result = completeTaskRecord(t);
@@ -802,6 +816,7 @@ function completeTask(id) {
 }
 
 function saveAndCompleteTask(id, data) {
+  if (!agentTransactionDepth) return runAgentTransaction(() => saveAndCompleteTask(id, data)).value;
   const pendingData = Object.assign({}, data, { status: 'todo' });
   let task;
   if (id == null) {
@@ -1111,6 +1126,7 @@ function exportCSV() {
 
 /* ---------- 保存 ---------- */
 function saveTasks() {
+  if (!agentTransactionDepth) writeJson(WORKLOG_FILE, worklog);
   if (agentTransactionDepth) return;
   writeJson(TASKS_FILE, tasks);
 }
@@ -1188,6 +1204,9 @@ function buildReportSnapshot(input) {
   const relevantTasks = [...new Map([...completed, ...created, ...loggedTasks, ...due, ...overdue, ...active, ...nextDue].map((task) => [task.id, task])).values()];
   const sources = [];
   const taskSourceIds = new Map();
+  Object.entries(getWorklog(localDateKey(range.start), localDateKey(new Date(range.end.getTime() - 1)))).forEach(([date, day]) => {
+    day.items.forEach(item => sources.push({ id: `event-${date}-${item.id}`, type: 'worklog', kind: item.type, title: item.title, detail: item.note || item.title, text: item.note || item.title, createdAt: item.at }));
+  });
 
   relevantTasks.forEach((task) => {
     const id = `task-${reportSourceIdPart(task.id)}`;
@@ -1590,7 +1609,44 @@ function generateDailyReport(dayOffset) {
 function generateReport(input) {
   const source = typeof input === 'string' ? { period: input } : (input || {});
   const period = source.period === 'daily' ? 'daily' : 'weekly';
-  return period === 'daily' ? generateDailyReport(source.offset) : generateWeeklyReport(source.offset);
+  return (period === 'daily' ? generateDailyReport(source.offset) : generateWeeklyReport(source.offset)) + '\n\n## 工作记录\n' + (worklogMarkdown(period, source.offset) || '暂无工作记录');
+}
+
+function validWorklogDate(date) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(date)) || localDateKey(new Date(`${date}T12:00:00`)) !== date) throw new Error('日期无效');
+  return date;
+}
+function appendWorklogEvent(type, payload, date = localDateKey()) {
+  validWorklogDate(date);
+  const item = { id: worklog.seq = (Number(worklog.seq) || 0) + 1, type, at: Date.now(), title: String(payload.title || '').slice(0, 1000) };
+  if (payload.taskId != null) item.taskId = payload.taskId;
+  if (type === 'note') item.note = String(payload.note || '').trim().slice(0, 1000);
+  if (!worklog.days[date]) worklog.days[date] = { items: [] };
+  worklog.days[date].items.push(item);
+  return item;
+}
+function getWorklog(start = '0000-00-00', end = '9999-99-99') {
+  return cloneData(Object.fromEntries(Object.entries(worklog.days).filter(([date]) => date >= start && date <= end)));
+}
+function addWorklogNote(date, text) {
+  validWorklogDate(date);
+  if (!String(text || '').trim()) throw new Error('补充内容不能为空');
+  return runAgentTransaction(() => appendWorklogEvent('note', { note: text, title: String(text).trim() }, date)).value;
+}
+function removeWorklogNote(date, id) {
+  validWorklogDate(date);
+  return runAgentTransaction(() => {
+    const day = worklog.days[date];
+    const item = day && day.items.find(item => item.id === Number(id) && item.type === 'note');
+    if (!item) throw new Error('手动记录不存在');
+    day.items = day.items.filter(entry => entry !== item);
+    return { ok: true };
+  }).value;
+}
+function worklogMarkdown(period, offset) {
+  const range = reportDateRange(period, offset);
+  const days = getWorklog(localDateKey(range.start), localDateKey(new Date(range.end.getTime() - 1)));
+  return Object.entries(days).sort().flatMap(([date, day]) => day.items.map(item => `- ${date} ${item.type === 'task_done' ? '完成' : item.type === 'task_start' ? '开始' : '补充'}：${item.note || item.title}`)).join('\n');
 }
 
 function convertMemoToTask(id) {
@@ -1604,6 +1660,7 @@ function convertMemoToTask(id) {
 }
 
 module.exports = {
+  getWorklog, addWorklogNote, removeWorklogNote, worklogMarkdown,
   convertMemoToTask,
   init,
   getDataDir,

@@ -1699,7 +1699,8 @@ test('统计与看板日历已裁剪，记录视图就位并保留报告基建',
   assert.match(html, /<section class="view" id="view-records"/);
   assert.match(html, /id="records-sub" aria-live="polite"/);
   assert.match(html, /<div class="view-body" id="records-body"><\/div>/);
-  assert.match(app, /function renderRecords\(\)[\s\S]{0,400}工作记录即将上线/);
+  assert.match(app, /async function renderRecords\(\)/);
+  assert.match(app, /window\.api\.worklog\.get\(\)/);
   // 报告基建保留：AI 报告通道与文件名助手供对话报告使用
   assert.match(preload, /report: \(input, requestId\) => ipcRenderer\.invoke\('ai:report'/);
   assert.match(main, /ipcMain\.handle\('ai:report'/);
