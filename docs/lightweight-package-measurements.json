@@ -1,0 +1,12 @@
+{
+  "baseline": {
+    "payloadBytes": 3228749,
+    "runtimeBytes": 281064857,
+    "zipBytes": 117433078
+  },
+  "current": {
+    "payloadBytes": 2945700,
+    "runtimeBytes": 281064857,
+    "zipBytes": 117368036
+  }
+}

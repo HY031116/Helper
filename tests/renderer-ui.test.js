@@ -2801,3 +2801,24 @@ test('MCP 状态刷新：同步开关与设置，过期结果不写入', async (
   await failing(`refreshMcpStatus()`);
   assert.strictEqual(statusEl.textContent, '读取 MCP 状态失败：连接断开');
 });
+
+test('记录视图运行态：数字卡、时间线、补充入口与报告失败解锁', async () => {
+  const body = { innerHTML: '', querySelectorAll: () => [] };
+  const reportButton = { addEventListener(event, handler) { this.handler = handler; } };
+  const output = { textContent: '' };
+  const run = loadRendererRuntime({
+    '#records-body': body, '#records-sub': { textContent: '' },
+    '#record-period': { value: 'daily' }, '#record-report': reportButton, '#record-report-output': output,
+    __window: { api: { worklog: { get: async () => ({ '2026-11-12': { items: [{ id:1, type:'task_done', title:'时间线快照', at:1 }, { id:2, type:'note', title:'补充测试', note:'补充测试', at:2 }] } }) }, data: { report: async () => '工作记录日报' } } }
+  });
+  await run("currentView = 'records'; renderRecords()");
+  assert.match(body.innerHTML, /今日完成/);
+  assert.match(body.innerHTML, /全部待办/);
+  assert.match(body.innerHTML, /时间线快照/);
+  assert.match(body.innerHTML, /data-note-form="2026-11-12"/);
+  assert.match(body.innerHTML, /data-note-id="2"/);
+  const target = { disabled: false };
+  await reportButton.handler({ target });
+  assert.strictEqual(output.textContent, '工作记录日报');
+  assert.strictEqual(target.disabled, false);
+});

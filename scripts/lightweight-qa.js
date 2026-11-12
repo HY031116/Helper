@@ -9,6 +9,9 @@ const output = process.env.LIGHTWEIGHT_QA_OUTPUT || fs.mkdtempSync(path.join(os.
 fs.mkdirSync(output,{recursive:true});
 process.argv.push(`--work-helper-data-dir=${path.join(output,'profile')}`);
 const root = process.env.LIGHTWEIGHT_QA_ROOT || path.resolve(__dirname,'..');
+app.commandLine.appendSwitch('disable-backgrounding-occluded-windows');
+app.commandLine.appendSwitch('disable-renderer-backgrounding');
+app.commandLine.appendSwitch('disable-background-timer-throttling');
 require(path.join(root,'src/main'));
 const pause = ms => new Promise(resolve => setTimeout(resolve,ms));
 app.whenReady().then(async () => {
@@ -22,6 +25,9 @@ app.whenReady().then(async () => {
     if(!win) throw new Error('Main window missing');
     await pause(500);
     const startupMs = Date.now()-started;
+    await pause(2000);
+    const idleMetrics = app.getAppMetrics();
+    win.show();
     const errors=[];
     win.webContents.on('console-message', (_e,level,message) => { if(level===3) errors.push(message); });
     if(!process.env.LIGHTWEIGHT_QA_BASELINE) {
@@ -39,7 +45,7 @@ app.whenReady().then(async () => {
         win.setSize(width,800);
         await win.webContents.executeJavaScript(`document.body.classList.toggle('dark',${dark});`);
         for(const view of ['today','list','records','settings']) {
-          await win.webContents.executeJavaScript(`switchView('${view}');`); await pause(150);
+          await win.webContents.executeJavaScript(`switchView('${view}');`); await pause(500);
           fs.writeFileSync(path.join(output,`${dark?'dark':'light'}-${width}-${view}.png`),(await win.webContents.capturePage()).toPNG());
         }
       }
@@ -49,7 +55,7 @@ app.whenReady().then(async () => {
       if(!reduced) throw new Error('Reduced motion emulation failed');
     }
     await pause(2000);
-    const result={startupMs, windowCount:BrowserWindow.getAllWindows().length, metrics:app.getAppMetrics(), errors, output};
+    const result={startupMs, windowCount:BrowserWindow.getAllWindows().length, metrics:idleMetrics, errors, output};
     fs.writeFileSync(path.join(output,'result.json'),JSON.stringify(result,null,2));
     app.exit(errors.length?1:0);
   } catch(error) { fs.writeFileSync(path.join(output,'error.txt'),error.stack); app.exit(1); }

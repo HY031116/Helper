@@ -4583,3 +4583,12 @@ test('捕获箱：转任务与撤销保留原备忘录字段', () => {
   assert.strictEqual(store.getMemo(memo.id).content, '正文');
   assert.ok(!store.getTask(tx.value.id));
 });
+
+test('工作记录：备份恢复兼容旧格式，当前备份包含时间线', () => {
+  const note = store.addWorklogNote('2026-11-12','备份时间线测试');
+  const file = store.backup();
+  assert.ok(JSON.parse(fs.readFileSync(file,'utf8')).worklog);
+  store.removeWorklogNote('2026-11-12',note.id);
+  store.restoreFromBackup(file);
+  assert.ok(store.getWorklog('2026-11-12','2026-11-12')['2026-11-12'].items.some(item => item.id === note.id));
+});

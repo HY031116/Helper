@@ -118,6 +118,8 @@ function init() {
   agentTransactions.clear();
   const savedLog = readJson(WORKLOG_FILE, null);
   worklog = savedLog && savedLog.days && typeof savedLog.days === 'object' ? savedLog : { version: 1, days: {}, seq: 0 };
+  worklog.days = Object.fromEntries(Object.entries(worklog.days).filter(([date, day]) => /^\d{4}-\d{2}-\d{2}$/.test(date) && day && Array.isArray(day.items)));
+  worklog.seq = Object.values(worklog.days).reduce((max, day) => day.items.reduce((value, item) => Math.max(value, Number(item.id) || 0), max), Number(worklog.seq) || 0);
   ensureDir(DATA_DIR);
   ensureDir(BACKUP_DIR);
 
@@ -1031,7 +1033,7 @@ function clearAgentState() {
 
 /* ---------- 备份 ---------- */
 function getBackupPayload() {
-  return { version: 5, tasks, memos, agentState };
+  return { version: 5, tasks, memos, agentState, worklog };
 }
 
 function backup() {
@@ -1078,6 +1080,11 @@ function restoreFromBackup(filePath) {
     workLogs: normalizeWorkLogs(t.workLogs),
     updatedAt: Number(t.updatedAt) || Number(t.createdAt) || Date.now()
   }));
+  if (data.worklog && data.worklog.days && typeof data.worklog.days === 'object') {
+    worklog = cloneData(data.worklog);
+    worklog.days = Object.fromEntries(Object.entries(worklog.days).filter(([date, day]) => /^\d{4}-\d{2}-\d{2}$/.test(date) && day && Array.isArray(day.items)));
+    worklog.seq = Object.values(worklog.days).reduce((max, day) => day.items.reduce((value, item) => Math.max(value, Number(item.id) || 0), max), Number(worklog.seq) || 0);
+  }
   // 重新计算最大 id
   seq = 100;
   tasks.forEach((t) => { if (t.id > seq) seq = t.id; });

@@ -3704,10 +3704,9 @@ async function refreshTasksAfterMutation(message) {
 }
 
 function renderAll() {
-  renderToday();
-  renderTasks();
-  renderMemos();
-  renderRecords();
+  if (currentView === 'today') renderToday();
+  if (currentView === 'list') { renderTasks(); renderMemos(); }
+  if (currentView === 'records') renderRecords();
   renderNavBadges();
   if (currentView === 'settings') {
     renderSettings();
