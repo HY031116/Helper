@@ -35,6 +35,7 @@ contextBridge.exposeInMainWorld('api', {
   },
   /* 备忘录 */
   memos: {
+    convert: (id) => ipcRenderer.invoke('memos:convert', id),
     getAll: () => ipcRenderer.invoke('memos:getAll'),
     create: (data) => ipcRenderer.invoke('memos:create', data),
     update: (id, patch) => ipcRenderer.invoke('memos:update', id, patch),
@@ -46,7 +47,7 @@ contextBridge.exposeInMainWorld('api', {
     restore: (id) => ipcRenderer.invoke('memos:restore', id),
     purge: (id) => ipcRenderer.invoke('memos:purge', id),
     emptyTrash: () => ipcRenderer.invoke('memos:emptyTrash'),
-    import: (list) => ipcRenderer.invoke('memos:import', list)
+
   },
   /* 设置 */
   settings: {

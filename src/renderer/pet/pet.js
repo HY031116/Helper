@@ -384,14 +384,12 @@ petMenu.addEventListener('click', async (e) => {
     new: '新建任务',
     ai: '工作台助手',
     today: '今日视图',
-    board: '看板',
-    cal: '日历',
-    stat: '统计',
-    trash: '回收站',
+    list: '清单',
+    records: '记录',
     settings: '设置'
   };
   // 联动主窗口：唤起对应视图
-  const viewMap = { new: 'new', ai: 'ai', today: 'today', board: 'board', cal: 'cal', stat: 'stat', trash: 'trash', settings: 'settings' };
+  const viewMap = { new: 'new', ai: 'ai', today: 'today', list: 'list', records: 'records', settings: 'settings' };
   await openPetDestination(it, viewMap[it.dataset.pet] || 'today', map[it.dataset.pet]);
 });
 

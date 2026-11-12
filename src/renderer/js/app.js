@@ -2,7 +2,7 @@
 
 /* ============================================================
  * 渲染进程主逻辑 - 工作台助手
- * 视图：今日 / 所有任务 / 备忘录 / 看板 / 日历 / 统计 / 设置
+ * 视图：今天 / 清单（任务+备忘录）/ 记录 / 设置
  * 右侧：AI 助手面板
  * ============================================================ */
 
@@ -13,25 +13,11 @@ let settings = {};
 let mcpStatus = null;
 let currentView = 'today';
 const viewScrollPositions = new Map();
-let currentFilter = 'all';
-let advancedFiltersOpen = false;
+let listTab = 'tasks'; // 清单页内部分区：tasks | memos
 let currentSearch = '';
 let editingTask = null; // 正在编辑的任务（null = 新建）
-let calCursor = new Date();
-calCursor.setDate(1);
-let calSelected = null;
-let calFocusDate = null;
-let statInited = false;
-let selectedIds = new Set(); // 批量选择
-let batchMode = false;
-let batchBusy = false;
-let batchBusyMessage = '';
-let batchBusyControl = null;
-let visibleTaskIds = [];
 let taskReorderBusy = false;
-let boardMutationBusy = false;
-let boardDragState = null;
-let expandedIds = new Set(); // 展开的子任务
+let expandedIds = new Set(); // 展开的任务详情
 let trashList = []; // 回收站列表
 let deletedMemos = [];
 let selectedMemoId = null;
@@ -50,13 +36,6 @@ let memoActionLabel = '';
 const MEMO_DRAFT_ID = -1;
 let memoDraftMemo = null;
 let memoFilter = 'all';
-let memoBatchMode = false;
-let memoSelectedIds = new Set();
-let memoBatchBusy = false;
-let reportPeriod = 'weekly';
-let reportWeek = 0; // 周报选择的周（0=本周, -1=上周, 1=下周）
-let reportDay = 0; // 日报选择的日（0=今天, -1=昨天, 1=明天）
-let reportActionBusy = false;
 let quickParseTimer = null;
 let quickParseToken = 0;
 let quickParseCache = { raw: '', parsed: null };
@@ -119,13 +98,11 @@ function loadErrorHtml(source, compact) {
 
 function applyDataLoadStates() {
   if (dataLoadErrors.tasks) {
-    ['today-list', 'tasks-list', 'board-cols', 'cal-body', 'stat-body'].forEach((id) => {
+    ['today-list', 'tasks-list'].forEach((id) => {
       const target = document.getElementById(id);
       if (target) target.innerHTML = loadErrorHtml('tasks');
     });
     $('#today-sub').textContent = '任务数据暂时不可用';
-    $('#tasks-sub').textContent = '任务数据暂时不可用';
-    $('#cal-sub').textContent = '任务数据暂时不可用';
   }
   const memoError = $('#memo-load-error');
   if (memoError) {
@@ -135,7 +112,6 @@ function applyDataLoadStates() {
       $('#memo-empty').classList.add('hidden');
       $('#memo-editor').classList.add('hidden');
       $('#memo-list').innerHTML = '<div class="memo-list-empty">备忘录暂时不可用</div>';
-      $('#memos-sub').textContent = '读取失败';
     }
   }
 }
@@ -194,11 +170,6 @@ function renderStartupError(error) {
 const PRI_NAME = { 4: '紧急', 3: '高', 2: '中', 1: '低' };
 const STATE_NAME = { todo: '待办', doing: '进行中', done: '已完成', archived: '已归档' };
 const STATE_NEXT = { todo: 'doing', doing: 'done', done: 'todo' };
-const BOARD_COLUMNS = [
-  { k: 'todo', name: '待办' },
-  { k: 'doing', name: '进行中' },
-  { k: 'done', name: '已完成' }
-];
 
 function isOverdue(due, status) {
   if (!due || status === 'done' || status === 'archived') return false;
@@ -534,36 +505,14 @@ function bindPressedGroupKeyboard(group, selector) {
 }
 
 /* ---------- 任务行渲染 ---------- */
-function childProgress(t) {
-  if (!t.children || !t.children.length) return null;
-  const total = t.children.length;
-  const done = t.children.filter((c) => c && typeof c === 'object' && c.done).length;
-  return { done, total };
-}
-
-function childLabel(c) {
-  if (typeof c === 'string') return { title: c, done: false, id: null };
-  return { title: (c && c.title) || '', done: !!(c && c.done), id: (c && c.id) || null };
-}
-
 function rowHTML(t) {
   const sub = [];
-  const cp = childProgress(t);
-  if (cp) {
-    sub.push(`子任务 ${cp.done}/${cp.total}`);
-  }
   if (t.desc) sub.push(esc(t.desc));
-  if (t.tags && t.tags.length) sub.push(t.tags.map((x) => `<span class="tag-chip">#${esc(x)}</span>`).join(' '));
-  if (t.project) sub.push(`<span class="proj-chip">${uiIcon('folder')}<span>${esc(t.project)}</span></span>`);
   const dueHtml = t.due
     ? `<span class="tdue${isOverdue(t.due, t.status) ? ' over' : ''}" title="${esc(t.due)}">${esc(relDue(t.due))}</span>`
     : '';
-  const isSelected = selectedIds.has(t.id);
-  const checked = batchMode ? isSelected : t.status === 'done';
+  const checked = t.status === 'done';
   const checkIcon = checked ? uiIcon('check') : '';
-  const selected = isSelected ? ' sel' : '';
-  const hasChildren = t.children && t.children.length;
-  const expanded = expandedIds.has(t.id);
   const repeatTag = t.repeat ? `<span class="repeat-chip">${uiIcon('refresh')}<span>${t.repeat === 'daily' ? '每天' : t.repeat === 'weekly' ? '每周' : '每月'}</span></span>` : '';
   // 完成时间
   const doneTime = t.status === 'done' && t.completedAt
@@ -597,34 +546,20 @@ function rowHTML(t) {
   const detailOpen = expandedIds.has('d' + t.id);
   const detailHtml = detailOpen ? `<div class="task-detail">
     ${t.desc ? `<div class="td-row"><span class="td-label">描述</span><span class="td-val">${esc(t.desc)}</span></div>` : ''}
-    ${t.project ? `<div class="td-row"><span class="td-label">项目</span><span class="td-val td-project">${uiIcon('folder')}<span>${esc(t.project)}</span></span></div>` : ''}
-    ${t.tags && t.tags.length ? `<div class="td-row"><span class="td-label">标签</span><span class="td-val">${t.tags.map((x) => `<span class="tag-chip">#${esc(x)}</span>`).join(' ')}</span></div>` : ''}
     ${t.repeat ? `<div class="td-row"><span class="td-label">重复</span><span class="td-val">${t.repeat === 'daily' ? '每天' : t.repeat === 'weekly' ? '每周' : '每月'}</span></div>` : ''}
     ${t.remind ? `<div class="td-row"><span class="td-label">提醒</span><span class="td-val">提前 ${t.remind} 分钟</span></div>` : ''}
-    ${t.estimatedMinutes ? `<div class="td-row"><span class="td-label">预计</span><span class="td-val">${t.estimatedMinutes} 分钟</span></div>` : ''}
     <div class="td-row"><span class="td-label">创建</span><span class="td-val">${fmtTime(t.createdAt)}</span></div>
     ${t.status === 'done' && t.completedAt ? `<div class="td-row"><span class="td-label">完成</span><span class="td-val">${fmtTime(t.completedAt)}</span></div>` : ''}
   </div>` : '';
-  const checkLabel = batchMode
-    ? `${isSelected ? '取消选择' : '选择'}任务「${t.title}」`
-    : (t.status === 'done' ? '重新打开' : '完成任务');
-  return `<div class="task-row${t.status === 'done' ? ' done' : ''}${t.status === 'archived' ? ' archived' : ''}${batchMode ? ' selecting' : ''}${selected}${overdueCls}" data-id="${t.id}" draggable="${!batchMode}">
-    <button type="button" class="task-check" title="${esc(checkLabel)}" aria-label="${esc(checkLabel)}" aria-pressed="${batchMode ? isSelected : t.status === 'done'}">${checkIcon}</button>
-    <button type="button" class="pri-dot p${t.pri}" title="点击切换优先级（当前：${PRI_NAME[t.pri]}）" aria-label="当前${PRI_NAME[t.pri]}优先级，点击切换" data-pri-toggle${batchMode ? ' tabindex="-1"' : ''}>${PRI_NAME[t.pri]}</button>
-    ${hasChildren ? `<button type="button" class="task-expand${expanded ? ' open' : ''}" title="${expanded ? '收起' : '展开'}子任务" aria-label="${expanded ? '收起' : '展开'}子任务" aria-expanded="${expanded}"${batchMode ? ' tabindex="-1"' : ''}>${uiIcon('chevron-right')}</button>` : ''}
-    <div class="task-main"${batchMode ? ' inert' : ''}>
+  const checkLabel = t.status === 'done' ? '重新打开' : '完成任务';
+  return `<div class="task-row${t.status === 'done' ? ' done' : ''}${t.status === 'archived' ? ' archived' : ''}${overdueCls}" data-id="${t.id}" draggable="true">
+    <button type="button" class="task-check" title="${esc(checkLabel)}" aria-label="${esc(checkLabel)}" aria-pressed="${checked}">${checkIcon}</button>
+    <div class="task-main">
       <button type="button" class="tname task-title-btn" aria-expanded="${detailOpen}" aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown">${titleHtml}</button>
       ${sub.length ? `<div class="tsub">${sub.join(' · ')}</div>` : ''}
-      ${hasChildren && expanded ? `<div class="child-list">${t.children.map((c) => {
-        const x = childLabel(c);
-        return `<button type="button" class="child-item${x.done ? ' done' : ''}" data-child-id="${x.id}" data-parent-id="${t.id}" aria-pressed="${x.done}">
-          <span class="child-check" aria-hidden="true">${x.done ? uiIcon('check') : ''}</span>
-          <span class="child-title">${esc(x.title)}</span>
-        </button>`;
-      }).join('')}</div>` : ''}
       ${detailHtml}
     </div>
-    <div class="task-meta"${batchMode ? ' inert' : ''}>
+    <div class="task-meta">
       ${repeatTag}
       ${dueHtml}
       ${doneTime}
@@ -766,40 +701,18 @@ function renderList(container, list) {
       });
       return;
     }
-    if (currentFilter.startsWith('proj:') || currentFilter.startsWith('tag:')) {
-      const label = currentFilter.startsWith('proj:') ? currentFilter.slice(5) : `#${currentFilter.slice(4)}`;
-      container.innerHTML = `<div class="empty">
-        <div class="big" aria-hidden="true">${uiIcon(currentFilter.startsWith('proj:') ? 'folder' : 'search')}</div>
-        <div class="empty-title">“${esc(label)}”下没有任务</div>
-        <p class="empty-hint">清除当前筛选后可以查看其他任务。</p>
-        <button type="button" class="btn mini ghost empty-cta" id="empty-clear-filter">清除筛选</button>
-      </div>`;
-      container.querySelector('#empty-clear-filter').addEventListener('click', () => {
-        currentFilter = 'all';
-        renderTasks();
-        $('#smart-filters .fchip[data-filter="all"]')?.focus({ preventScroll: true });
-      });
-      return;
-    }
     // 空状态 = 指引时刻：说明现状 + 给出下一步动作
-    const emptyStates = {
-      today: { ico: 'today', title: '今天没有到期任务', hint: '可以继续当前工作，或安排下一件要紧事。' },
-      all: { ico: 'plus', title: '还没有任务', hint: '在快速添加框输入一句话，或让助手记下第一件事。' },
-      active: { ico: 'circle-check', title: '没有未完成的任务', hint: '当前待办已经处理完。' },
-      done: { ico: 'circle-check', title: '还没有已完成的任务', hint: '完成的任务会集中显示在这里。' },
-      archived: { ico: 'archive', title: '没有已归档的任务', hint: '暂时收起的任务会保存在这里。' },
-      nodate: { ico: 'calendar', title: '所有任务都设了截止日期', hint: '当前没有遗漏截止时间的任务。' },
-      overdue: { ico: 'circle-check', title: '没有过期任务', hint: '当前任务都在计划内。' },
-      week: { ico: 'calendar', title: '本周没有新任务', hint: '可以继续处理已有事项。' }
+    const st = {
+      ico: 'plus',
+      title: '还没有任务',
+      hint: '在快速添加框输入一句话，或让助手记下第一件事。',
+      showBtn: true
     };
-    const key = currentFilter.startsWith('proj:') || currentFilter.startsWith('tag:') ? 'all' : currentFilter;
-    const st = emptyStates[key] || emptyStates.all;
-    const showBtn = currentFilter === 'all' || currentFilter.startsWith('proj:') || currentFilter.startsWith('tag:');
     container.innerHTML = `<div class="empty">
       <div class="big" aria-hidden="true">${uiIcon(st.ico)}</div>
       <div class="empty-title">${st.title}</div>
       <p class="empty-hint">${st.hint}</p>
-      ${showBtn ? '<button type="button" class="btn mini empty-cta" id="empty-new-task">新建任务</button>' : ''}
+      ${st.showBtn ? '<button type="button" class="btn mini empty-cta" id="empty-new-task">新建任务</button>' : ''}
     </div>`;
     const cta = container.querySelector('#empty-new-task');
     if (cta) cta.addEventListener('click', () => openModal(null));
@@ -847,12 +760,15 @@ function renderToday() {
     </div>`;
   }
   $('#today-list').innerHTML = html;
-  $('#today-empty-all')?.addEventListener('click', () => switchView('tasks'));
+  $('#today-empty-all')?.addEventListener('click', () => {
+    switchView('list');
+    setListTab('tasks');
+  });
   $('#today-empty-new')?.addEventListener('click', () => openModal(null));
   $('#today-sub').textContent = `${overdue.length} 过期 · ${todays.length} 今天 · 今日完成 ${doneToday.length}`;
 }
 
-/* ---------- 视图：所有任务 ---------- */
+/* ---------- 视图：清单（任务） ---------- */
 function renderTasks() {
   let list = tasks.filter((t) => !t._deleted);
   // 搜索：标题/描述/标签/项目关键词
@@ -865,95 +781,20 @@ function renderTasks() {
       (t.project || '').toLowerCase().includes(q)
     );
   }
-  if (currentFilter === 'today') list = list.filter((t) => isToday(t.due));
-  else if (currentFilter !== 'all') list = list.filter((t) => taskMatchesFilter(t));
   // 排序：手动 order 优先，其次按状态/优先级
   list.sort((a, b) => {
     if (a.status === 'archived' && b.status !== 'archived') return 1;
     if (a.status !== 'archived' && b.status === 'archived') return -1;
     if (a.status === 'done' && b.status !== 'done') return 1;
     if (a.status !== 'done' && b.status === 'done') return -1;
-    if (currentFilter === 'all' || currentFilter === 'active') {
-      return compareTaskOrder(a, b);
-    }
-    return b.pri - a.pri;
+    return compareTaskOrder(a, b);
   });
-  visibleTaskIds = list.map((t) => t.id);
-  const visibleSet = new Set(visibleTaskIds);
-  selectedIds = new Set([...selectedIds].filter((id) => visibleSet.has(id)));
   renderList($('#tasks-list'), list);
   const done = tasks.filter((t) => !t._deleted && t.status === 'done').length;
   const total = tasks.filter((t) => !t._deleted && t.status !== 'archived').length;
-  $('#tasks-sub').textContent = `显示 ${list.length} · 完成 ${done} / ${total}${currentSearch ? ' · 搜索：' + currentSearch : ''}`;
-  renderBatchBar();
-  renderSmartFilters();
-}
-
-/* ---------- 智能筛选条 ---------- */
-function renderSmartFilters() {
-  const wrap = $('#smart-filters');
-  if (!wrap) return;
-  const smart = [
-    { k: 'all', n: '全部' },
-    { k: 'active', n: '未完成' },
-    { k: 'today', n: '今天' },
-    { k: 'overdue', n: '已过期' },
-    { k: 'week', n: '本周' },
-    { k: 'nodate', n: '无日期' },
-    { k: 'done', n: '已完成' },
-    { k: 'archived', n: '已归档' }
-  ];
-  // 项目列表
-  const projs = [...new Set(tasks.filter((t) => !t._deleted && t.project).map((t) => t.project))].slice(0, 8);
-  // 标签列表
-  const tagSet = new Set();
-  tasks.filter((t) => !t._deleted).forEach((t) => (t.tags || []).forEach((x) => tagSet.add(x)));
-  const tags = [...tagSet].slice(0, 8);
-  const advancedCount = projs.length + tags.length;
-  const advancedSelected = currentFilter.startsWith('proj:') || currentFilter.startsWith('tag:');
-  const advancedLabel = currentFilter.startsWith('proj:')
-    ? currentFilter.slice(5)
-    : currentFilter.startsWith('tag:')
-      ? `#${currentFilter.slice(4)}`
-      : `更多筛选 ${advancedCount}`;
-
-  let html = `<div class="smart-row">
-    ${smart.map((s) => `<button type="button" class="fchip ${currentFilter === s.k ? 'active' : ''}" aria-pressed="${currentFilter === s.k}" data-filter="${s.k}">${s.n}</button>`).join('')}
-    ${advancedCount ? `<button type="button" class="fchip smart-more ${advancedSelected && !advancedFiltersOpen ? 'active' : ''}" id="smart-more" aria-expanded="${advancedFiltersOpen}" aria-controls="smart-advanced" aria-label="${advancedFiltersOpen ? '收起' : '展开'}项目和标签筛选"><span class="smart-more-label">${currentFilter.startsWith('proj:') ? uiIcon('folder') : ''}<span>${esc(advancedLabel)}</span></span>${uiIcon(advancedFiltersOpen ? 'chevron-up' : 'chevron-down')}</button>` : ''}
-  </div>`;
-  if (advancedCount) html += `<div class="smart-advanced ${advancedFiltersOpen ? '' : 'hidden'}" id="smart-advanced" role="group" aria-label="项目和标签筛选">`;
-  if (advancedCount && projs.length) {
-    html += `<div class="smart-row smart-sub">
-      <span class="smart-label">项目</span>
-      ${projs.map((p) => `<button type="button" class="fchip has-icon ${currentFilter === 'proj:' + p ? 'active' : ''}" aria-pressed="${currentFilter === 'proj:' + p}" data-filter="proj:${esc(p)}">${uiIcon('folder')}<span>${esc(p)}</span></button>`).join('')}
-    </div>`;
+  if (listTab === 'tasks') {
+    $('#list-sub').textContent = `显示 ${list.length} · 完成 ${done} / ${total}${currentSearch ? ' · 搜索：' + currentSearch : ''}`;
   }
-  if (advancedCount && tags.length) {
-    html += `<div class="smart-row smart-sub">
-      <span class="smart-label">标签</span>
-      ${tags.map((t) => `<button type="button" class="fchip ${currentFilter === 'tag:' + t ? 'active' : ''}" aria-pressed="${currentFilter === 'tag:' + t}" data-filter="tag:${esc(t)}">#${esc(t)}</button>`).join('')}
-    </div>`;
-  }
-  if (advancedCount) html += '</div>';
-  wrap.innerHTML = html;
-  const more = $('#smart-more');
-  if (more) {
-    more.addEventListener('click', () => {
-      advancedFiltersOpen = !advancedFiltersOpen;
-      renderSmartFilters();
-      $('#smart-more').focus();
-    });
-  }
-  // 绑定事件
-  $$('#smart-filters .fchip[data-filter]').forEach((c) => {
-    c.addEventListener('click', () => {
-      currentFilter = c.dataset.filter;
-      renderTasks();
-      const active = $$('#smart-filters .fchip').find((x) => x.dataset.filter === currentFilter);
-      if (active) active.focus();
-    });
-  });
-  bindPressedGroupKeyboard(wrap, '.fchip[data-filter]');
 }
 
 function compareTaskOrder(a, b) {
@@ -964,174 +805,6 @@ function compareTaskOrder(a, b) {
   return (Number(a.createdAt) || 0) - (Number(b.createdAt) || 0);
 }
 
-/* ---------- 批量操作栏 ---------- */
-function renderBatchBar() {
-  const bar = $('#batch-bar');
-  if (!bar) return;
-  if (!batchMode) {
-    bar.classList.add('hidden');
-    return;
-  }
-  bar.classList.remove('hidden');
-  if (bar.setAttribute) bar.setAttribute('aria-busy', String(batchBusy));
-  const count = selectedIds.size;
-  const completableCount = tasks.filter((t) => selectedIds.has(t.id) && t.status !== 'done' && t.status !== 'archived').length;
-  $('#batch-count').textContent = batchBusy ? batchBusyMessage : (count ? `已选 ${count} 项` : '请选择任务');
-  const doneButton = $('#batch-done');
-  doneButton.disabled = batchBusy || completableCount === 0;
-  doneButton.innerHTML = `${uiIcon('check')}<span>${completableCount ? `完成 ${completableCount} 项` : '完成'}</span>`;
-  doneButton.title = count > completableCount ? '已完成或已归档任务将自动跳过' : '';
-  $('#batch-pri').disabled = batchBusy || count === 0;
-  $('#batch-delete').disabled = batchBusy || count === 0;
-  $('#batch-clear').disabled = batchBusy;
-  const selectAll = $('#batch-select-all');
-  const allSelected = visibleTaskIds.length > 0 && visibleTaskIds.every((id) => selectedIds.has(id));
-  selectAll.disabled = batchBusy || visibleTaskIds.length === 0;
-  selectAll.textContent = allSelected ? '取消全选' : '全选当前';
-}
-
-function setBatchBusy(busy, message, control) {
-  if (batchBusyControl && batchBusyControl.setAttribute) batchBusyControl.setAttribute('aria-busy', 'false');
-  batchBusy = busy;
-  batchBusyMessage = busy ? message : '';
-  batchBusyControl = busy ? control : null;
-  if (batchBusyControl && batchBusyControl.setAttribute) batchBusyControl.setAttribute('aria-busy', 'true');
-  renderBatchBar();
-}
-
-async function runBatchMutation(options) {
-  const ids = options.ids;
-  if (batchBusy || !ids.length) return false;
-  setBatchBusy(true, options.busyMessage, options.control);
-  try {
-    const result = await options.action(ids);
-    setBatchMode(false, false);
-    toast(typeof options.successMessage === 'function' ? options.successMessage(result) : options.successMessage, 3500, null, 'ok');
-    await refreshTasksAfterMutation(options.refreshFailureMessage);
-    return true;
-  } catch (error) {
-    console.error('[batch] operation failed:', error);
-    if (options.rethrow) throw error;
-    toast('批量操作失败，当前选择已保留，请重试', 4000, null, 'err');
-    return false;
-  } finally {
-    setBatchBusy(false, '', null);
-  }
-}
-
-function setBatchMode(enabled, shouldRender = true) {
-  batchMode = enabled;
-  selectedIds.clear();
-  $('#view-tasks')?.classList.toggle('batch-mode', enabled);
-  const trigger = $('#btn-select-mode');
-  if (trigger) {
-    trigger.setAttribute('aria-pressed', String(enabled));
-    trigger.textContent = '批量操作';
-    trigger.classList.toggle('hidden', enabled);
-  }
-  if (shouldRender) renderTasks();
-}
-
-/* ---------- 视图：看板 ---------- */
-function renderBoard() {
-  const cols = BOARD_COLUMNS;
-  const boardTasks = tasks.filter((t) => !t._deleted && t.status !== 'archived');
-  const grouped = Object.fromEntries(cols.map((col) => [
-    col.k,
-    boardTasks.filter((task) => task.status === col.k).sort(compareTaskOrder)
-  ]));
-  $('#board-sub').textContent = cols.map((col) => `${col.name} ${grouped[col.k].length}`).join(' · ');
-  let html = '<div class="board-cols">';
-  cols.forEach((col) => {
-    const cards = grouped[col.k];
-    const colId = `board-col-${col.k}`;
-    html += `<section class="board-col" data-col="${col.k}" aria-labelledby="${colId}">
-      <h3 class="bc-head" id="${colId}">${col.name} <span class="n">${cards.length}</span></h3>
-      <div class="bc-cards${cards.length ? '' : ' is-empty'}" ${cards.length ? `role="list" aria-label="${col.name}任务"` : ''}>
-        ${cards.map((t) => `
-          <div class="bc-card-item" role="listitem" data-id="${t.id}">
-            <button type="button" class="bc-card" draggable="true" data-id="${t.id}" title="编辑任务" aria-label="编辑任务：${esc(t.title)}" aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown">
-              <span class="cb"><span class="nm">${esc(t.title)}</span><span class="pri-dot p${t.pri}" aria-label="优先级：${PRI_NAME[t.pri]}">${PRI_NAME[t.pri]}</span></span>
-              ${t.due ? `<span class="cd${isOverdue(t.due, t.status) ? ' over' : ''}">${esc(t.due)}</span>` : ''}
-              ${t.tags && t.tags.length ? `<span class="cd">${t.tags.map((x) => '#' + esc(x)).join(' ')}</span>` : ''}
-              ${t.children && t.children.length ? `<span class="cd">子任务 ${childProgress(t).done}/${t.children.length}</span>` : ''}
-            </button>
-            <div class="bc-card-foot">
-              <select class="bc-status" data-board-status data-id="${t.id}" aria-label="移动任务「${esc(t.title)}」到其他状态">
-                ${cols.map((target) => `<option value="${target.k}" ${target.k === t.status ? 'selected' : ''}>${target.name}</option>`).join('')}
-              </select>
-            </div>
-          </div>`).join('')}
-        ${cards.length ? '' : `<div class="board-empty"><span role="status">暂无${col.name}任务</span>${!boardTasks.length && col.k === 'todo' ? '<button type="button" class="btn mini" id="board-new-task">新建任务</button>' : ''}</div>`}
-      </div>
-    </section>`;
-  });
-  html += '</div>';
-  $('#board-cols').innerHTML = html;
-  $('#board-new-task')?.addEventListener('click', () => openModal(null));
-}
-
-function setBoardBusyState(busy, activeControl) {
-  const board = $('#board-cols');
-  if (!board) return;
-  board.setAttribute('aria-busy', String(busy));
-  const controls = Array.from(board.querySelectorAll?.('.bc-card, .bc-status, #board-new-task') || []);
-  if (activeControl && !controls.includes(activeControl)) controls.push(activeControl);
-  controls.forEach((control) => {
-    control.disabled = busy;
-    if (control.matches?.('.bc-card')) control.draggable = !busy;
-    control.setAttribute?.('aria-busy', String(busy && control === activeControl));
-  });
-}
-
-function clearBoardDropFeedback() {
-  $$('#board-cols .board-col').forEach((column) => column.classList.remove('col-drop'));
-  $$('#board-cols .bc-card-item').forEach((item) => item.classList.remove('drop-before', 'drop-after'));
-}
-
-function showBoardDropFeedback(column, targetCard, before) {
-  clearBoardDropFeedback();
-  if (!column) return;
-  column.classList.add('col-drop');
-  if (!boardDragState || boardDragState.status !== column.dataset.col || !targetCard) return;
-  if (String(targetCard.dataset.id) === String(boardDragState.id)) return;
-  targetCard.closest('.bc-card-item')?.classList.add(before ? 'drop-before' : 'drop-after');
-}
-
-async function moveBoardTask(id, targetStatus, trigger) {
-  const task = tasks.find((item) => item.id === parseInt(id, 10));
-  if (!task || !BOARD_COLUMNS.some((column) => column.k === targetStatus)) return false;
-  if (task.status === targetStatus) return true;
-  if (boardMutationBusy) {
-    if (trigger) trigger.value = task.status;
-    return false;
-  }
-  boardMutationBusy = true;
-  setBoardBusyState(true, trigger);
-  try {
-    if (targetStatus === 'done') {
-      await toggleDone(task);
-    } else {
-      await window.api.tasks.update(task.id, { status: targetStatus });
-      toast(`「${task.title}」已移至「${STATE_NAME[targetStatus]}」`);
-      await refreshTasksAfterMutation('任务状态已更新，但看板刷新失败');
-    }
-    if (trigger) {
-      const nextTrigger = document.querySelector(`#board-cols [data-board-status][data-id="${task.id}"]`);
-      if (nextTrigger) nextTrigger.focus();
-    }
-    return true;
-  } catch (error) {
-    console.error('[board] task move failed:', error);
-    if (trigger) trigger.value = task.status;
-    toast('移动任务失败，请稍后重试', 3000, null, 'err');
-    return false;
-  } finally {
-    boardMutationBusy = false;
-    setBoardBusyState(false, trigger);
-  }
-}
-
 function reorderedTaskId(item) {
   if (!item) return null;
   const value = item.dataset?.id || item.querySelector?.('[data-id]')?.dataset.id;
@@ -1139,34 +812,29 @@ function reorderedTaskId(item) {
   return Number.isFinite(id) ? id : null;
 }
 
-function focusReorderedTask(scope, taskId) {
+function focusReorderedTask(taskId) {
   if (!Number.isFinite(taskId)) return false;
-  const selector = scope === 'board'
-    ? `#board-cols .bc-card[data-id="${taskId}"]`
-    : `#tasks-list .task-row[data-id="${taskId}"] .task-title-btn`;
-  const target = document.querySelector(selector);
+  const target = document.querySelector(`#tasks-list .task-row[data-id="${taskId}"] .task-title-btn`);
   if (!target) return false;
   target.focus({ preventScroll: true });
   return true;
 }
 
-async function commitTaskOrder(order, item, surface, scope, successMessage, refreshFailureMessage) {
-  const isBoard = scope === 'board';
-  if (isBoard ? boardMutationBusy : taskReorderBusy) return false;
-  if (isBoard) boardMutationBusy = true;
-  else taskReorderBusy = true;
+async function commitTaskOrder(order, item, successMessage, refreshFailureMessage) {
+  if (taskReorderBusy) return false;
+  taskReorderBusy = true;
   const taskId = reorderedTaskId(item);
-  if (isBoard) setBoardBusyState(true);
-  else if (surface) surface.setAttribute('aria-busy', 'true');
+  const surface = $('#tasks-list');
+  if (surface) surface.setAttribute('aria-busy', 'true');
   if (item) item.classList.add('reorder-commit');
   try {
     await window.api.tasks.reorder(order);
     toast(successMessage, 2500, null, 'ok');
     await refreshTasksAfterMutation(refreshFailureMessage);
-    focusReorderedTask(scope, taskId);
+    focusReorderedTask(taskId);
     return true;
   } catch (error) {
-    console.error(`[${scope}] task reorder failed:`, error);
+    console.error('[tasks] task reorder failed:', error);
     if (item) {
       item.classList.remove('reorder-commit');
       playTransientClass(item, 'reorder-error', MOTION_MS.slow);
@@ -1175,23 +843,16 @@ async function commitTaskOrder(order, item, surface, scope, successMessage, refr
     return false;
   } finally {
     if (item) item.classList.remove('reorder-commit');
-    if (isBoard) boardMutationBusy = false;
-    else taskReorderBusy = false;
-    if (isBoard) setBoardBusyState(false);
-    else if (surface) surface.setAttribute('aria-busy', 'false');
+    taskReorderBusy = false;
+    if (surface) surface.setAttribute('aria-busy', 'false');
   }
 }
 
-async function reorderTaskByKeyboard(scope, taskId, delta) {
-  const isBoard = scope === 'board';
-  if ((isBoard && boardMutationBusy) || (!isBoard && taskReorderBusy)) return false;
-  const item = isBoard
-    ? document.querySelector(`#board-cols .bc-card-item[data-id="${taskId}"]`)
-    : document.querySelector(`#tasks-list .task-row[data-id="${taskId}"]`);
+async function reorderTaskByKeyboard(taskId, delta) {
+  if (taskReorderBusy) return false;
+  const item = document.querySelector(`#tasks-list .task-row[data-id="${taskId}"]`);
   if (!item) return false;
-  const peers = isBoard
-    ? Array.from(item.closest('.board-col').querySelectorAll('.bc-card-item[data-id]'))
-    : Array.from($('#tasks-list').querySelectorAll('.task-row[data-id]'));
+  const peers = Array.from($('#tasks-list').querySelectorAll('.task-row[data-id]'));
   const ids = peers.map((entry) => Number(entry.dataset.id));
   const from = ids.indexOf(Number(taskId));
   const to = from + delta;
@@ -1203,145 +864,22 @@ async function reorderTaskByKeyboard(scope, taskId, delta) {
   return commitTaskOrder(
     ids,
     item,
-    isBoard ? $('#board-cols') : $('#tasks-list'),
-    scope,
     delta < 0 ? '已上移任务' : '已下移任务',
     '顺序已保存，但界面刷新失败'
   );
 }
 
-function onTaskReorderKeyDown(event, scope) {
+function onTaskReorderKeyDown(event) {
   if (!event.altKey || !['ArrowUp', 'ArrowDown'].includes(event.key)) return;
-  const control = scope === 'board'
-    ? event.target.closest('.bc-card')
-    : event.target.closest('.task-title-btn');
+  const control = event.target.closest('.task-title-btn');
   if (!control) return;
-  const item = control.closest(scope === 'board' ? '.bc-card-item' : '.task-row');
+  const item = control.closest('.task-row');
   if (!item) return;
   event.preventDefault();
-  reorderTaskByKeyboard(scope, Number(item.dataset.id), event.key === 'ArrowUp' ? -1 : 1);
+  reorderTaskByKeyboard(Number(item.dataset.id), event.key === 'ArrowUp' ? -1 : 1);
 }
 
-/* ---------- 视图：日历 ---------- */
-function calKey(d) {
-  const pad = (n) => (n < 10 ? '0' + n : '' + n);
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-}
-function calendarDateFromKey(key) {
-  const parts = String(key || '').split('-').map(Number);
-  if (parts.length !== 3 || parts.some((part) => !Number.isInteger(part))) return null;
-  const date = new Date(parts[0], parts[1] - 1, parts[2]);
-  return calKey(date) === key ? date : null;
-}
-function shiftCalendarKey(key, dayDelta, monthDelta) {
-  const date = calendarDateFromKey(key);
-  if (!date) return null;
-  if (monthDelta) {
-    const day = date.getDate();
-    const targetMonth = date.getMonth() + monthDelta;
-    const lastDay = new Date(date.getFullYear(), targetMonth + 1, 0).getDate();
-    date.setDate(1);
-    date.setMonth(targetMonth);
-    date.setDate(Math.min(day, lastDay));
-  }
-  if (dayDelta) date.setDate(date.getDate() + dayDelta);
-  return calKey(date);
-}
-function calendarDayLabel(key, taskCount, isCurrentDay, isOtherMonth) {
-  const date = calendarDateFromKey(key);
-  if (!date) return key;
-  const weekday = ['星期日', '星期一', '星期二', '星期三', '星期四', '星期五', '星期六'][date.getDay()];
-  const taskText = taskCount ? `${taskCount} 项任务` : '无任务';
-  return `${date.getFullYear()}年${date.getMonth() + 1}月${date.getDate()}日，${weekday}，${taskText}${isCurrentDay ? '，今天' : ''}${isOtherMonth ? '，非本月' : ''}`;
-}
-function tasksOnDay(key) {
-  return tasks.filter((t) => !t._deleted && t.status !== 'archived' && t.due && t.due.slice(0, 10) === key);
-}
-function focusCalendarCell(key) {
-  const grid = $('#cal-body .cal-grid');
-  if (!grid) return false;
-  const cells = Array.from(grid.querySelectorAll('.cal-cell[data-day]'));
-  const target = cells.find((cell) => cell.dataset.day === key);
-  if (!target) return false;
-  cells.forEach((cell) => { cell.tabIndex = cell === target ? 0 : -1; });
-  calFocusDate = key;
-  target.focus();
-  return true;
-}
-function renderCal(direction = 0, selectionChanged = false) {
-  const y = calCursor.getFullYear(), m = calCursor.getMonth();
-  const first = new Date(y, m, 1);
-  const startDow = first.getDay();
-  const daysInMonth = new Date(y, m + 1, 0).getDate();
-  const prevDays = new Date(y, m, 0).getDate();
-  const todayKey = calKey(new Date());
-  const cells = [];
-
-  for (let i = startDow - 1; i >= 0; i--) {
-    const pd = prevDays - i;
-    const d = new Date(y, m - 1, pd);
-    cells.push({ key: calKey(d), day: pd, other: true });
-  }
-  for (let d = 1; d <= daysInMonth; d++) {
-    const dt = new Date(y, m, d);
-    cells.push({ key: calKey(dt), day: d, other: false });
-  }
-  let total = cells.length;
-  const trailing = (7 - (total % 7)) % 7;
-  for (let j = 1; j <= trailing; j++) {
-    const dt = new Date(y, m + 1, j);
-    cells.push({ key: calKey(dt), day: j, other: true });
-  }
-  const cellKeys = new Set(cells.map((cell) => cell.key));
-  const firstMonthKey = calKey(new Date(y, m, 1));
-  const focusKey = cellKeys.has(calFocusDate)
-    ? calFocusDate
-    : cellKeys.has(todayKey) ? todayKey : firstMonthKey;
-  calFocusDate = focusKey;
-
-  let html = `<div class="cal-head">
-    <div class="cal-nav">
-      <button type="button" class="cal-btn" data-cal="prev" title="上个月" aria-label="上个月">${uiIcon('chevron-left')}</button>
-      <button type="button" class="cal-btn" data-cal="today" title="回到本月" aria-label="回到本月">今</button>
-      <button type="button" class="cal-btn" data-cal="next" title="下个月" aria-label="下个月">${uiIcon('chevron-right')}</button>
-    </div>
-    <span class="cal-title" aria-live="polite">${y} 年 ${m + 1} 月</span>
-  </div>
-  <div class="cal-grid" role="grid" aria-label="${y}年${m + 1}月日历，使用方向键浏览日期">
-    ${['日', '一', '二', '三', '四', '五', '六'].map((w) => `<div class="cal-dow" role="columnheader">${w}</div>`).join('')}`;
-
-  cells.forEach((c) => {
-    const dayTasks = tasksOnDay(c.key);
-    const cls = ['cal-cell', c.other ? 'other' : '', c.key === todayKey ? 'today' : '', calSelected === c.key ? 'selected' : ''].filter(Boolean).join(' ');
-    const dots = dayTasks.map((t) => {
-      const dotCls = t.status === 'done' ? 'done' : (isOverdue(t.due, t.status) ? 'over' : '');
-      return `<span class="cal-dot ${dotCls}" aria-hidden="true"></span>`;
-    }).join('');
-    html += `<button type="button" role="gridcell" class="${cls}" data-day="${c.key}" tabindex="${c.key === focusKey ? 0 : -1}" aria-selected="${calSelected === c.key}" ${c.key === todayKey ? 'aria-current="date"' : ''} aria-label="${calendarDayLabel(c.key, dayTasks.length, c.key === todayKey, c.other)}">
-      <span class="cal-day">${c.day}</span>
-      ${dayTasks.length ? `<span class="cal-num">${dayTasks.length}</span>` : ''}
-      ${dots ? `<span class="cal-dots">${dots}</span>` : ''}
-    </button>`;
-  });
-  html += '</div>';
-
-  if (calSelected) {
-    const selTasks = tasksOnDay(calSelected);
-    html += `<section class="cal-detail" aria-labelledby="cal-detail-title"><h3 class="cd-title" id="cal-detail-title">${calSelected} 的任务（${selTasks.length}）</h3>`;
-    html += `<div class="cal-add-row"><button type="button" class="btn mini" id="cal-add-task">${uiIcon('plus')}<span>在该天新建任务</span></button></div>`;
-    html += selTasks.length ? selTasks.map(rowHTML).join('') : `<div class="empty compact"><div class="big" aria-hidden="true">${uiIcon('today')}</div><div class="empty-title">当天没有到期任务</div></div>`;
-    html += '</section>';
-  }
-
-  $('#cal-body').innerHTML = html;
-  $('#cal-sub').textContent = calSelected ? `${calSelected} 明细` : `${m + 1} 月 · ${daysInMonth} 天`;
-  if (direction) {
-    playTransientClass($('#cal-body .cal-grid'), direction < 0 ? 'cal-shift-prev' : 'cal-shift-next', MOTION_MS.base);
-  }
-  if (selectionChanged) playTransientClass($('#cal-body .cal-detail'), 'cal-detail-enter', MOTION_MS.fast);
-}
-
-/* ---------- 视图：统计 ---------- */
+/* ---------- AI 报告文件名 ---------- */
 function weeklyReportFileName(weekOffset) {
   const date = new Date();
   const day = date.getDay() || 7;
@@ -1358,318 +896,42 @@ function dailyReportFileName(dayOffset) {
   return `工作日报-${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}.md`;
 }
 
-function clearReportPreview() {
-  $('#report-preview').textContent = '';
-  $('#report-preview').classList.add('hidden');
-  $('#btn-report-copy').classList.add('hidden');
-  $('#btn-report-download').classList.add('hidden');
-}
-
-function beginReportAction(button, busyLabel) {
-  if (reportActionBusy || !button) return null;
-  const panel = button.closest('.report-panel');
-  if (!panel) return null;
-  const actions = panel.querySelector('.report-actions');
-  const weekGroup = panel.querySelector('#report-week-seg');
-  const controls = Array.from(panel.querySelectorAll('#report-period-seg .seg-it, #report-week-seg .seg-it, #report-day-seg .seg-it, #btn-report-gen, #btn-report-copy, #btn-report-download'));
-  const states = controls.map((control) => ({ control, disabled: control.disabled }));
-  const originalContent = button.innerHTML;
-  reportActionBusy = true;
-  actions?.setAttribute('aria-busy', 'true');
-  weekGroup?.setAttribute('aria-busy', 'true');
-  controls.forEach((control) => { control.disabled = true; });
-  button.setAttribute('aria-busy', 'true');
-  setButtonContent(button, busyLabel);
-  return () => {
-    states.forEach(({ control, disabled }) => {
-      if (control.isConnected !== false) control.disabled = disabled;
-    });
-    if (button.isConnected !== false) {
-      button.setAttribute('aria-busy', 'false');
-      button.innerHTML = originalContent;
-    }
-    actions?.setAttribute('aria-busy', 'false');
-    weekGroup?.setAttribute('aria-busy', 'false');
-    reportActionBusy = false;
-  };
-}
-
-function renderStat() {
-  const all = tasks.filter((t) => !t._deleted && t.status !== 'archived');
-  const done = all.filter((t) => t.status === 'done').length;
-  const doing = all.filter((t) => t.status === 'doing').length;
-  const rate = all.length ? Math.round(done / all.length * 100) + '%' : '0%';
-  const days = [];
-  const dayKeys = [];
-  for (let i = 6; i >= 0; i--) {
-    const d = new Date();
-    d.setDate(d.getDate() - i);
-    const pad = (n) => (n < 10 ? '0' + n : '' + n);
-    dayKeys.push(`${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`);
-    days.push(`${d.getMonth() + 1}/${d.getDate()}`);
-  }
-  const trend = dayKeys.map((key) =>
-    all.filter((t) => t.status === 'done' && t.completedAt && localDateKey(t.completedAt) === key).length
-  );
-  const recentDone = trend.reduce((sum, count) => sum + count, 0);
-  $('#stat-sub').textContent = all.length
-    ? `${all.length} 项未归档任务 · 近 7 天完成 ${recentDone} 项`
-    : '暂无任务数据 · 可先创建一项任务';
-
-  let html = '';
-  if (!all.length) {
-    html = `<div class="empty stat-empty">
-      <div class="big" aria-hidden="true">${uiIcon('stat')}</div>
-      <div class="empty-title">还没有任务数据</div>
-      <button type="button" class="btn mini" id="stat-new-task">新建任务</button>
-    </div>`;
-  } else {
-    html = `<dl class="stat-grid">
-      <div class="stat-card total"><dt class="sc-t">任务总数</dt><dd class="sc-v">${all.length}</dd></div>
-      <div class="stat-card done"><dt class="sc-t">已完成</dt><dd class="sc-v">${done}</dd></div>
-      <div class="stat-card doing"><dt class="sc-t">进行中</dt><dd class="sc-v">${doing}</dd></div>
-      <div class="stat-card rate"><dt class="sc-t">完成率</dt><dd class="sc-v">${rate}</dd></div>
-    </dl>`;
-  // 近 7 天完成趋势（按真实 completedAt 统计）
-  const maxTrend = Math.max(1, ...trend);
-    html += `<div class="stat-chart-row">
-    <section class="stat-panel">
-      <h3 class="stat-panel-title">近 7 天完成趋势</h3>
-      ${recentDone ? `<div class="trend-chart" role="list" aria-label="近 7 天完成数量">
-        ${trend.map((v, i) => `
-          <div class="trend-column${i === trend.length - 1 ? ' today' : ''}" role="listitem" aria-label="${days[i]} 完成 ${v} 项">
-            <span class="trend-value" aria-hidden="true">${v}</span>
-            <span class="trend-bar" aria-hidden="true" style="--bar-h:${v ? Math.max(4, v / maxTrend * 120) : 0}px;--bar-opacity:${0.46 + i * 0.07}"></span>
-            <span class="trend-label" aria-hidden="true">${days[i]}</span>
-          </div>`).join('')}
-      </div>` : '<div class="trend-chart is-empty" role="status">近 7 天还没有完成记录</div>'}
-    </section>
-    <section class="stat-panel">
-      <h3 class="stat-panel-title">优先级分布</h3>
-      <div class="metric-list">
-        ${[4, 3, 2, 1].map((p) => {
-          const n = all.filter((t) => t.pri === p).length;
-          const pct = all.length ? Math.round(n / all.length * 100) : 0;
-          return `<div class="metric-row">
-            <span class="metric-name">${PRI_NAME[p]}</span>
-            <span class="metric-track" role="meter" aria-label="${PRI_NAME[p]}任务占比" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct}"><span class="metric-fill priority-${p}" style="--meter:${pct}%"></span></span>
-            <span class="metric-count">${n}</span>
-          </div>`;
-        }).join('')}
-      </div>
-    </section>
+/* ---------- 视图：记录 ---------- */
+/* 阶段 3 占位：本视图在阶段 4 承载工作记录（时间线 + 日报/周报生成）。 */
+function renderRecords() {
+  const sub = $('#records-sub');
+  if (sub) sub.textContent = '工作记录即将上线';
+  const body = $('#records-body');
+  if (!body) return;
+  body.innerHTML = `<div class="empty">
+    <div class="big" aria-hidden="true">${uiIcon('stat')}</div>
+    <div class="empty-title">工作记录正在路上</div>
+    <p class="empty-hint">完成任务、写备忘录时，我会自动积累工作记录；也可以直接让我「看看这周做了什么」。</p>
   </div>`;
+}
 
-  // 标签排行
-  const tagAcc = {};
-  all.forEach((t) => (t.tags || []).forEach((tag) => { tagAcc[tag] = (tagAcc[tag] || 0) + 1; }));
-  const tagRank = Object.keys(tagAcc).map((k) => ({ name: k, count: tagAcc[k] }))
-    .sort((a, b) => b.count - a.count).slice(0, 8);
-  if (tagRank.length) {
-    const maxTag = tagRank[0].count;
-    html += `<div class="tag-rank"><div class="tr-title">标签使用频率排行</div>`;
-    tagRank.forEach((d) => {
-      const pct = Math.max(4, Math.round(d.count / maxTag * 100));
-      html += `<div class="tr-bar"><span class="tr-name">#${esc(d.name)}</span>
-        <span class="tr-track" role="meter" aria-label="#${esc(d.name)}任务占比" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Math.round(d.count / all.length * 100)}"><span class="tr-fill" style="width:${pct}%"></span></span>
-        <span class="tr-count">${d.count}</span></div>`;
-    });
-    html += '</div>';
-  }
-
-  // 项目完成率对比
-  const projAcc = {};
-  all.forEach((t) => {
-    const p = t.project || '未分类';
-    if (!projAcc[p]) projAcc[p] = { total: 0, done: 0 };
-    projAcc[p].total++;
-    if (t.status === 'done') projAcc[p].done++;
-  });
-  const projRank = Object.keys(projAcc).map((k) => ({ name: k, ...projAcc[k] }))
-    .sort((a, b) => b.total - a.total).slice(0, 6);
-  if (projRank.length) {
-    html += `<div class="stat-chart-row stat-section-gap">
-      <section class="stat-panel">
-        <h3 class="stat-panel-title">项目完成率</h3>
-        <div class="metric-list">
-          ${projRank.map((d) => {
-            const pct = d.total ? Math.round(d.done / d.total * 100) : 0;
-            return `<div class="metric-row wide-label">
-              <span class="metric-name project-name" title="${esc(d.name)}">${uiIcon('folder')}<span>${esc(d.name)}</span></span>
-              <span class="metric-track" role="meter" aria-label="${esc(d.name)}项目完成率" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct}"><span class="metric-fill" style="--meter:${pct}%"></span></span>
-              <span class="metric-count rate">${d.done}/${d.total} ${pct}%</span>
-            </div>`;
-          }).join('')}
-        </div>
-      </section>
-      <section class="stat-panel">
-        <h3 class="stat-panel-title">标签完成率</h3>
-        <div class="metric-list">
-          ${tagRank.slice(0, 6).map((d) => {
-            const tagged = all.filter((t) => (t.tags || []).includes(d.name));
-            const doneN = tagged.filter((t) => t.status === 'done').length;
-            const pct = tagged.length ? Math.round(doneN / tagged.length * 100) : 0;
-            return `<div class="metric-row wide-label">
-              <span class="metric-name" title="${esc(d.name)}">#${esc(d.name)}</span>
-              <span class="metric-track tag" role="meter" aria-label="#${esc(d.name)}标签完成率" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct}"><span class="metric-fill tag" style="--meter:${pct}%"></span></span>
-              <span class="metric-count rate">${doneN}/${tagged.length} ${pct}%</span>
-            </div>`;
-          }).join('')}
-        </div>
-      </section>
-    </div>`;
-  }
-  }
-
-  // 日报/周报生成
-  html += `<section class="report-panel">
-      <h3 class="stat-panel-title">工作报告</h3>
-      <div class="report-actions">
-        <div class="seg" id="report-period-seg" role="radiogroup" aria-label="报告类型">
-          <button type="button" role="radio" aria-checked="${reportPeriod === 'daily'}" class="seg-it ${reportPeriod === 'daily' ? 'active' : ''}" data-period="daily">日报</button>
-          <button type="button" role="radio" aria-checked="${reportPeriod === 'weekly'}" class="seg-it ${reportPeriod === 'weekly' ? 'active' : ''}" data-period="weekly">周报</button>
-        </div>
-        <div class="seg" id="report-week-seg" role="radiogroup" aria-label="周报周期">
-          <button type="button" role="radio" aria-checked="${reportWeek === -1}" class="seg-it ${reportWeek === -1 ? 'active' : ''}" data-week="-1">上周</button>
-          <button type="button" role="radio" aria-checked="${reportWeek === 0}" class="seg-it ${reportWeek === 0 ? 'active' : ''}" data-week="0">本周</button>
-          <button type="button" role="radio" aria-checked="${reportWeek === 1}" class="seg-it ${reportWeek === 1 ? 'active' : ''}" data-week="1">下周</button>
-        </div>
-        <div class="seg hidden" id="report-day-seg" role="radiogroup" aria-label="日报日期">
-          <button type="button" role="radio" aria-checked="${reportDay === -1}" class="seg-it ${reportDay === -1 ? 'active' : ''}" data-day="-1">昨天</button>
-          <button type="button" role="radio" aria-checked="${reportDay === 0}" class="seg-it ${reportDay === 0 ? 'active' : ''}" data-day="0">今天</button>
-          <button type="button" role="radio" aria-checked="${reportDay === 1}" class="seg-it ${reportDay === 1 ? 'active' : ''}" data-day="1">明天</button>
-        </div>
-        <button type="button" class="btn mini icon-text" id="btn-report-gen">${uiIcon('file-text')}<span>生成周报</span></button>
-        <button type="button" class="btn mini ghost icon-text hidden" id="btn-report-copy">${uiIcon('copy')}<span>复制</span></button>
-        <button type="button" class="btn mini ghost icon-text hidden" id="btn-report-download">${uiIcon('download')}<span>下载 .md</span></button>
-      </div>
-      <div id="report-preview" class="report-preview hidden" role="region" aria-label="周报预览" tabindex="0" data-report-label="工作报告预览"></div>
-  </section>`;
-
-  $('#stat-body').innerHTML = html;
-  $('#stat-new-task')?.addEventListener('click', () => openModal(null));
-
-  const syncReportPeriod = () => {
-    const weekly = reportPeriod === 'weekly';
-    $('#report-week-seg').classList.toggle('hidden', !weekly);
-    $('#report-day-seg').classList.toggle('hidden', weekly);
-    $('#btn-report-gen').querySelector('span').textContent = weekly ? '生成周报' : '生成日报';
-  };
-  $$('#report-period-seg .seg-it').forEach((seg) => {
-    seg.addEventListener('click', () => {
-      if (reportActionBusy) return;
-      reportPeriod = seg.dataset.period === 'daily' ? 'daily' : 'weekly';
-      $$('#report-period-seg .seg-it').forEach((item) => {
-        const active = item === seg;
-        item.classList.toggle('active', active);
-        item.setAttribute('aria-checked', String(active));
-      });
-      clearReportPreview();
-      syncReportPeriod();
-    });
-  });
-  bindRadioGroupKeyboard($('#report-period-seg'));
-  // 周报：选择周
-  $$('#report-week-seg .seg-it').forEach((seg) => {
-    seg.addEventListener('click', () => {
-      if (reportActionBusy) return;
-      $$('#report-week-seg .seg-it').forEach((x) => {
-        x.classList.remove('active');
-        x.setAttribute('aria-checked', 'false');
-      });
-      seg.classList.add('active');
-      seg.setAttribute('aria-checked', 'true');
-      reportWeek = parseInt(seg.dataset.week, 10);
-      clearReportPreview();
-    });
-  });
-  bindRadioGroupKeyboard($('#report-week-seg'));
-  $$('#report-day-seg .seg-it').forEach((seg) => {
-    seg.addEventListener('click', () => {
-      if (reportActionBusy) return;
-      $$('#report-day-seg .seg-it').forEach((item) => {
-        const active = item === seg;
-        item.classList.toggle('active', active);
-        item.setAttribute('aria-checked', String(active));
-      });
-      reportDay = parseInt(seg.dataset.day, 10);
-      clearReportPreview();
-    });
-  });
-  bindRadioGroupKeyboard($('#report-day-seg'));
-  syncReportPeriod();
-  // 报告：生成
-  $('#btn-report-gen').addEventListener('click', async () => {
-    const preview = $('#report-preview');
-    const copyBtn = $('#btn-report-copy');
-    const dlBtn = $('#btn-report-download');
-    const generateBtn = $('#btn-report-gen');
-    const requestedWeek = reportWeek;
-    const requestedPeriod = reportPeriod;
-    const requestedOffset = requestedPeriod === 'weekly' ? reportWeek : reportDay;
-    const release = beginReportAction(generateBtn, '生成中…');
-    if (!release) return;
-    let restoreFocus = false;
-    try {
-      const label = requestedPeriod === 'weekly'
-        ? (requestedOffset === -1 ? '上周周报' : requestedOffset === 1 ? '下周周报' : '本周周报')
-        : (requestedOffset === -1 ? '昨天日报' : requestedOffset === 1 ? '明天日报' : '今日日报');
-      const result = await window.api.ai.report({
-        period: requestedPeriod,
-        offset: requestedOffset,
-        instruction: `生成${label}`
-      }, `report-panel-${Date.now()}`);
-      if (!result || result.cancelled || result.type !== 'report' || !result.markdown) {
-        throw new Error(result && result.message || '报告没有生成完整内容');
-      }
-      preview.textContent = result.markdown;
-      preview.classList.remove('hidden');
-      copyBtn.classList.remove('hidden');
-      dlBtn.classList.remove('hidden');
-      preview.focus({ preventScroll: true });
-      preview.scrollIntoView({ block: 'nearest' });
-      toast(result.degraded ? `已生成本地事实版报告：${result.degradeNotice || '模型未启用'}` : `${requestedPeriod === 'weekly' ? '周报' : '日报'}已由 Agent 生成`, result.degraded ? 6000 : 3000, null, result.degraded ? 'warn' : 'ok');
-    } catch (e) {
-      console.error('[report] generation failed:', e);
-      if (requestedPeriod === 'weekly') toast('周报生成失败，请稍后重试', 3000, null, 'err');
-      else toast('日报生成失败，请稍后重试', 3000, null, 'err');
-      restoreFocus = true;
-    } finally {
-      release();
-      if (restoreFocus) generateBtn.focus({ preventScroll: true });
+/* ---------- 清单页分区切换 ---------- */
+function setListTab(tab) {
+  if (!['tasks', 'memos'].includes(tab)) return;
+  listTab = tab;
+  const tabs = [
+    ['tasks', '#list-tab-tasks', '#list-tasks-panel'],
+    ['memos', '#list-tab-memos', '#list-memos-panel']
+  ];
+  tabs.forEach(([key, tabSel, panelSel]) => {
+    const tabBtn = $(tabSel);
+    const panel = $(panelSel);
+    if (tabBtn) {
+      tabBtn.classList.toggle('active', key === listTab);
+      tabBtn.setAttribute('aria-selected', String(key === listTab));
+      tabBtn.tabIndex = key === listTab ? 0 : -1;
     }
+    if (panel) panel.hidden = key !== listTab;
   });
-  // 报告：复制
-  $('#btn-report-copy').addEventListener('click', async () => {
-    const md = $('#report-preview').textContent;
-    const copyBtn = $('#btn-report-copy');
-    const release = beginReportAction(copyBtn, '复制中…');
-    if (!release) return;
-    try {
-      await navigator.clipboard.writeText(md);
-      release();
-      setButtonContent(copyBtn, '已复制', 'check');
-      setTimeout(() => { if (copyBtn.isConnected) setButtonContent(copyBtn, '复制', 'copy'); }, FEEDBACK_HOLD_MS);
-      toast('报告已复制到剪贴板', 2000, null, 'ok');
-    } catch (e) {
-      release();
-      copyBtn.focus({ preventScroll: true });
-      toast('复制失败，请手动选择复制', 3000, null, 'err');
-    }
-  });
-  // 报告：下载 .md
-  $('#btn-report-download').addEventListener('click', () => {
-    const md = $('#report-preview').textContent;
-    const blob = new Blob([md], { type: 'text/markdown;charset=utf-8' });
-    const a = document.createElement('a');
-    const url = URL.createObjectURL(blob);
-    a.href = url;
-    if (reportPeriod === 'weekly') a.download = weeklyReportFileName(reportWeek);
-    else a.download = dailyReportFileName(reportDay);
-    a.click();
-    setTimeout(() => URL.revokeObjectURL(url), 0);
-    toast('报告已下载');
-  });
+  if (currentView === 'list') {
+    if (listTab === 'tasks') renderTasks();
+    else renderMemos();
+  }
 }
 
 /* ---------- 视图：设置 ---------- */
@@ -1871,7 +1133,6 @@ function renderSettings() {
     ${shortcutRow('sc-ai', '唤起助手输入框', s.shortcuts && s.shortcuts.ai || 'CommandOrControl+J')}
     ${shortcutRow('sc-newTask', '新建任务', s.shortcuts && s.shortcuts.newTask || 'CommandOrControl+N')}
     ${shortcutRow('sc-today', '打开今日视图', s.shortcuts && s.shortcuts.today || 'CommandOrControl+1')}
-    ${shortcutRow('sc-stat', '打开统计视图', s.shortcuts && s.shortcuts.stat || 'CommandOrControl+5')}
   </section>
   <section class="set-group danger-zone" id="settings-danger" tabindex="-1" aria-labelledby="settings-danger-title">
     <h3 class="set-group-title" id="settings-danger-title">危险操作</h3>
@@ -2498,7 +1759,7 @@ function bindSettingsEvents() {
   });
 
   // 快捷键自定义：保留现有值，聚焦后直接录入新组合键。
-  ['sc-ai', 'sc-newTask', 'sc-today', 'sc-stat'].forEach((id) => {
+  ['sc-ai', 'sc-newTask', 'sc-today'].forEach((id) => {
     const el = document.getElementById(id);
     if (!el) return;
     el.addEventListener('focus', () => {
@@ -2539,7 +1800,7 @@ function bindSettingsEvents() {
       el.dataset.accelerator = combo;
       el.value = shortcutLabel(combo);
       el.placeholder = 'Ctrl+J';
-      const keyMap = { 'sc-ai': 'ai', 'sc-newTask': 'newTask', 'sc-today': 'today', 'sc-stat': 'stat' };
+      const keyMap = { 'sc-ai': 'ai', 'sc-newTask': 'newTask', 'sc-today': 'today' };
       const shortcuts = Object.assign({}, previousShortcuts, { [keyMap[id]]: combo });
       const releaseScope = beginSettingsScope(`shortcut:${id}`, []);
       if (!releaseScope) return;
@@ -2687,14 +1948,13 @@ function renderMemoList() {
   renderMemoFilters();
   const query = memoSearch.trim().toLowerCase();
   const visible = visibleMemos();
-  const sub = $('#memos-sub');
-  if (sub) {
+  const sub = $('#list-sub');
+  if (sub && listTab === 'memos') {
     const pinnedCount = memos.filter((memo) => memo.pinned).length;
     sub.textContent = memoFilterActive() || query
       ? `筛选出 ${visible.length} 条 · 共 ${memos.length} 条`
       : `${memos.length} 条${pinnedCount ? ` · ${pinnedCount} 条置顶` : ''}`;
   }
-  list.setAttribute('aria-multiselectable', String(memoBatchMode));
   const draftRow = memoDraftMemo ? `<button type="button" class="memo-list-item draft active" data-memo-id="${MEMO_DRAFT_ID}" role="option" tabindex="0" aria-selected="true">
       <span class="memo-list-body">
         <span class="memo-list-title">${esc(memoDraftMemo.title || '新备忘录')}</span>
@@ -2709,18 +1969,14 @@ function renderMemoList() {
     return;
   }
   const visibleIds = new Set(visible.map((memo) => memo.id));
-  const focusId = memoBatchMode
-    ? (visibleIds.has(memoFocusId) ? memoFocusId : visible[0].id)
-    : visibleIds.has(memoFocusId)
-      ? memoFocusId
-      : visibleIds.has(selectedMemoId) ? selectedMemoId : visible[0].id;
+  const focusId = visibleIds.has(memoFocusId)
+    ? memoFocusId
+    : visibleIds.has(selectedMemoId) ? selectedMemoId : visible[0].id;
   memoFocusId = focusId;
   list.innerHTML = draftRow + visible.map((memo) => {
     const preview = memo.content.trim().replace(/\s+/g, ' ') || (memo.tags || []).map((tag) => `#${tag}`).join(' ') || '空白备忘录';
-    const checked = memoSelectedIds.has(memo.id);
     const tags = (memo.tags || []).slice(0, 3).map((tag) => `<span class="tag-chip">#${esc(tag)}</span>`).join(' ');
-    return `<button type="button" class="memo-list-item${memo.id === selectedMemoId && !memoBatchMode ? ' active' : ''}${memo.pinned ? ' pinned' : ''}${memoBatchMode ? ' selectable' : ''}${checked ? ' checked' : ''}" data-memo-id="${memo.id}" role="option" tabindex="${memo.id === focusId ? 0 : -1}" aria-selected="${memoBatchMode ? checked : memo.id === selectedMemoId}">
-      ${memoBatchMode ? `<span class="memo-check" aria-hidden="true">${uiIcon(checked ? 'check' : 'square')}</span>` : ''}
+    return `<button type="button" class="memo-list-item${memo.id === selectedMemoId ? ' active' : ''}${memo.pinned ? ' pinned' : ''}" data-memo-id="${memo.id}" role="option" tabindex="${memo.id === focusId ? 0 : -1}" aria-selected="${memo.id === selectedMemoId}">
       <span class="memo-list-body">
         <span class="memo-list-title">${esc(memo.title)}</span>
         <span class="memo-list-preview">${esc(preview)}</span>
@@ -2834,7 +2090,7 @@ function beginMemoAction(control, label) {
     memoActionLabel = '';
     if (!memoDirty && memoSavePending === 0 && currentMemo()) setMemoSaveState('saved', '已保存');
     const nextControl = document.getElementById(controlId);
-    if (restoreFocus && currentView === 'memos' && nextControl && !nextControl.disabled) {
+    if (restoreFocus && currentView === 'list' && listTab === 'memos' && nextControl && !nextControl.disabled) {
       nextControl.focus({ preventScroll: true });
     }
   };
@@ -2854,7 +2110,6 @@ function renderMemos() {
     memoFocusId = selectedMemoId;
   }
   renderMemoList();
-  renderMemoBatchBar();
   renderNavBadges();
   if (!memoDirty && memoSavePending === 0) renderMemoEditor();
 }
@@ -2967,115 +2222,6 @@ async function selectMemo(id, restoreFocus) {
   return true;
 }
 
-function toggleMemoSelection(id) {
-  if (memoBatchBusy || id === MEMO_DRAFT_ID) return false;
-  if (memoSelectedIds.has(id)) memoSelectedIds.delete(id);
-  else memoSelectedIds.add(id);
-  renderMemoList();
-  renderMemoBatchBar();
-  focusMemoListItem(id);
-  return true;
-}
-
-// 批量只作用于当前可见且已选中的条目
-function memoBatchIds() {
-  const visible = new Set(visibleMemos().map((memo) => memo.id));
-  return [...memoSelectedIds].filter((id) => visible.has(id));
-}
-
-function renderMemoBatchBar() {
-  const bar = $('#memo-batch-bar');
-  if (!bar) return;
-  bar.classList.toggle('hidden', !memoBatchMode);
-  if (!memoBatchMode) return;
-  const ids = memoBatchIds();
-  const selected = new Set(ids);
-  const visible = visibleMemos();
-  bar.setAttribute('aria-busy', String(memoBatchBusy));
-  const count = $('#memo-batch-count');
-  if (count) count.textContent = memoBatchBusy ? '处理中…' : `已选 ${ids.length} 条`;
-  const allButton = $('#memo-batch-select-all');
-  if (allButton) {
-    const allSelected = visible.length > 0 && visible.every((memo) => selected.has(memo.id));
-    allButton.disabled = memoBatchBusy || !visible.length;
-    allButton.textContent = allSelected ? '取消全选' : '全选当前';
-  }
-  ['#memo-batch-pin', '#memo-batch-unpin', '#memo-batch-delete', '#memo-batch-clear'].forEach((selector) => {
-    const button = $(selector);
-    if (button) button.disabled = memoBatchBusy || !ids.length;
-  });
-}
-
-function setMemoBatchMode(enabled) {
-  memoBatchMode = !!enabled;
-  if (!memoBatchMode) memoSelectedIds = new Set();
-  const toggle = $('#memo-select-mode');
-  if (toggle) {
-    toggle.setAttribute('aria-pressed', String(memoBatchMode));
-    const label = toggle.querySelector('span');
-    if (label) label.textContent = memoBatchMode ? '完成' : '选择';
-  }
-  const editor = $('#memo-editor');
-  if (editor) {
-    editor.toggleAttribute('inert', memoBatchMode);
-    if (memoBatchMode) $('#memo-list').focus({ preventScroll: true });
-  }
-  renderMemoList();
-  renderMemoBatchBar();
-}
-
-async function runMemoBatchMutation(options) {
-  const ids = options.ids && options.ids.length ? options.ids : memoBatchIds();
-  if (memoBatchBusy || !ids.length) return false;
-  memoBatchBusy = true;
-  renderMemoBatchBar();
-  try {
-    const result = await options.action(ids);
-    memoSelectedIds = new Set();
-    setMemoBatchMode(false);
-    const message = typeof options.successMessage === 'function' ? options.successMessage(result) : options.successMessage;
-    toast(message, options.undoActions && options.undoActions.length ? 6000 : 3500, options.undoActions || null, 'ok');
-    await refreshMemos();
-    return true;
-  } catch (error) {
-    toast(`批量操作失败：${error.message}，当前选择已保留`, 4000, null, 'err');
-    return false;
-  } finally {
-    memoBatchBusy = false;
-    renderMemoBatchBar();
-  }
-}
-
-function memoBatchPin(pinned) {
-  const ids = memoBatchIds();
-  if (!ids.length) return;
-  runMemoBatchMutation({
-    ids,
-    action: (batchIds) => window.api.memos.batchUpdate(batchIds, { pinned }),
-    successMessage: (result) => `${pinned ? '已置顶' : '已取消置顶'} ${result.updated} 条备忘录${result.skipped ? `，跳过 ${result.skipped} 条` : ''}`
-  });
-}
-
-function memoBatchDelete() {
-  const ids = memoBatchIds();
-  if (!ids.length) return;
-  confirmDialog(`确定删除选中的 ${ids.length} 条备忘录吗？`, () => {
-    runMemoBatchMutation({
-      ids,
-      action: (batchIds) => window.api.memos.batchDelete(batchIds),
-      successMessage: (result) => `已删除 ${result.deleted} 条备忘录${result.skipped ? `，跳过 ${result.skipped} 条` : ''}`,
-      undoActions: [{
-        label: '撤销',
-        run: async () => {
-          const result = await window.api.memos.batchRestore(ids);
-          await refreshMemos();
-          toast(`已恢复 ${result.restored} 条备忘录`, 2500, null, 'ok');
-        }
-      }]
-    });
-  });
-}
-
 async function onMemoListKeyDown(event) {
   const item = event.target.closest('[data-memo-id]');
   if (!item) return;
@@ -3090,9 +2236,7 @@ async function onMemoListKeyDown(event) {
   else if (event.key === 'ArrowUp') nextIndex = Math.max(0, index - 1);
   else nextIndex = Math.min(items.length - 1, index + 1);
   const targetId = parseInt(items[nextIndex].dataset.memoId, 10);
-  // 批量模式只用方向键移动焦点，选中靠 Enter/空格
-  if (memoBatchMode) focusMemoListItem(targetId);
-  else await selectMemo(targetId, true);
+  await selectMemo(targetId, true);
 }
 
 async function createMemo() {
@@ -3204,14 +2348,25 @@ async function reloadRestoredWorkspace(result, label, focusTarget) {
 }
 
 /* ---------- 视图切换 ---------- */
+/* 兼容旧视图名 → 新四视图（今天/清单/记录/设置）的别名映射 */
+const VIEW_ALIASES = {
+  tasks: 'list',
+  memos: 'list',
+  board: 'list',
+  cal: 'list',
+  trash: 'settings',
+  stat: 'records',
+  stats: 'records'
+};
+
 function switchView(view) {
+  view = VIEW_ALIASES[view] || view;
+  if (!['today', 'list', 'records', 'settings'].includes(view)) return;
   const previousView = currentView;
   const content = $('.content');
   if (previousView === view) return;
-  if (currentView === 'memos' && view !== 'memos') {
-    saveMemoNow();
-    if (memoBatchMode) setMemoBatchMode(false);
-  }
+  // 清单页备忘录分区离开时落盘草稿
+  if (previousView === 'list' && listTab === 'memos' && view !== 'list') saveMemoNow();
   closeTaskMenus(false);
   if (content) viewScrollPositions.set(previousView, content.scrollTop);
   currentView = view;
@@ -3223,23 +2378,23 @@ function switchView(view) {
   });
   $$('.view').forEach((v) => { v.style.display = v.id === `view-${view}` ? '' : 'none'; });
   if (content) content.scrollTop = viewScrollPositions.get(view) || 0;
-  // 切换视图时退出批量模式，避免隐藏选择残留。
-  setBatchMode(false, false);
   // 视图切换动画
   const activeView = document.getElementById(`view-${view}`);
   playTransientClass(activeView, 'view-enter', MOTION_MS.base);
   // 标题栏显示当前视图名
-  const viewNames = { today: '今天', tasks: '所有任务', memos: '备忘录', board: '看板', cal: '日历', stat: '统计', trash: '回收站', settings: '设置' };
+  const viewNames = { today: '今天', list: '清单', records: '记录', settings: '设置' };
   const tbTitle = $('#tb-title');
   if (tbTitle) tbTitle.textContent = `工作台助手 · ${viewNames[view] || ''}`;
   if (view === 'today') renderToday();
-  if (view === 'tasks') renderTasks();
-  if (view === 'memos') renderMemos();
-  if (view === 'board') renderBoard();
-  if (view === 'cal') renderCal();
-  if (view === 'stat') renderStat();
-  if (view === 'settings') renderSettings();
-  if (view === 'trash') loadTrash();
+  if (view === 'list') {
+    renderTasks();
+    renderMemos();
+  }
+  if (view === 'records') renderRecords();
+  if (view === 'settings') {
+    renderSettings();
+    loadTrash();
+  }
   applyDataLoadStates();
 }
 
@@ -3255,9 +2410,8 @@ function renderNavBadges() {
     el.classList.toggle('hidden', count <= 0);
   };
   badge('today', todayCount);
-  badge('tasks', active);
-  badge('memos', memos.length);
-  badge('trash', trashCount);
+  badge('list', active);
+  badge('settings', trashCount);
 }
 
 /* ---------- 标题栏最大化按钮 ---------- */
@@ -3325,22 +2479,12 @@ function openModal(task) {
   $('#modal-title').textContent = task ? '编辑任务' : '新建任务';
   $('#m-title').value = task ? task.title : '';
   $('#m-desc').value = task ? task.desc || '' : '';
-  $('#m-pri').value = task ? String(task.pri) : '2';
   $('#m-status').value = task ? task.status : 'todo';
   const due = splitDue(task ? task.due : '');
   $('#m-due-date').value = due.date;
   $('#m-due-time').value = due.time;
-  $('#m-tags').value = task ? (task.tags || []).join(', ') : '';
-  $('#m-project').value = task ? task.project || '' : '';
   $('#m-repeat').value = task ? task.repeat || '' : '';
   $('#m-remind').value = task ? String(task.remind || 30) : '30';
-  $('#m-estimate').value = task && task.estimatedMinutes ? String(task.estimatedMinutes) : '';
-  $('#m-children').value = task && task.children && task.children.length
-    ? task.children.map((c) => {
-        const x = childLabel(c);
-        return (x.done ? '[x] ' : '[ ] ') + x.title;
-      }).join('\n')
-    : '';
   $('#m-delete').classList.toggle('hidden', !task);
   $('#m-archive').classList.toggle('hidden', !task || task.status === 'archived');
   $('#m-unarchive').classList.toggle('hidden', !task || task.status !== 'archived');
@@ -3358,20 +2502,12 @@ function refreshOpenTaskModal(task) {
   editingTask = task;
   $('#m-title').value = task.title;
   $('#m-desc').value = task.desc || '';
-  $('#m-pri').value = String(task.pri);
   $('#m-status').value = task.status;
   const due = splitDue(task.due);
   $('#m-due-date').value = due.date;
   $('#m-due-time').value = due.time;
-  $('#m-tags').value = (task.tags || []).join(', ');
-  $('#m-project').value = task.project || '';
   $('#m-repeat').value = task.repeat || '';
   $('#m-remind').value = String(task.remind || 30);
-  $('#m-estimate').value = task.estimatedMinutes ? String(task.estimatedMinutes) : '';
-  $('#m-children').value = (task.children || []).map((child) => {
-    const item = childLabel(child);
-    return `${item.done ? '[x]' : '[ ]'} ${item.title}`;
-  }).join('\n');
   captureModalInitialState();
 }
 
@@ -3477,28 +2613,18 @@ async function saveModal(event) {
   }
   setTitleError('');
   setModalError('');
-  // 解析子任务文本：每行一个，[x] 前缀表示已完成
-  const children = $('#m-children').value.split('\n').map((l) => l.trim()).filter(Boolean).map((l) => {
-    const m = l.match(/^\[(x|X| )\]\s*(.*)$/);
-    if (m) return { title: m[2], done: m[1] !== ' ' && m[1] !== '' };
-    return { title: l, done: false };
-  });
   // 截止时间：日期 + 时间组合，日期为空则不设截止
   const dueDate = $('#m-due-date').value;
   const dueTime = $('#m-due-time').value || '18:00';
   const due = dueDate ? `${dueDate} ${dueTime}` : null;
+  // 优先级/标签/项目/子任务等字段已从界面裁剪；applyTaskPatch 为合并语义，此处省略不会清空既有数据
   const data = {
     title,
     desc: $('#m-desc').value.trim(),
-    pri: parseInt($('#m-pri').value, 10),
     status: $('#m-status').value,
     due,
-    tags: $('#m-tags').value.split(/[,，、]/).map((x) => x.trim()).filter(Boolean).slice(0, 5),
-    project: $('#m-project').value.trim(),
     repeat: $('#m-repeat').value,
-    remind: parseInt($('#m-remind').value, 10),
-    estimatedMinutes: $('#m-estimate').value ? parseInt($('#m-estimate').value, 10) : null,
-    children
+    remind: parseInt($('#m-remind').value, 10)
   };
   const wasEditing = !!editingTask;
   const shouldComplete = data.status === 'done' && (!editingTask || editingTask.status !== 'done');
@@ -3919,26 +3045,7 @@ function reportCard(result) {
     setTimeout(() => URL.revokeObjectURL(link.href), 0);
     toast('报告已下载');
   });
-  const open = document.createElement('button');
-  open.type = 'button';
-  open.className = 'btn mini ghost icon-text';
-  open.append(uiIconElement('stat'), Object.assign(document.createElement('span'), { textContent: '打开统计' }));
-  open.addEventListener('click', () => {
-    reportPeriod = result.reportPeriod === 'daily' ? 'daily' : 'weekly';
-    if (reportPeriod === 'daily') reportDay = Number(result.reportOffset) || 0;
-    else reportWeek = Number(result.reportOffset) || 0;
-    switchView('stats');
-    setTimeout(() => {
-      const preview = $('#report-preview');
-      if (!preview) return;
-      preview.textContent = String(result.markdown || '');
-      preview.classList.remove('hidden');
-      $('#btn-report-copy')?.classList.remove('hidden');
-      $('#btn-report-download')?.classList.remove('hidden');
-      preview.focus({ preventScroll: true });
-    }, 0);
-  });
-  actions.append(sourceToggle, copy, download, open);
+  actions.append(sourceToggle, copy, download);
   if (result.reportSessionActive) {
     const finish = document.createElement('button');
     finish.type = 'button';
@@ -4571,12 +3678,12 @@ function renderAll() {
   renderToday();
   renderTasks();
   renderMemos();
-  renderBoard();
-  renderCal();
+  renderRecords();
   renderNavBadges();
-  if (currentView === 'stat') renderStat();
-  if (currentView === 'settings') renderSettings();
-  if (currentView === 'trash') loadTrash();
+  if (currentView === 'settings') {
+    renderSettings();
+    loadTrash();
+  }
   applyDataLoadStates();
 }
 
@@ -4597,7 +3704,7 @@ async function openReminderTask(data) {
     toast('这项任务已不存在或已被删除', 4000, null, 'warn');
     return true;
   }
-  switchView('tasks');
+  switchView('list');
   openModal(task);
   return true;
 }
@@ -4614,9 +3721,14 @@ function bindEvents() {
   // 导航
   $$('.nav-item').forEach((n) => n.addEventListener('click', () => switchView(n.dataset.view)));
   $('#sidebar-new').addEventListener('click', () => {
-    switchView('tasks');
+    switchView('list');
+    setListTab('tasks');
     openModal(null);
   });
+
+  // 清单页分区切换
+  $('#list-tab-tasks')?.addEventListener('click', () => setListTab('tasks'));
+  $('#list-tab-memos')?.addEventListener('click', () => setListTab('memos'));
 
   // 标题栏
   $('#tb-min').addEventListener('click', () => window.api.window.minimize());
@@ -4636,9 +3748,8 @@ function bindEvents() {
   // 任务列表点击（事件委托）
   $('#today-list').addEventListener('click', onTaskClick);
   $('#tasks-list').addEventListener('click', onTaskClick);
-  $('#cal-body').addEventListener('click', onCalClick);
-  $('#cal-body').addEventListener('keydown', onCalKeyDown);
-  ['today-list', 'tasks-list', 'cal-body'].forEach((id) => {
+  $('#tasks-list').addEventListener('keydown', onTaskReorderKeyDown);
+  ['today-list', 'tasks-list'].forEach((id) => {
     document.getElementById(id).addEventListener('keydown', onTaskMenuKeyDown);
   });
   document.addEventListener('click', (event) => {
@@ -4673,8 +3784,7 @@ function bindEvents() {
     const item = event.target.closest('[data-memo-id]');
     if (!item) return;
     const id = parseInt(item.dataset.memoId, 10);
-    if (memoBatchMode) toggleMemoSelection(id);
-    else selectMemo(id, true);
+    selectMemo(id, true);
   });
   $('#memo-list').addEventListener('keydown', onMemoListKeyDown);
   const memoTagChips = $('#memo-tag-chips');
@@ -4710,26 +3820,6 @@ function bindEvents() {
     });
     bindPressedGroupKeyboard(memoFilterWrap, '.fchip[data-memo-filter]');
   }
-  $('#memo-select-mode').addEventListener('click', async () => {
-    if (memoBatchBusy) return;
-    if (!memoBatchMode && (await saveMemoNow()) === false) return;
-    setMemoBatchMode(!memoBatchMode);
-  });
-  $('#memo-batch-select-all').addEventListener('click', () => {
-    const visible = visibleMemos();
-    const allSelected = visible.length > 0 && visible.every((memo) => memoSelectedIds.has(memo.id));
-    memoSelectedIds = allSelected ? new Set() : new Set(visible.map((memo) => memo.id));
-    renderMemoList();
-    renderMemoBatchBar();
-  });
-  $('#memo-batch-pin').addEventListener('click', () => memoBatchPin(true));
-  $('#memo-batch-unpin').addEventListener('click', () => memoBatchPin(false));
-  $('#memo-batch-delete').addEventListener('click', memoBatchDelete);
-  $('#memo-batch-clear').addEventListener('click', () => {
-    memoSelectedIds = new Set();
-    renderMemoList();
-    renderMemoBatchBar();
-  });
   ['memo-title', 'memo-tags', 'memo-content'].forEach((id) => {
     $(`#${id}`).addEventListener('input', scheduleMemoSave);
   });
@@ -4789,7 +3879,15 @@ function bindEvents() {
       setMemoSaveState('saving', '创建任务中…');
       const memo = currentMemo();
       if (!memo) return;
-      const task = await window.api.tasks.create({ title: memo.title, desc: memo.content, tags: memo.tags || [], pri: 2, status: 'todo' });
+      const converted = await window.api.memos.convert(memo.id);
+      const task = converted.value;
+      memos = await window.api.memos.getAll();
+      selectedMemoId = memos.length ? memos[0].id : null;
+      renderMemos();
+      toast('已转为任务，原备忘录已移入回收站', 5000, [{ label: '撤销', run: async () => {
+        await window.api.ai.undo({ action: 'restoreAgentTransaction', transactionId: converted.transactionId });
+        await refreshTasks(); await refreshMemos();
+      } }], 'ok');
       toast(`已创建任务「${task.title}」`, 3000, null, 'ok');
       await refreshTasksAfterMutation('任务已创建，但列表刷新失败');
     } catch (error) {
@@ -4888,96 +3986,6 @@ function bindEvents() {
   });
   $('#btn-quick-add').addEventListener('click', createQuickTask);
   $('#btn-new').addEventListener('click', () => openModal(null));
-  $('#btn-select-mode').addEventListener('click', () => setBatchMode(!batchMode));
-
-  // 看板拖拽
-  $('#board-cols').addEventListener('dragstart', (e) => {
-    const card = e.target.closest('.bc-card');
-    if (!card) return;
-    if (boardMutationBusy) { e.preventDefault(); return; }
-    const task = tasks.find((item) => item.id === Number(card.dataset.id));
-    if (!task) { e.preventDefault(); return; }
-    e.dataTransfer.setData('text/plain', card.dataset.id);
-    e.dataTransfer.effectAllowed = 'move';
-    boardDragState = { id: task.id, status: task.status };
-    card.closest('.bc-card-item').classList.add('dragging');
-  });
-  $('#board-cols').addEventListener('dragend', (e) => {
-    const card = e.target.closest('.bc-card');
-    if (card) card.closest('.bc-card-item').classList.remove('dragging');
-    boardDragState = null;
-    clearBoardDropFeedback();
-  });
-  $('#board-cols').addEventListener('dragover', (e) => {
-    if (!boardDragState || boardMutationBusy) return;
-    e.preventDefault();
-    e.dataTransfer.dropEffect = 'move';
-    const col = e.target.closest('.board-col');
-    const targetCard = e.target.closest('.bc-card');
-    let before = true;
-    if (targetCard) {
-      const rect = targetCard.getBoundingClientRect();
-      before = e.clientY < rect.top + rect.height / 2;
-    }
-    showBoardDropFeedback(col, targetCard, before);
-  });
-  $('#board-cols').addEventListener('dragleave', (e) => {
-    if (!e.currentTarget.contains(e.relatedTarget)) clearBoardDropFeedback();
-  });
-  $('#board-cols').addEventListener('drop', async (e) => {
-    e.preventDefault();
-    const col = e.target.closest('.board-col');
-    const id = e.dataTransfer.getData('text/plain');
-    clearBoardDropFeedback();
-    boardDragState = null;
-    if (!col || !id) return;
-    const t = tasks.find((x) => x.id === parseInt(id, 10));
-    if (!t) return;
-    if (t.status !== col.dataset.col) {
-      await moveBoardTask(t.id, col.dataset.col);
-      return;
-    }
-    const board = $('#board-cols');
-    board.setAttribute('aria-busy', 'true');
-    try {
-      const cardIds = $$(`#board-cols .board-col[data-col="${col.dataset.col}"] .bc-card`)
-        .map((c) => parseInt(c.dataset.id, 10));
-      const fromIdx = cardIds.indexOf(parseInt(id, 10));
-      const targetCard = e.target.closest('.bc-card');
-      let toIdx = cardIds.length;
-      if (targetCard) {
-        const rect = targetCard.getBoundingClientRect();
-        const before = e.clientY < rect.top + rect.height / 2;
-        toIdx = cardIds.indexOf(parseInt(targetCard.dataset.id, 10));
-        if (!before) toIdx++;
-      }
-      if (fromIdx !== -1 && fromIdx !== toIdx && fromIdx !== toIdx - 1) {
-        cardIds.splice(fromIdx, 1);
-        if (fromIdx < toIdx) toIdx--;
-        cardIds.splice(toIdx, 0, parseInt(id, 10));
-        const movedItem = document.querySelector(`#board-cols .bc-card[data-id="${id}"]`)?.closest('.bc-card-item');
-        await commitTaskOrder(cardIds, movedItem, board, 'board', '已调整卡片顺序', '顺序已保存，但看板刷新失败');
-      }
-    } catch (error) {
-      console.error('[board] task move failed:', error);
-      toast('移动任务失败，请稍后重试', 3000, null, 'err');
-    } finally {
-      board.setAttribute('aria-busy', 'false');
-    }
-  });
-  $('#board-cols').addEventListener('change', (e) => {
-    const status = e.target.closest('[data-board-status]');
-    if (!status) return;
-    moveBoardTask(status.dataset.id, status.value, status);
-  });
-  // 看板卡片点击编辑
-  $('#board-cols').addEventListener('click', (e) => {
-    const card = e.target.closest('.bc-card');
-    if (!card) return;
-    const t = tasks.find((x) => x.id === parseInt(card.dataset.id, 10));
-    if (t) openModal(t);
-  });
-  $('#board-cols').addEventListener('keydown', (e) => onTaskReorderKeyDown(e, 'board'));
 
   // 任务列表拖拽排序
   $('#tasks-list').addEventListener('dragstart', (e) => {
@@ -5032,68 +4040,8 @@ function bindEvents() {
     if (fromIdx < toIdx) toIdx--;
     rows.splice(toIdx, 0, parseInt(dragId, 10));
     const movedRow = document.querySelector(`#tasks-list .task-row[data-id="${dragId}"]`);
-    await commitTaskOrder(rows, movedRow, $('#tasks-list'), 'list', '已调整任务顺序', '顺序已保存，但列表刷新失败');
+    await commitTaskOrder(rows, movedRow, '已调整任务顺序', '顺序已保存，但列表刷新失败');
   });
-  $('#tasks-list').addEventListener('keydown', (e) => onTaskReorderKeyDown(e, 'list'));
-
-  // 批量操作
-  $('#batch-select-all').addEventListener('click', () => {
-    if (batchBusy) return;
-    const allSelected = visibleTaskIds.length > 0 && visibleTaskIds.every((id) => selectedIds.has(id));
-    selectedIds = allSelected ? new Set() : new Set(visibleTaskIds);
-    renderTasks();
-  });
-  $('#batch-done').addEventListener('click', async () => {
-    const ids = Array.from(selectedIds);
-    if (!ids.length) return;
-    await runBatchMutation({
-      ids,
-      control: $('#batch-done'),
-      busyMessage: `正在完成 ${ids.length} 项…`,
-      action: (selected) => window.api.tasks.batchComplete(selected),
-      successMessage: (result) => {
-        const generated = result.generated && result.generated.length;
-        const detail = [
-          result.skipped ? `跳过 ${result.skipped} 项` : '',
-          generated ? `已安排 ${generated} 个下次任务` : ''
-        ].filter(Boolean).join(' · ');
-        return `已完成 ${result.completed} 项任务${detail ? ' · ' + detail : ''}`;
-      },
-      refreshFailureMessage: '批量完成已保存，但列表刷新失败'
-    });
-  });
-  $('#batch-delete').addEventListener('click', async () => {
-    if (batchBusy) return;
-    const ids = Array.from(selectedIds);
-    if (!ids.length) return;
-    confirmDialog(`确定删除选中的 ${ids.length} 项任务吗？`, async () => {
-      await runBatchMutation({
-        ids,
-        control: $('#batch-delete'),
-        busyMessage: `正在删除 ${ids.length} 项…`,
-        action: (selected) => window.api.tasks.batchDelete(selected),
-        successMessage: `已删除 ${ids.length} 项任务`,
-        refreshFailureMessage: '批量删除已完成，但列表刷新失败',
-        rethrow: true
-      });
-    });
-  });
-  $('#batch-pri').addEventListener('change', async () => {
-    const pri = parseInt($('#batch-pri').value, 10);
-    if (!pri) return;
-    const ids = Array.from(selectedIds);
-    if (!ids.length) return;
-    const changed = await runBatchMutation({
-      ids,
-      control: $('#batch-pri'),
-      busyMessage: `正在更新 ${ids.length} 项…`,
-      action: (selected) => window.api.tasks.batchUpdate(selected, { pri }),
-      successMessage: `已更新 ${ids.length} 项任务优先级`,
-      refreshFailureMessage: '优先级已更新，但列表刷新失败'
-    });
-    if (changed) $('#batch-pri').value = '';
-  });
-  $('#batch-clear').addEventListener('click', () => { if (!batchBusy) setBatchMode(false); });
 
   // 回收站
   $('#trash-empty').addEventListener('click', () => {
@@ -5168,7 +4116,8 @@ function bindEvents() {
   });
   $$('#ai-chips .chip').forEach((chip) => chip.addEventListener('click', () => {
     if (chip.dataset.aiAction === 'new-task') {
-      switchView('tasks');
+      switchView('list');
+      setListTab('tasks');
       openModal(null);
       return;
     }
@@ -5250,13 +4199,14 @@ function bindEvents() {
   });
 
   // 主进程事件
-  window.api.on('app:new-task', () => { switchView('tasks'); openModal(null); });
+  window.api.on('app:new-task', () => { switchView('list'); setListTab('tasks'); openModal(null); });
   window.api.on('app:focus-ai', () => {
     setAiPanelExpanded();
     $('#ai-input').focus();
   });
   window.api.on('app:switch-view', (view) => {
-    if (['today', 'tasks', 'memos', 'board', 'cal', 'stat', 'settings', 'trash'].includes(view)) switchView(view);
+    // 兼容旧视图名，switchView 内部会做别名映射
+    if (['today', 'list', 'records', 'settings', 'tasks', 'memos', 'board', 'cal', 'stat', 'stats', 'trash'].includes(view)) switchView(view);
   });
   window.api.on('app:open-task', (data) => {
     openReminderTask(data).catch((error) => {
@@ -5285,21 +4235,6 @@ function bindEvents() {
   document.addEventListener('keydown', async (e) => {
     const tag = document.activeElement && document.activeElement.tagName;
     if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
-    // 1/2/3/4 快速改优先级（选中任务时）
-    if (selectedIds.size && ['1', '2', '3', '4'].includes(e.key)) {
-      e.preventDefault();
-      const pri = parseInt(e.key, 10);
-      const ids = Array.from(selectedIds);
-      await runBatchMutation({
-        ids,
-        control: $('#batch-pri'),
-        busyMessage: `正在更新 ${ids.length} 项…`,
-        action: (selected) => window.api.tasks.batchUpdate(selected, { pri }),
-        successMessage: `已更新 ${ids.length} 项任务为${PRI_NAME[pri]}优先级`,
-        refreshFailureMessage: '优先级已更新，但列表刷新失败'
-      });
-      return;
-    }
     // T 加今天 / D 加明天
     if (e.key === 't' || e.key === 'T') {
       const now = new Date();
@@ -5322,18 +4257,9 @@ function bindEvents() {
     }
     // N 在当前工作区新建内容
     if (e.key === 'n' || e.key === 'N') {
-      if (currentView === 'memos') createMemo();
+      if (currentView === 'list' && listTab === 'memos') createMemo();
       else openModal(null);
       return;
-    }
-    // Esc 退出批量模式
-    if (e.key === 'Escape') {
-      if (batchMode) setBatchMode(false);
-      if (memoBatchMode && !memoBatchBusy) {
-        const toggle = $('#memo-select-mode');
-        setMemoBatchMode(false);
-        toggle?.focus({ preventScroll: true });
-      }
     }
   });
 }
@@ -5499,11 +4425,6 @@ async function onTaskClick(e) {
     });
     return;
   }
-  const selectionRow = e.target.closest('.task-row');
-  if (batchMode && currentView === 'tasks' && selectionRow) {
-    toggleSelect(parseInt(selectionRow.dataset.id, 10));
-    return;
-  }
   const more = e.target.closest('.task-more');
   if (more) {
     toggleTaskMenu(more);
@@ -5518,41 +4439,12 @@ async function onTaskClick(e) {
     await runTaskMenuAction(menuItem.dataset.act, t, row);
     return;
   }
-  // 子任务勾选
-  const childItem = e.target.closest('.child-item');
-  if (childItem) {
-    const parentId = parseInt(childItem.dataset.parentId, 10);
-    const childId = childItem.dataset.childId;
-    const row = childItem.closest('.task-row');
-    await runTaskRowMutation({
-      taskId: parentId,
-      control: childItem,
-      operation: () => toggleChild(parentId, childId),
-      errorMessage: '子任务更新失败，请重试',
-      previousIndex: Math.max(0, currentTaskRows().indexOf(row)),
-      focusSelector: `.child-item[data-child-id="${childId}"]`
-    });
-    return;
-  }
   const row = e.target.closest('.task-row');
   if (!row) return;
   const t = tasks.find((x) => x.id === parseInt(row.dataset.id, 10));
   if (!t) return;
-  // 展开/收起子任务
-  if (e.target.closest('.task-expand')) {
-    const id = t.id;
-    if (expandedIds.has(id)) expandedIds.delete(id);
-    else expandedIds.add(id);
-    renderAll();
-    return;
-  }
-  // 多选（Ctrl/Shift 点击或点击勾选框左侧区域）
+  // 勾选：完成任务 / 重新打开
   if (e.target.closest('.task-check')) {
-    if (currentView === 'tasks' && (e.ctrlKey || e.metaKey || e.shiftKey)) {
-      setBatchMode(true, false);
-      toggleSelect(t.id);
-      return;
-    }
     await runTaskRowMutation({
       taskId: t.id,
       control: e.target.closest('.task-check'),
@@ -5560,23 +4452,6 @@ async function onTaskClick(e) {
       errorMessage: t.status === 'done' ? '任务重新打开失败，请重试' : '任务完成失败，请重试',
       previousIndex: Math.max(0, currentTaskRows().indexOf(row)),
       focusSelector: '.task-check'
-    });
-    return;
-  }
-  // 优先级点击切换（循环 1→2→3→4→1）
-  if (e.target.closest('[data-pri-toggle]')) {
-    const nextPri = t.pri >= 4 ? 1 : t.pri + 1;
-    await runTaskRowMutation({
-      taskId: t.id,
-      control: e.target.closest('[data-pri-toggle]'),
-      operation: async () => {
-        await window.api.tasks.update(t.id, { pri: nextPri });
-        toast(`「${t.title}」已设为${PRI_NAME[nextPri]}优先级`);
-        await refreshTasksAfterMutation('优先级已更新，但列表刷新失败');
-      },
-      errorMessage: '优先级更新失败，请重试',
-      previousIndex: Math.max(0, currentTaskRows().indexOf(row)),
-      focusSelector: '[data-pri-toggle]'
     });
     return;
   }
@@ -5647,28 +4522,6 @@ async function deleteTaskById(id, title) {
     }
   }]);
   await refreshTasksAfterMutation('任务已删除，但列表刷新失败');
-}
-
-async function toggleChild(parentId, childId) {
-  const t = tasks.find((x) => x.id === parentId);
-  if (!t) return;
-  const children = (t.children || []).map((c) => {
-    const x = childLabel(c);
-    if (x.id === childId || String(x.id) === String(childId)) {
-      return Object.assign({}, c, { done: !x.done });
-    }
-    return c;
-  });
-  await window.api.tasks.update(parentId, { children });
-  await refreshTasksAfterMutation('子任务已更新，但列表刷新失败');
-}
-
-function toggleSelect(id) {
-  if (selectedIds.has(id)) selectedIds.delete(id);
-  else selectedIds.add(id);
-  renderTasks();
-  const control = document.querySelector(`.task-row[data-id="${id}"] .task-check`);
-  if (control) control.focus({ preventScroll: true });
 }
 
 function closeTaskMenus(restoreFocus) {
@@ -5770,7 +4623,7 @@ function setTaskRowMutationState(taskId, busy, control) {
   $$(`.task-row[data-id="${id}"]`).forEach((row) => {
     row.classList.toggle('is-busy', busy);
     row.setAttribute('aria-busy', String(busy));
-    row.draggable = !busy && !batchMode;
+    row.draggable = !busy;
     row.querySelectorAll('button').forEach((button) => { button.disabled = busy; });
   });
   $$(`.overdue-actions[data-id="${id}"] button`).forEach((button) => { button.disabled = busy; });
@@ -5844,30 +4697,6 @@ async function toggleDone(t) {
   await refreshTasksAfterMutation('任务已完成，但列表刷新失败');
 }
 
-function taskMatchesFilter(t) {
-  if (currentSearch) {
-    const q = currentSearch.toLowerCase();
-    const hit = (t.title || '').toLowerCase().includes(q) ||
-      (t.desc || '').toLowerCase().includes(q) ||
-      (t.tags || []).some((x) => x.toLowerCase().includes(q)) ||
-      (t.project || '').toLowerCase().includes(q);
-    if (!hit) return false;
-  }
-  if (currentFilter === 'today') return isToday(t.due);
-  if (currentFilter === 'active') return t.status !== 'done' && t.status !== 'archived';
-  if (currentFilter === 'done') return t.status === 'done';
-  if (currentFilter === 'archived') return t.status === 'archived';
-  if (currentFilter === 'nodate') return !t.due && t.status !== 'done' && t.status !== 'archived';
-  if (currentFilter === 'overdue') return t.status !== 'done' && t.status !== 'archived' && isOverdue(t.due, t.status);
-  if (currentFilter === 'week') {
-    const now = new Date();
-    return t.createdAt >= new Date(now.getTime() - 7 * 86400000).getTime() && t.status !== 'archived';
-  }
-  if (currentFilter.startsWith('proj:')) return (t.project || '') === currentFilter.slice(5);
-  if (currentFilter.startsWith('tag:')) return (t.tags || []).includes(currentFilter.slice(4));
-  return true;
-}
-
 async function postponeTask(id, days) {
   const t = tasks.find((x) => x.id === id);
   if (!t) return;
@@ -5883,83 +4712,6 @@ async function cycleState(t) {
     await window.api.tasks.update(t.id, { status: next });
     await refreshTasksAfterMutation('任务状态已更新，但列表刷新失败');
   }
-}
-
-function onCalClick(e) {
-  const addBtn = e.target.closest('#cal-add-task');
-  if (addBtn) {
-    // 在该天新建任务：预填截止日期
-    openModal(null);
-    $('#m-due-date').value = calSelected;
-    $('#m-due-time').value = '18:00';
-    captureModalInitialState();
-    return;
-  }
-  const cell = e.target.closest('.cal-cell');
-  if (cell) {
-    calSelected = cell.dataset.day;
-    calFocusDate = calSelected;
-    const selectedDate = calendarDateFromKey(calSelected);
-    let direction = 0;
-    if (selectedDate && (selectedDate.getFullYear() !== calCursor.getFullYear() || selectedDate.getMonth() !== calCursor.getMonth())) {
-      direction = selectedDate < calCursor ? -1 : 1;
-      calCursor = new Date(selectedDate.getFullYear(), selectedDate.getMonth(), 1);
-    }
-    renderCal(direction, true);
-    focusCalendarCell(calSelected);
-    return;
-  }
-  const btn = e.target.closest('[data-cal]');
-  if (btn) {
-    const previousCursor = new Date(calCursor);
-    if (btn.dataset.cal === 'prev') calCursor.setMonth(calCursor.getMonth() - 1);
-    if (btn.dataset.cal === 'next') calCursor.setMonth(calCursor.getMonth() + 1);
-    if (btn.dataset.cal === 'today') {
-      const today = new Date();
-      calCursor = new Date(today.getFullYear(), today.getMonth(), 1);
-      calFocusDate = calKey(today);
-    } else {
-      calFocusDate = calKey(new Date(calCursor.getFullYear(), calCursor.getMonth(), 1));
-    }
-    calSelected = null;
-    const control = btn.dataset.cal;
-    const direction = calCursor < previousCursor ? -1 : calCursor > previousCursor ? 1 : 0;
-    renderCal(direction);
-    $(`#cal-body [data-cal="${control}"]`)?.focus();
-    return;
-  }
-  onTaskClick(e);
-}
-
-function onCalKeyDown(e) {
-  const cell = e.target.closest('.cal-cell[data-day]');
-  if (!cell) return;
-  const keys = ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End', 'PageUp', 'PageDown'];
-  if (!keys.includes(e.key)) return;
-  e.preventDefault();
-
-  const grid = cell.closest('.cal-grid');
-  const cells = Array.from(grid.querySelectorAll('.cal-cell[data-day]'));
-  const index = cells.indexOf(cell);
-  let targetKey = null;
-  if (e.key === 'Home') targetKey = cells[index - (index % 7)]?.dataset.day;
-  else if (e.key === 'End') targetKey = cells[index + (6 - (index % 7))]?.dataset.day;
-  else if (e.key === 'PageUp') targetKey = shiftCalendarKey(cell.dataset.day, 0, -1);
-  else if (e.key === 'PageDown') targetKey = shiftCalendarKey(cell.dataset.day, 0, 1);
-  else {
-    const deltas = { ArrowLeft: -1, ArrowRight: 1, ArrowUp: -7, ArrowDown: 7 };
-    targetKey = shiftCalendarKey(cell.dataset.day, deltas[e.key], 0);
-  }
-  if (!targetKey) return;
-
-  calFocusDate = targetKey;
-  if (focusCalendarCell(targetKey)) return;
-  const targetDate = calendarDateFromKey(targetKey);
-  if (!targetDate) return;
-  const direction = targetDate < calCursor ? -1 : 1;
-  calCursor = new Date(targetDate.getFullYear(), targetDate.getMonth(), 1);
-  renderCal(direction);
-  focusCalendarCell(targetKey);
 }
 
 /* ---------- 初始化 ---------- */

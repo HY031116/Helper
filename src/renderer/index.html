@@ -28,17 +28,11 @@
     <!-- 侧边导航 -->
     <nav class="sidebar" aria-label="主导航">
       <button type="button" class="sidebar-create" id="sidebar-new" aria-label="新建任务"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-i-plus"></use></svg><span class="nav-label">新建任务</span></button>
-      <div class="nav-section-label">工作</div>
       <button type="button" class="nav-item active" data-view="today" title="今天" aria-current="page"><span class="nav-ico" aria-hidden="true"><svg class="ui-icon" focusable="false"><use href="#ui-i-today"></use></svg></span><span class="nav-label">今天</span><span class="nav-badge hidden"></span></button>
-      <button type="button" class="nav-item" data-view="tasks" title="所有任务"><span class="nav-ico" aria-hidden="true"><svg class="ui-icon" focusable="false"><use href="#ui-i-tasks"></use></svg></span><span class="nav-label">所有任务</span><span class="nav-badge hidden"></span></button>
-      <button type="button" class="nav-item" data-view="memos" title="备忘录"><span class="nav-ico" aria-hidden="true"><svg class="ui-icon" focusable="false"><use href="#ui-i-memos"></use></svg></span><span class="nav-label">备忘录</span><span class="nav-badge hidden"></span></button>
-      <div class="nav-section-label">视图</div>
-      <button type="button" class="nav-item" data-view="board" title="看板"><span class="nav-ico" aria-hidden="true"><svg class="ui-icon" focusable="false"><use href="#ui-i-board"></use></svg></span><span class="nav-label">看板</span></button>
-      <button type="button" class="nav-item" data-view="cal" title="日历"><span class="nav-ico" aria-hidden="true"><svg class="ui-icon" focusable="false"><use href="#ui-i-calendar"></use></svg></span><span class="nav-label">日历</span></button>
-      <button type="button" class="nav-item" data-view="stat" title="统计"><span class="nav-ico" aria-hidden="true"><svg class="ui-icon" focusable="false"><use href="#ui-i-stat"></use></svg></span><span class="nav-label">统计</span></button>
-      <button type="button" class="nav-item" data-view="trash" title="回收站"><span class="nav-ico" aria-hidden="true"><svg class="ui-icon" focusable="false"><use href="#ui-i-trash"></use></svg></span><span class="nav-label">回收站</span><span class="nav-badge hidden"></span></button>
+      <button type="button" class="nav-item" data-view="list" title="清单"><span class="nav-ico" aria-hidden="true"><svg class="ui-icon" focusable="false"><use href="#ui-i-tasks"></use></svg></span><span class="nav-label">清单</span><span class="nav-badge hidden"></span></button>
+      <button type="button" class="nav-item" data-view="records" title="记录"><span class="nav-ico" aria-hidden="true"><svg class="ui-icon" focusable="false"><use href="#ui-i-stat"></use></svg></span><span class="nav-label">记录</span></button>
       <div class="nav-spacer"></div>
-      <button type="button" class="nav-item" data-view="settings" title="设置"><span class="nav-ico" aria-hidden="true"><svg class="ui-icon" focusable="false"><use href="#ui-i-settings"></use></svg></span><span class="nav-label">设置</span></button>
+      <button type="button" class="nav-item" data-view="settings" title="设置"><span class="nav-ico" aria-hidden="true"><svg class="ui-icon" focusable="false"><use href="#ui-i-settings"></use></svg></span><span class="nav-label">设置</span><span class="nav-badge hidden"></span></button>
     </nav>
 
     <!-- 主内容区 -->
@@ -57,151 +51,103 @@
         </div>
       </section>
 
-      <!-- 所有任务 -->
-      <section class="view" id="view-tasks" style="display:none">
+      <!-- 清单：任务 + 备忘录捕获箱 -->
+      <section class="view memo-view" id="view-list" style="display:none">
         <div class="view-head">
-          <h2>所有任务</h2>
-          <span class="view-sub" id="tasks-sub"></span>
-        </div>
-        <div class="toolbar">
-          <div id="smart-filters" role="group" aria-label="任务筛选"></div>
-          <div class="task-tools">
-            <div class="task-search-row">
-              <input id="search-input" type="search" aria-label="搜索任务" placeholder="搜索标题、描述、标签或项目">
-              <button type="button" class="btn mini ghost" id="btn-select-mode" aria-pressed="false">批量操作</button>
-            </div>
-            <div class="quick-add">
-              <input id="quick-input" aria-label="快速添加任务" placeholder="例如：明天下午3点 交周报 #工作 紧急">
-              <button type="button" class="btn" id="btn-quick-add">快速添加</button>
-              <button type="button" class="btn ghost" id="btn-new">详细创建</button>
-            </div>
-            <div class="quick-preview hidden" id="quick-preview" role="status" aria-live="polite"></div>
+          <h2>清单</h2>
+          <div class="list-tabs" role="tablist" aria-label="清单分区">
+            <button type="button" class="list-tab active" id="list-tab-tasks" role="tab" aria-selected="true" aria-controls="list-tasks-panel">任务</button>
+            <button type="button" class="list-tab" id="list-tab-memos" role="tab" aria-selected="false" aria-controls="list-memos-panel">备忘录</button>
           </div>
+          <span class="view-sub" id="list-sub"></span>
         </div>
-        <!-- 批量操作栏 -->
-        <div class="batch-bar hidden" id="batch-bar">
-          <span id="batch-count" aria-live="polite">请选择任务</span>
-          <button type="button" class="btn mini ghost" id="batch-select-all">全选当前</button>
-          <button type="button" class="btn mini" id="batch-done" disabled><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-i-check"></use></svg><span>完成</span></button>
-          <select id="batch-pri" class="batch-pri" aria-label="批量修改优先级" disabled>
-            <option value="">改优先级…</option>
-            <option value="4">紧急</option>
-            <option value="3">高</option>
-            <option value="2">中</option>
-            <option value="1">低</option>
-          </select>
-          <button type="button" class="btn mini danger" id="batch-delete" disabled>删除</button>
-          <button type="button" class="btn mini ghost" id="batch-clear">退出批量</button>
-        </div>
-        <div class="view-body" id="tasks-list"></div>
-      </section>
-
-      <!-- 备忘录 -->
-      <section class="view memo-view" id="view-memos" style="display:none">
-        <div class="view-head">
-          <h2>备忘录</h2>
-          <span class="view-sub" id="memos-sub"></span>
-        </div>
-        <div class="memo-workspace">
-          <div class="memo-sidebar">
-            <div class="memo-search-row">
-              <input id="memo-search" type="search" aria-label="搜索备忘录的标题、正文或标签" placeholder="搜索备忘录">
-              <button type="button" class="icon-btn memo-new" id="memo-new" title="新建备忘录" aria-label="新建备忘录"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-i-plus"></use></svg></button>
+        <div id="list-tasks-panel" role="tabpanel" aria-label="任务清单">
+          <div class="toolbar">
+            <div class="task-tools">
+              <div class="task-search-row">
+                <input id="search-input" type="search" aria-label="搜索任务" placeholder="搜索标题、描述、标签或项目">
+              </div>
+              <div class="quick-add">
+                <input id="quick-input" aria-label="快速添加任务" placeholder="例如：明天下午3点 交周报 #工作 紧急">
+                <button type="button" class="btn" id="btn-quick-add">快速添加</button>
+                <button type="button" class="btn ghost" id="btn-new">详细创建</button>
+              </div>
+              <div class="quick-preview hidden" id="quick-preview" role="status" aria-live="polite"></div>
             </div>
-            <div class="memo-filter-row">
-              <div class="memo-filters" id="memo-filters" role="group" aria-label="备忘录筛选"></div>
-              <button type="button" class="memo-select-mode" id="memo-select-mode" aria-pressed="false" title="批量选择备忘录"><span>选择</span></button>
-            </div>
-            <div class="memo-batch-bar hidden" id="memo-batch-bar" role="group" aria-label="备忘录批量操作">
-              <span class="memo-batch-count" id="memo-batch-count">已选 0 条</span>
-              <button type="button" class="btn mini ghost" id="memo-batch-select-all" disabled>全选当前</button>
-              <button type="button" class="btn mini ghost" id="memo-batch-pin" disabled>置顶</button>
-              <button type="button" class="btn mini ghost" id="memo-batch-unpin" disabled>取消置顶</button>
-              <button type="button" class="btn mini ghost danger-quiet" id="memo-batch-delete" disabled>删除</button>
-              <button type="button" class="btn mini ghost" id="memo-batch-clear" disabled>清除选择</button>
-            </div>
-            <div class="memo-list" id="memo-list" role="listbox" aria-label="备忘录列表"></div>
           </div>
-          <div class="memo-pane">
-            <div class="memo-load-error hidden" id="memo-load-error"></div>
-            <div class="memo-empty" id="memo-empty">
-              <span class="memo-empty-mark" aria-hidden="true"><svg class="ui-icon" focusable="false"><use href="#ui-i-memos"></use></svg></span>
-              <strong>还没有备忘录</strong>
-              <button type="button" class="btn mini" id="memo-empty-new">新建一条</button>
+          <div class="view-body" id="tasks-list"></div>
+        </div>
+        <div id="list-memos-panel" role="tabpanel" aria-label="备忘录捕获箱" hidden>
+          <div class="memo-workspace">
+            <div class="memo-sidebar">
+              <div class="memo-search-row">
+                <input id="memo-search" type="search" aria-label="搜索备忘录的标题、正文或标签" placeholder="搜索备忘录">
+                <button type="button" class="icon-btn memo-new" id="memo-new" title="新建备忘录" aria-label="新建备忘录"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-i-plus"></use></svg></button>
+              </div>
+              <div class="memo-filter-row">
+                <div class="memo-filters" id="memo-filters" role="group" aria-label="备忘录筛选"></div>
+              </div>
+              <div class="memo-list" id="memo-list" role="listbox" aria-label="备忘录列表"></div>
             </div>
-            <div class="memo-editor hidden" id="memo-editor">
-              <div class="memo-editor-head">
-                <input id="memo-title" class="memo-title" maxlength="100" aria-label="备忘录标题，可留空，留空时自动取正文开头" placeholder="标题（可留空）">
-                <div class="memo-actions" role="group" aria-label="备忘录操作">
-                  <div class="memo-action-group">
-                    <button type="button" class="memo-tool" id="memo-pin" data-tooltip="置顶" aria-label="置顶备忘录" aria-pressed="false"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-i-pin"></use></svg></button>
-                    <button type="button" class="memo-tool" id="memo-copy" data-tooltip="复制" aria-label="复制备忘录"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-i-copy"></use></svg></button>
+            <div class="memo-pane">
+              <div class="memo-load-error hidden" id="memo-load-error"></div>
+              <div class="memo-empty" id="memo-empty">
+                <span class="memo-empty-mark" aria-hidden="true"><svg class="ui-icon" focusable="false"><use href="#ui-i-memos"></use></svg></span>
+                <strong>还没有备忘录</strong>
+                <button type="button" class="btn mini" id="memo-empty-new">新建一条</button>
+              </div>
+              <div class="memo-editor hidden" id="memo-editor">
+                <div class="memo-editor-head">
+                  <input id="memo-title" class="memo-title" maxlength="100" aria-label="备忘录标题，可留空，留空时自动取正文开头" placeholder="标题（可留空）">
+                  <div class="memo-actions" role="group" aria-label="备忘录操作">
+                    <div class="memo-action-group">
+                      <button type="button" class="memo-tool" id="memo-pin" data-tooltip="置顶" aria-label="置顶备忘录" aria-pressed="false"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-i-pin"></use></svg></button>
+                      <button type="button" class="memo-tool" id="memo-copy" data-tooltip="复制" aria-label="复制备忘录"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-i-copy"></use></svg></button>
+                    </div>
+                    <button type="button" class="memo-task-action" id="memo-to-task" aria-label="转为任务" data-tooltip="转为任务"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-i-external"></use></svg><span>转为任务</span></button>
+                    <button type="button" class="memo-tool memo-delete-tool" id="memo-delete" data-tooltip="删除" aria-label="删除备忘录"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-i-trash"></use></svg></button>
                   </div>
-                  <button type="button" class="memo-task-action" id="memo-to-task" aria-label="转为任务" data-tooltip="转为任务"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-i-external"></use></svg><span>转为任务</span></button>
-                  <button type="button" class="memo-tool memo-delete-tool" id="memo-delete" data-tooltip="删除" aria-label="删除备忘录"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-i-trash"></use></svg></button>
+                </div>
+                <div class="memo-tag-field">
+                  <span class="memo-tag-mark" aria-hidden="true">#</span>
+                  <div class="memo-tag-chips" id="memo-tag-chips"></div>
+                  <input id="memo-tags" class="memo-tags" maxlength="120" aria-label="备忘录标签，用空格或逗号分隔" placeholder="添加标签">
+                </div>
+                <textarea id="memo-content" class="memo-content" aria-label="备忘录正文" placeholder="写下需要记住的内容…"></textarea>
+                <div class="memo-editor-foot">
+                  <span id="memo-save-state" data-state="saved" role="status" aria-live="polite">已保存</span>
+                  <span id="memo-updated"></span>
                 </div>
               </div>
-              <div class="memo-tag-field">
-                <span class="memo-tag-mark" aria-hidden="true">#</span>
-                <div class="memo-tag-chips" id="memo-tag-chips"></div>
-                <input id="memo-tags" class="memo-tags" maxlength="120" aria-label="备忘录标签，用空格或逗号分隔" placeholder="添加标签">
-              </div>
-              <textarea id="memo-content" class="memo-content" aria-label="备忘录正文" placeholder="写下需要记住的内容…"></textarea>
-              <div class="memo-editor-foot">
-                <span id="memo-save-state" data-state="saved" role="status" aria-live="polite">已保存</span>
-                <span id="memo-updated"></span>
-              </div>
             </div>
           </div>
         </div>
       </section>
 
-      <!-- 看板 -->
-      <section class="view" id="view-board" style="display:none">
+      <!-- 记录 -->
+      <section class="view" id="view-records" style="display:none">
         <div class="view-head">
-          <h2>看板</h2>
-          <span class="view-sub" id="board-sub"></span>
+          <h2>记录</h2>
+          <span class="view-sub" id="records-sub" aria-live="polite"></span>
         </div>
-        <div class="view-body" id="board-cols"></div>
+        <div class="view-body" id="records-body"></div>
       </section>
 
-      <!-- 日历 -->
-      <section class="view" id="view-cal" style="display:none">
-        <div class="view-head">
-          <h2>日历</h2>
-          <span class="view-sub" id="cal-sub"></span>
-        </div>
-        <div class="view-body" id="cal-body"></div>
-      </section>
-
-      <!-- 统计 -->
-      <section class="view" id="view-stat" style="display:none">
-        <div class="view-head">
-          <h2>统计</h2>
-          <span class="view-sub" id="stat-sub" aria-live="polite">未归档任务全集 · 最近 7 个自然日</span>
-        </div>
-        <div class="view-body" id="stat-body"></div>
-      </section>
-
-      <!-- 回收站 -->
-      <section class="view" id="view-trash" style="display:none">
-        <div class="view-head">
-          <h2>回收站</h2>
-          <span class="view-sub" id="trash-sub" aria-live="polite">已删除的任务和备忘录可在此恢复</span>
-        </div>
-        <div class="toolbar view-actions">
-          <button type="button" class="btn mini danger icon-text hidden" id="trash-empty"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-i-trash"></use></svg><span>清空回收站</span></button>
-        </div>
-        <div class="view-body" id="trash-list"></div>
-      </section>
-
-      <!-- 设置 -->
+      <!-- 设置（含回收站） -->
       <section class="view" id="view-settings" style="display:none">
         <div class="view-head">
           <h2>设置</h2>
           <span class="view-sub">数据与偏好</span>
         </div>
         <div class="view-body" id="settings-body"></div>
+        <div class="trash-section" id="trash-section">
+          <div class="trash-section-head">
+            <h3 id="trash-section-title">回收站</h3>
+            <span class="view-sub" id="trash-sub" aria-live="polite">已删除的任务和备忘录可在此恢复</span>
+            <button type="button" class="btn mini danger icon-text hidden" id="trash-empty"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-i-trash"></use></svg><span>清空回收站</span></button>
+          </div>
+          <div class="view-body trash-list-body" id="trash-list"></div>
+        </div>
       </section>
     </main>
 
@@ -268,15 +214,6 @@
         <textarea id="m-desc" maxlength="500" rows="2" placeholder="补充任务细节…"></textarea>
         <div class="m-row">
           <div class="m-col">
-            <label for="m-pri">优先级</label>
-            <select id="m-pri">
-              <option value="4">紧急</option>
-              <option value="3">高</option>
-              <option value="2" selected>中</option>
-              <option value="1">低</option>
-            </select>
-          </div>
-          <div class="m-col">
             <label for="m-status">状态</label>
             <select id="m-status">
               <option value="todo">待办</option>
@@ -284,8 +221,6 @@
               <option value="done">已完成</option>
             </select>
           </div>
-        </div>
-        <div class="m-row due-tags-row">
           <div class="m-col">
             <label for="m-due-date">截止日期</label>
             <div class="due-row">
@@ -294,16 +229,8 @@
               <button type="button" class="btn mini ghost" id="m-due-clear" title="清除截止时间" aria-label="清除截止时间"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#ui-i-x"></use></svg></button>
             </div>
           </div>
-          <div class="m-col">
-            <label for="m-tags">标签（逗号分隔）</label>
-            <input id="m-tags" placeholder="工作, 生活">
-          </div>
         </div>
         <div class="m-row">
-          <div class="m-col">
-            <label for="m-project">项目</label>
-            <input id="m-project" placeholder="如：Q3 规划" maxlength="30">
-          </div>
           <div class="m-col">
             <label for="m-repeat">重复</label>
             <select id="m-repeat">
@@ -313,8 +240,6 @@
               <option value="monthly">每月</option>
             </select>
           </div>
-        </div>
-        <div class="m-row">
           <div class="m-col">
             <label for="m-remind">提醒</label>
             <select id="m-remind">
@@ -324,13 +249,7 @@
               <option value="60">提前 1 小时</option>
             </select>
           </div>
-          <div class="m-col">
-            <label for="m-estimate">预计耗时（分钟）</label>
-            <input id="m-estimate" type="number" min="5" max="480" step="5" placeholder="如：30">
-          </div>
         </div>
-        <label for="m-children">子任务（每行一个，[x] 前缀表示已完成）</label>
-        <textarea id="m-children" rows="3" placeholder="[ ] 搭框架&#10;[ ] 写初稿&#10;[ ] 内部校对"></textarea>
         <div class="form-error hidden" id="modal-error" role="alert"></div>
         </div>
         <div class="m-actions">

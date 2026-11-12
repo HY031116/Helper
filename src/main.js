@@ -252,7 +252,7 @@ function createTray() {
     { label: '新建任务', click: () => sendToMain('app:new-task') },
     { type: 'separator' },
     { label: '今日视图', click: () => sendToMain('app:switch-view', 'today') },
-    { label: '统计', click: () => sendToMain('app:switch-view', 'stat') },
+    { label: '清单', click: () => sendToMain('app:switch-view', 'list') },
     { label: '回收站', click: () => sendToMain('app:switch-view', 'trash') },
     { type: 'separator' },
     { label: '静音提醒', type: 'checkbox', checked: false, click: (item) => { store.updateSettings({ notify: !item.checked }); } },
@@ -302,9 +302,6 @@ function registerShortcuts() {
     });
     globalShortcut.register(s.today || 'CommandOrControl+1', () => {
       sendToMain('app:switch-view', 'today');
-    });
-    globalShortcut.register(s.stat || 'CommandOrControl+5', () => {
-      sendToMain('app:switch-view', 'stat');
     });
   } catch (e) {
     console.error('[main] 快捷键注册失败:', e.message);
@@ -504,6 +501,7 @@ function registerIpc() {
 
   // 备忘录
   ipcMain.handle('memos:getAll', () => store.getAllMemos());
+  ipcMain.handle('memos:convert', (e, id) => store.convertMemoToTask(id));
   ipcMain.handle('memos:create', (e, data) => store.createMemo(data));
   ipcMain.handle('memos:update', (e, id, patch) => store.updateMemo(id, patch));
   ipcMain.handle('memos:delete', (e, id) => store.deleteMemo(id));
@@ -514,7 +512,6 @@ function registerIpc() {
   ipcMain.handle('memos:restore', (e, id) => store.restoreMemo(id));
   ipcMain.handle('memos:purge', (e, id) => store.purgeMemo(id));
   ipcMain.handle('memos:emptyTrash', () => store.emptyMemoTrash());
-  ipcMain.handle('memos:import', (e, list) => store.importMemos(list));
 
   // 设置
   ipcMain.handle('settings:get', () => store.getSettings());
@@ -752,7 +749,7 @@ function registerIpc() {
     } else if (view === 'ai') {
       // AI 对话：展开 AI 面板并聚焦输入框
       sendToMain('app:focus-ai');
-    } else {
+    } else if (['today', 'list', 'records', 'settings'].includes(view)) {
       sendToMain('app:switch-view', view);
     }
     return { ok: true };
@@ -797,7 +794,7 @@ function registerIpc() {
       { label: '新建任务', click: () => sendToMain('app:new-task') },
       { type: 'separator' },
       { label: '今日视图', click: () => sendToMain('app:switch-view', 'today') },
-      { label: '统计', click: () => sendToMain('app:switch-view', 'stat') },
+      { label: '清单', click: () => sendToMain('app:switch-view', 'list') },
       { type: 'separator' },
       { label: '退出', click: () => { isQuitting = true; app.quit(); } }
     ]);

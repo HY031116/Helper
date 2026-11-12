@@ -107,7 +107,7 @@ html, body {
 
 /* 数字/时间使用等宽字体，对齐美观 */
 .tdue, .done-time, .cal-num, .stat-card .sc-v,
-.batch-bar #batch-count, .tr-count, .today-date,
+.tr-count, .today-date,
 .trash-time, .shortcut-input, .kbd {
   font-family: var(--font-num);
   font-variant-numeric: tabular-nums;
@@ -271,12 +271,8 @@ html, body {
   transform: translateY(-1px);
 }
 #view-today .view-head h2::before { content: 'TODAY'; }
-#view-tasks .view-head h2::before { content: 'TASKS'; }
-#view-memos .view-head h2::before { content: 'MEMOS'; }
-#view-board .view-head h2::before { content: 'BOARD'; }
-#view-cal .view-head h2::before { content: 'CALENDAR'; }
-#view-stat .view-head h2::before { content: 'STATS'; }
-#view-trash .view-head h2::before { content: 'TRASH'; }
+#view-list .view-head h2::before { content: 'LIST'; }
+#view-records .view-head h2::before { content: 'LOGS'; }
 #view-settings .view-head h2::before { content: 'SETUP'; }
 .view-sub { font-size: 12.5px; color: var(--muted); }
 .view-body { min-height: 200px; }
@@ -410,46 +406,7 @@ html, body {
 }
 .memo-filters::-webkit-scrollbar { display: none; }
 .memo-filters .fchip { flex: 0 0 auto; }
-.memo-select-mode {
-  flex: 0 0 auto;
-  padding: 3px 8px;
-  border: 1px solid var(--rule);
-  border-radius: 4px;
-  background: transparent;
-  color: var(--muted);
-  font: 600 11px/1.6 var(--font-ui);
-  cursor: pointer;
-}
-.memo-select-mode[aria-pressed="true"] { border-color: var(--accent2); background: rgba(var(--accent2-rgb), 0.1); color: var(--accent2); }
-.memo-batch-bar {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 5px;
-  margin: 8px 10px 0;
-  padding: 7px 8px;
-  border: 1px solid rgba(var(--accent2-rgb), 0.24);
-  border-radius: 6px;
-  background: rgba(var(--accent2-rgb), 0.05);
-}
-.memo-batch-count { grid-column: 1 / -1; color: var(--muted); font: 600 11px/1.5 var(--font-ui); }
-.memo-batch-bar .btn { width: 100%; justify-content: center; padding-inline: 4px; font-size: 11px; }
-.memo-batch-bar .btn:last-child { grid-column: 1 / -1; }
-.memo-list-item.selectable { grid-template-columns: auto minmax(0, 1fr); align-items: start; }
 .memo-list-body { display: grid; min-width: 0; gap: 3px; }
-.memo-check {
-  display: inline-flex;
-  width: 16px;
-  height: 16px;
-  align-items: center;
-  justify-content: center;
-  margin-top: 2px;
-  border: 1px solid var(--rule);
-  border-radius: 4px;
-  background: var(--bg2);
-  color: transparent;
-}
-.memo-check .ui-icon { width: 11px; height: 11px; }
-.memo-list-item.checked .memo-check { border-color: var(--accent2); background: var(--accent2); color: #F4F7FA; }
 .memo-list-meta { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; }
 .memo-list-meta .memo-list-time { margin-left: auto; }
 .memo-list-item.draft { background: rgba(var(--warn-rgb), 0.06); }
@@ -803,18 +760,7 @@ html, body {
 .task-row.archived .tname { text-decoration: line-through; }
 .task-row.dragging { opacity: 0.42; transform: scale(0.992); }
 .task-row.drop-target { border-color: var(--accent2); box-shadow: 0 0 0 2px rgba(var(--accent2-rgb), 0.2); }
-.task-row.sel { border-color: var(--accent2); background: rgba(var(--accent2-rgb), 0.06); }
-.task-row.selecting { cursor: pointer; }
-.task-row.selecting .task-check {
-  border-radius: 5px; border-color: var(--accent2); background: transparent; animation: none;
-}
 .proj-chip .ui-icon { width: 11px; height: 11px; }
-.task-row.selecting.sel .task-check { background: var(--solid-info); border-color: var(--solid-info); }
-.task-row.selecting .pri-dot,
-.task-row.selecting .task-expand,
-.task-row.selecting .task-main,
-.task-row.selecting .task-meta { pointer-events: none; }
-.task-row.selecting .task-overflow { display: none; }
 /* 拖拽插入指示线 */
 .task-row.drop-before { box-shadow: 0 -3px 0 0 var(--accent2); }
 .task-row.drop-after { box-shadow: 0 3px 0 0 var(--accent2); }
@@ -1000,30 +946,6 @@ html, body {
 /* 搜索高亮 */
 mark { background: rgba(var(--warn-rgb), 0.25); color: inherit; border-radius: 2px; padding: 0 1px; }
 
-/* 批量操作栏 */
-.batch-bar {
-  position: sticky; top: 0; margin-bottom: 12px;
-  display: flex; align-items: center; gap: 10px;
-  background: var(--inverse); color: #F2F4F5; border-radius: 8px;
-  padding: 10px 16px; box-shadow: 0 8px 24px rgba(var(--ink-rgb), 0.3);
-  z-index: var(--layer-sticky);
-}
-.batch-bar.hidden { display: none; }
-.batch-bar #batch-count { font-size: 12.5px; font-weight: 600; }
-.batch-bar .btn.mini { background: rgba(255, 255, 255, 0.12); color: #F2F4F5; }
-.batch-bar #batch-done { display: inline-flex; align-items: center; gap: 5px; }
-.batch-bar #batch-done .ui-icon { width: 12px; height: 12px; }
-.batch-bar .btn.mini.danger { background: rgba(var(--danger-rgb), 0.3); color: #FFD4D0; }
-.batch-bar .btn.mini.ghost { background: transparent; border: 1px solid rgba(255, 255, 255, 0.3); }
-.batch-bar :disabled { opacity: 0.45; cursor: not-allowed; }
-.batch-bar[aria-busy="true"] #batch-count { color: rgba(255, 255, 255, 0.84); }
-.batch-pri {
-  background: rgba(255, 255, 255, 0.12); color: #F2F4F5;
-  border: 1px solid rgba(255, 255, 255, 0.2); border-radius: 8px;
-  padding: 5px 8px; font-size: 12px; outline: none;
-}
-.batch-pri option { color: var(--inverse); }
-
 /* 回收站 */
 .trash-row {
   display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 12px;
@@ -1049,7 +971,6 @@ mark { background: rgba(var(--warn-rgb), 0.25); color: inherit; border-radius: 2
   padding: 4px 0 10px;
   background: var(--bg);
 }
-#view-tasks.batch-mode .toolbar { display: none; }
 .fchips { display: flex; gap: 6px; margin-bottom: 10px; }
 .fchip {
   font-size: 12px; padding: 4px 14px; border-radius: 999px;
@@ -1650,6 +1571,23 @@ mark { background: rgba(var(--warn-rgb), 0.25); color: inherit; border-radius: 2
     box-shadow var(--motion-fast) var(--ease-standard);
 }
 .seg-it.active { background: var(--bg2); color: var(--ink); font-weight: 600; box-shadow: 0 1px 4px rgba(var(--ink-rgb), 0.12); }
+/* 清单页分区标签（任务 / 备忘录） */
+.list-tabs { align-self: flex-start; display: flex; gap: 2px; background: rgba(var(--muted-rgb), 0.14); border-radius: 8px; padding: 2px; }
+.list-tab {
+  font-size: 12px; padding: 4px 14px; border: 0; border-radius: 6px; cursor: pointer;
+  color: var(--muted); background: transparent; font-family: inherit;
+  transition: color var(--motion-fast) var(--ease-standard),
+    background-color var(--motion-fast) var(--ease-standard),
+    box-shadow var(--motion-fast) var(--ease-standard);
+}
+.list-tab.active { background: var(--bg2); color: var(--ink); font-weight: 600; box-shadow: 0 1px 4px rgba(var(--ink-rgb), 0.12); }
+.list-tab:focus-visible { outline: 2px solid var(--accent2); outline-offset: 2px; }
+/* 设置页内的回收站分区 */
+.trash-section { border-top: 1px solid var(--rule); margin-top: 6px; padding-top: 14px; }
+.trash-section-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+.trash-section-head h3 { margin: 0; font-size: 14px; font-weight: 650; }
+.trash-section-head .view-sub { flex: 1 1 auto; }
+.trash-list-body { max-height: 40vh; overflow: auto; }
 .status-badge {
   flex: 0 0 auto; padding: 3px 8px; border-radius: 999px;
   color: var(--ok); background: rgba(var(--ok-rgb), 0.09); border: 1px solid rgba(var(--ok-rgb), 0.2);
@@ -2638,10 +2576,6 @@ body.dark .ai-head { background: var(--bg2); }
   .quick-preview { align-items: flex-start; flex-wrap: wrap; }
   .quick-preview-title { width: calc(100% - 64px); white-space: normal; overflow-wrap: anywhere; }
   .quick-preview-meta { width: 100%; margin-left: 0; padding-left: 60px; }
-  .batch-bar { flex-wrap: nowrap; gap: 6px; padding: 10px 12px; }
-  .batch-bar #batch-count { white-space: nowrap; }
-  .batch-bar .btn.mini { padding-left: 9px; padding-right: 9px; white-space: nowrap; }
-  .batch-pri { min-width: 0; max-width: 96px; }
   .trash-row { grid-template-columns: 1fr; align-items: start; }
   .trash-actions { justify-content: flex-start; }
 }

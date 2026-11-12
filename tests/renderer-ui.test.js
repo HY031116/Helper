@@ -188,11 +188,14 @@ test('主导航和任务工具栏使用可聚焦控件', () => {
   assert.match(html, /<link rel="stylesheet" href="css\/icons\.css">/);
   assert.match(html, /<script src="js\/ui-icons\.js"><\/script>\s*<script src="js\/app\.js"><\/script>/);
   assert.match(iconApp, /id="ui-icon-sprite"/);
-  assert.strictEqual((html.match(/class="nav-ico" aria-hidden="true"><svg class="ui-icon"/g) || []).length, 8);
+  assert.strictEqual((html.match(/class="nav-ico" aria-hidden="true"><svg class="ui-icon"/g) || []).length, 4);
   assert.match(iconCss, /\.ui-icon \{[\s\S]*?stroke: currentColor;[\s\S]*?stroke-width: 2;/);
   assert.match(html, /id="sidebar-new" aria-label="新建任务"/);
   assert.match(html, /<button type="button" class="nav-item active"[^>]+aria-current="page"/);
   assert.doesNotMatch(html, /<div class="nav-item/);
+  for (const view of ['today', 'list', 'records', 'settings']) {
+    assert.match(html, new RegExp(`<button type="button" class="nav-item[^"]*" data-view="${view}"`));
+  }
   assert.match(html, /<div class="task-search-row">\s*<input id="search-input" type="search" aria-label="搜索任务"/);
   assert.match(html, /<div class="quick-add">\s*<input id="quick-input" aria-label="快速添加任务"/);
   assert.match(html, /id="btn-quick-add">快速添加<\/button>/);
@@ -210,39 +213,42 @@ test('视图切换保留各自滚动位置且重复选择不会跳回顶部', ()
     removeAttribute(name) { delete this.attrs[name]; }
   });
   const todayNav = makeNav('today');
-  const tasksNav = makeNav('tasks');
+  const listNav = makeNav('list');
   const todayView = { id: 'view-today', style: {}, isConnected: true, classList: fakeClassList() };
-  const tasksView = { id: 'view-tasks', style: {}, isConnected: true, classList: fakeClassList() };
+  const listView = { id: 'view-list', style: {}, isConnected: true, classList: fakeClassList() };
   const run = loadRendererRuntime({
     '.content': content,
     '#tb-title': title,
     'view-today': todayView,
-    'view-tasks': tasksView,
+    'view-list': listView,
     __querySelectorAll: (selector) => {
-      if (selector === '.nav-item') return [todayNav, tasksNav];
-      if (selector === '.view') return [todayView, tasksView];
+      if (selector === '.nav-item') return [todayNav, listNav];
+      if (selector === '.view') return [todayView, listView];
       return [];
     }
   });
   run(`
     closeTaskMenus = () => {};
-    setBatchMode = () => {};
     playTransientClass = () => {};
     renderToday = () => {};
     renderTasks = () => {};
+    renderMemos = () => {};
+    renderRecords = () => {};
+    renderSettings = () => {};
+    loadTrash = () => {};
     applyDataLoadStates = () => {};
     currentView = 'today';
     viewScrollPositions.clear();
-    viewScrollPositions.set('tasks', 55);
-    switchView('tasks');
+    viewScrollPositions.set('list', 55);
+    switchView('list');
   `);
   assert.strictEqual(content.scrollTop, 55);
   assert.strictEqual(run(`viewScrollPositions.get('today')`), 120);
-  assert.strictEqual(tasksNav.attrs['aria-current'], 'page');
+  assert.strictEqual(listNav.attrs['aria-current'], 'page');
   content.scrollTop = 80;
   run(`switchView('today')`);
   assert.strictEqual(content.scrollTop, 120);
-  assert.strictEqual(run(`viewScrollPositions.get('tasks')`), 80);
+  assert.strictEqual(run(`viewScrollPositions.get('list')`), 80);
   content.scrollTop = 135;
   run(`switchView('today')`);
   assert.strictEqual(content.scrollTop, 135);
@@ -250,36 +256,27 @@ test('视图切换保留各自滚动位置且重复选择不会跳回顶部', ()
 
 test('高频任务操作和设置开关暴露键盘与状态语义', () => {
   assert.match(app, /<button type="button" class="task-check"[^>]+aria-label=/);
-  assert.match(app, /<button type="button" class="pri-dot p\$\{t\.pri\}"[^>]+data-pri-toggle/);
-  assert.match(app, /class="task-expand\$\{[^}]+\}"[^>]+aria-expanded=/);
   assert.match(app, /class="tname task-title-btn" aria-expanded=/);
   assert.match(app, /role="switch" aria-checked=/);
   assert.match(html, /<button type="button" class="chip" data-prompt=/);
-  assert.match(app, /<button type="button" class="fchip [^`]+aria-pressed=/);
-  assert.match(app, /<button type="button" class="bc-card"[^>]+aria-label=/);
-  assert.match(app, /<button type="button" role="gridcell" class="\$\{cls\}" data-day=[^>]+aria-selected=/);
   assert.match(app, /class="task-more" aria-haspopup="menu" aria-controls="\$\{menuId\}" aria-expanded="false"/);
   assert.match(app, /class="task-menu hidden" id="\$\{menuId\}" role="menu"/);
   assert.match(css, /\.task-more \{[\s\S]*?width: 28px; height: 28px;/);
   assert.match(app, /const checkIcon = checked \? uiIcon\('check'\) : ''/);
-  assert.match(app, /class="task-expand[^`]+uiIcon\('chevron-right'\)/);
-  assert.match(app, /class="child-check" aria-hidden="true">\$\{x\.done \? uiIcon\('check'\) : ''\}/);
   assert.match(css, /\.task-check \.ui-icon \{ width: 12px; height: 12px;/);
-  assert.match(app, /class="proj-chip">\$\{uiIcon\('folder'\)\}<span>/);
   assert.match(app, /class="repeat-chip">\$\{uiIcon\('refresh'\)\}<span>/);
   assert.doesNotMatch(app, /◈|↻/);
 });
 
-test('任务行图标子节点仍能触发完成和子任务展开', async () => {
+test('任务行复选框完成任务，标题按钮展开详情', async () => {
   const row = { dataset: { id: '1' } };
   const taskCheck = {};
-  const taskExpand = {};
   const makeTarget = (control) => ({
     classList: { contains: () => false },
     closest(selector) {
       if (selector === '.task-row') return row;
       if (selector === '.task-check') return control === 'check' ? taskCheck : null;
-      if (selector === '.task-expand') return control === 'expand' ? taskExpand : null;
+      if (selector === '.tname') return control === 'title' ? {} : null;
       return null;
     }
   });
@@ -287,18 +284,18 @@ test('任务行图标子节点仍能触发完成和子任务展开', async () =>
   const run = loadRendererRuntime({
     __testValues: {
       checkEvent: { target: makeTarget('check'), ctrlKey: false, metaKey: false, shiftKey: false },
-      expandEvent: { target: makeTarget('expand') },
+      titleEvent: { target: makeTarget('title') },
       calls
     }
   });
-  run(`tasks = [{ id: 1, title: '交周报', status: 'todo', children: [{ id: 'a', title: '整理', done: false }] }];
-    currentView = 'tasks'; batchMode = false;
+  run(`tasks = [{ id: 1, title: '交周报', status: 'todo' }];
+    currentView = 'tasks';
     toggleDone = (task) => testValues.calls.push('done:' + task.id);
     renderAll = () => testValues.calls.push('render');`);
   await run('onTaskClick(testValues.checkEvent)');
-  await run('onTaskClick(testValues.expandEvent)');
+  await run('onTaskClick(testValues.titleEvent)');
   assert.deepStrictEqual(calls, ['done:1', 'render']);
-  assert.strictEqual(run('expandedIds.has(1)'), true);
+  assert.strictEqual(run(`expandedIds.has('d1')`), true);
 });
 
 test('任务低频操作收进统一菜单并支持方向键浏览', () => {
@@ -557,8 +554,8 @@ test('任务删除需确认，归档与恢复失败时保留编辑上下文', ()
 });
 
 test('任务弹窗保护未保存内容并保证截止日期完整显示', () => {
-  assert.match(html, /<div class="m-row due-tags-row">[\s\S]*?<div class="due-row">/);
-  assert.match(css, /\.due-tags-row \{ flex-direction: column; gap: 0; \}/);
+  assert.match(html, /<label for="m-due-date">截止日期<\/label>\s*<div class="due-row">\s*<input id="m-due-date" type="date">\s*<input id="m-due-time" type="time" value="18:00"/);
+  assert.match(css, /\.due-row \{ display: flex; gap: 6px; align-items: center; \}/);
   assert.match(app, /let modalInitialSnapshot = ''/);
   assert.match(app, /function taskFormSnapshot\(\)/);
   assert.match(app, /function captureModalInitialState\(\)/);
@@ -568,7 +565,9 @@ test('任务弹窗保护未保存内容并保证截止日期完整显示', () =>
   assert.match(app, /#m-close'\)\.addEventListener\('click', requestCloseModal\)/);
   assert.match(app, /if \(e\.target === \$\('#modal-mask'\)\) requestCloseModal\(\)/);
   assert.match(app, /if \(e\.key === 'Escape'\) \{\s*e\.preventDefault\(\);\s*e\.stopPropagation\(\);\s*requestCloseModal\(\)/);
-  assert.match(app, /\$\('#m-due-time'\)\.value = '18:00';\s*captureModalInitialState\(\)/);
+  assert.match(app, /function splitDue\(due\)[\s\S]{0,260}time: m && m\[2\] \? m\[2\] : '18:00'/);
+  assert.match(app, /\$\('#m-due-date'\)\.value = due\.date;\s*\$\('#m-due-time'\)\.value = due\.time;/);
+  assert.match(app, /captureModalInitialState\(\);\s*const mask = \$\('#modal-mask'\)/);
   assert.match(app, /console\.error\('\[task-modal\] save failed:', err\)/);
   assert.match(app, /setModalError\('保存失败，请稍后重试。任务内容仍保留在窗口中。'\)/);
 });
@@ -713,9 +712,9 @@ test('无独立错误面板的异步操作不会静默失败', () => {
 });
 
 test('所有界面完成入口复用重复任务完成语义', () => {
-  assert.match(app, /if \(targetStatus === 'done'\) \{\s*await toggleDone\(task\)/);
   assert.match(app, /if \(next === 'done'\) await toggleDone\(t\)/);
   assert.match(app, /if \(t\.status === 'done'\) \{\s*await window\.api\.tasks\.update\(t\.id, \{ status: 'todo' \}\)/);
+  assert.match(app, /const res = await window\.api\.tasks\.complete\(t\.id\)/);
 });
 
 test('任务完成反馈在列表刷新前可见', async () => {
@@ -791,34 +790,12 @@ test('单任务写操作立即锁定整行并拒绝重复提交', async () => {
   assert.match(css, /#memo-save-state\[data-state="saving"\]::before,[\s\S]*?\.task-row\.is-busy::before,/);
 });
 
-test('键盘批量优先级等待真实写入结果后再结束批量模式', () => {
-  const shortcutFlow = app.slice(app.indexOf('// 应用内快捷键（不抢输入框焦点）'), app.indexOf('// T 加今天 / D 加明天'));
-  assert.match(shortcutFlow, /document\.addEventListener\('keydown', async \(e\) =>/);
-  assert.match(shortcutFlow, /e\.preventDefault\(\);[\s\S]*?await runBatchMutation\(\{/);
-  assert.doesNotMatch(shortcutFlow, /window\.api\.tasks\.batchUpdate\(ids/);
-  assert.doesNotMatch(shortcutFlow, /setBatchMode\(false/);
-});
-
-test('批量模式显式进入，只保留当前可见任务并禁用空操作', () => {
-  assert.match(html, /id="btn-select-mode" aria-pressed="false">批量操作/);
-  assert.match(html, /id="batch-bar"[\s\S]*?<div class="view-body" id="tasks-list">/);
-  assert.match(html, /id="batch-done" disabled/);
-  assert.match(html, /id="batch-delete" disabled/);
-  assert.match(app, /visibleTaskIds = list\.map\(\(t\) => t\.id\)/);
-  assert.match(app, /selectedIds = new Set\(\[\.\.\.selectedIds\]\.filter\(\(id\) => visibleSet\.has\(id\)\)\)/);
-  assert.match(app, /completableCount = tasks\.filter\(\(t\) => selectedIds\.has\(t\.id\) && t\.status !== 'done' && t\.status !== 'archived'\)\.length/);
-  assert.match(app, /action: \(selected\) => window\.api\.tasks\.batchComplete\(selected\)/);
-  assert.match(app, /function setBatchMode\(enabled, shouldRender = true\)/);
-  assert.match(app, /class="task-main"\$\{batchMode \? ' inert' : ''\}/);
-  assert.match(app, /\.task-row\[data-id="\$\{id\}"\] \.task-check/);
-  assert.match(app, /if \(active\) active\.focus\(\)/);
-  assert.match(css, /\.task-row\.selecting \.task-check \{[\s\S]*?background: transparent; animation: none;/);
-  assert.match(app, /trigger\.classList\.toggle\('hidden', enabled\)/);
-  assert.match(app, /\$\('#view-tasks'\)\?\.classList\.toggle\('batch-mode', enabled\)/);
-  assert.match(css, /#view-tasks\.batch-mode \.toolbar \{ display: none; \}/);
-  assert.match(css, /\.task-row\.selecting \.task-overflow \{ display: none; \}/);
-  assert.match(css, /\.batch-bar \{\s*position: sticky; top: 0; margin-bottom: 12px;/);
-  assert.match(css, /@container \(max-width: 560px\)[\s\S]*?\.batch-bar \{ flex-wrap: nowrap; gap: 6px; padding: 10px 12px; \}/);
+test('批量与优先级批量调整已从主界面裁剪，复杂调整交由 AI 对话', () => {
+  assert.doesNotMatch(html, /btn-select-mode|batch-bar|batch-done|batch-delete|batch-pri/);
+  assert.doesNotMatch(app, /setBatchMode\(|runBatchMutation\(|\bselectedIds\b|\bbatchMode\b|renderBatchBar|setBatchBusy|visibleTaskIds/);
+  assert.doesNotMatch(app, /window\.api\.tasks\.batchComplete|window\.api\.tasks\.batchUpdate/);
+  assert.doesNotMatch(css, /\.batch-bar|\.batch-pri|\.task-row\.selecting|\.memo-batch-bar|\.memo-select-mode|\.memo-check/);
+  assert.match(html, /<button type="button" class="chip" data-prompt=/);
 });
 
 test('快捷键设置使用友好显示且聚焦时保留原值', () => {
@@ -830,83 +807,6 @@ test('快捷键设置使用友好显示且聚焦时保留原值', () => {
   assert.doesNotMatch(app, /el\.addEventListener\('focus',[\s\S]*?el\.value = ''/);
   assert.match(app, /\['Control', 'Alt', 'Shift', 'Meta'\]\.includes\(e\.key\)/);
   assert.match(app, /<p class="set-group-intro">全局有效。聚焦输入框后，直接按下新的组合键。<\/p>/);
-});
-
-test('批量栏实际按可完成任务数更新状态', () => {
-  const classes = new Set(['hidden']);
-  const elements = {
-    '#batch-bar': { attrs: {}, classList: { add: (name) => classes.add(name), remove: (name) => classes.delete(name) }, setAttribute(name, value) { this.attrs[name] = value; } },
-    '#batch-count': { textContent: '' },
-    '#batch-done': { disabled: true, innerHTML: '', title: '' },
-    '#batch-pri': { disabled: true },
-    '#batch-delete': { disabled: true },
-    '#batch-select-all': { disabled: true, textContent: '' },
-    '#batch-clear': { disabled: false }
-  };
-  const run = loadRendererRuntime(elements);
-
-  run(`
-    tasks = [
-      { id: 1, status: 'todo' },
-      { id: 2, status: 'done' },
-      { id: 3, status: 'archived' }
-    ];
-    batchMode = true;
-    visibleTaskIds = [1, 2, 3];
-    selectedIds = new Set([1, 2, 3]);
-    renderBatchBar();
-  `);
-
-  assert.strictEqual(classes.has('hidden'), false);
-  assert.strictEqual(elements['#batch-count'].textContent, '已选 3 项');
-  assert.strictEqual(elements['#batch-done'].disabled, false);
-  assert.match(elements['#batch-done'].innerHTML, /href="#ui-i-check"/);
-  assert.match(elements['#batch-done'].innerHTML, /<span>完成 1 项<\/span>/);
-  assert.strictEqual(elements['#batch-done'].title, '已完成或已归档任务将自动跳过');
-
-  run(`setBatchBusy(true, '正在完成 3 项…', null)`);
-  assert.strictEqual(elements['#batch-count'].textContent, '正在完成 3 项…');
-  assert.strictEqual(elements['#batch-bar'].attrs['aria-busy'], 'true');
-  assert.strictEqual(elements['#batch-select-all'].disabled, true);
-  assert.strictEqual(elements['#batch-clear'].disabled, true);
-  run(`setBatchBusy(false, '', null)`);
-
-  run(`selectedIds = new Set([2, 3]); renderBatchBar();`);
-  assert.strictEqual(elements['#batch-done'].disabled, true);
-  assert.match(elements['#batch-done'].innerHTML, /<span>完成<\/span>/);
-});
-
-test('批量操作失败后保留选择并恢复所有控件', async () => {
-  const toasts = [];
-  const controls = {
-    '#batch-bar': { classList: fakeClassList(), setAttribute() {} },
-    '#batch-count': { textContent: '' },
-    '#batch-done': { disabled: false, innerHTML: '', title: '', setAttribute() {} },
-    '#batch-pri': { disabled: false },
-    '#batch-delete': { disabled: false },
-    '#batch-select-all': { disabled: false, textContent: '' },
-    '#batch-clear': { disabled: false }
-  };
-  const run = loadRendererRuntime({ ...controls, __testValues: { toasts } });
-  run(`
-    tasks = [{ id: 1, status: 'todo' }, { id: 2, status: 'todo' }];
-    batchMode = true;
-    visibleTaskIds = [1, 2];
-    selectedIds = new Set([1, 2]);
-    toast = (message) => testValues.toasts.push(message);
-    refreshTasksAfterMutation = async () => {};
-  `);
-  const changed = await run(`runBatchMutation({
-    ids: [1, 2], control: null, busyMessage: '正在更新 2 项…',
-    action: async () => { throw new Error('写入失败'); },
-    successMessage: '已更新', refreshFailureMessage: '刷新失败'
-  })`);
-  assert.strictEqual(changed, false);
-  assert.strictEqual(run('batchMode'), true);
-  assert.strictEqual(run('selectedIds.size'), 2);
-  assert.strictEqual(run('batchBusy'), false);
-  assert.strictEqual(controls['#batch-clear'].disabled, false);
-  assert.match(toasts[0], /当前选择已保留/);
 });
 
 test('真实模型设置明确数据范围并校验自定义服务地址', () => {
@@ -1374,20 +1274,21 @@ test('桌宠自由拖放并通过独立小窗提供概览和连续 Agent 对话'
   assert.match(petHtml, /id="pet-menu" role="dialog"[^>]+aria-hidden="true"/);
   assert.match(petHtml, /id="pet-menu-next" role="status" aria-live="polite" aria-atomic="true"/);
   assert.match(petHtml, /class="pm-primary"[\s\S]*?data-pet="new"[\s\S]*?data-pet="ai"/);
-  assert.strictEqual((petHtml.match(/class="pm-it" data-pet=/g) || []).length, 6);
+  assert.strictEqual((petHtml.match(/class="pm-it" data-pet=/g) || []).length, 4);
   assert.match(petHtml, /class="pm-grid" role="toolbar" aria-label="打开视图"/);
   assert.strictEqual((petHtml.match(/class="pm-it" data-pet="[^"]+" tabindex="0"/g) || []).length, 1);
-  assert.strictEqual((petHtml.match(/class="pm-it" data-pet="[^"]+" tabindex="-1"/g) || []).length, 5);
+  assert.strictEqual((petHtml.match(/class="pm-it" data-pet="[^"]+" tabindex="-1"/g) || []).length, 3);
   assert.match(petHtml, /id="pet" role="button" tabindex="0"[^>]+aria-expanded="false"/);
   assert.match(petCss, /\.pm-grid \{[\s\S]*?grid-template-columns: repeat\(3, minmax\(0, 1fr\)\)/);
   assert.match(petCss, /\.pm-close \.ui-icon \{ width: 14px; height: 14px; \}/);
   assert.match(petCss, /\.pm-main \.ui-icon \{ width: 13px; height: 13px; \}/);
   assert.match(petCss, /\.pm-main \{[\s\S]*?white-space: nowrap;/);
   assert.match(petCss, /\.pet-menu \.pm-it \.ui-icon \{ width: 14px; height: 14px; \}/);
-  for (const name of ['x', 'plus', 'message', 'today', 'board', 'calendar', 'stat', 'trash', 'settings', 'external']) {
+  for (const name of ['x', 'plus', 'message', 'today', 'tasks', 'stat', 'settings', 'external']) {
     assert.match(petHtml, new RegExp(`href="#ui-i-${name}"`));
   }
   assert.doesNotMatch(petHtml, /[＋✎◧▤▦◫⌫⚙×]/);
+  assert.doesNotMatch(petHtml, /data-pet="board"|data-pet="cal"|data-pet="stat"|data-pet="trash"/);
   assert.match(petCss, /\.pet-bubble \{[\s\S]*?width: calc\(100% - 8px\);[\s\S]*?max-width: none;/);
   assert.match(petCss, /\.pet-bubble \{[\s\S]*?-webkit-line-clamp: 4;[\s\S]*?overflow: hidden;/);
   assert.match(petHtml, /id="pet-reminder"[^>]+aria-label="查看提醒任务"/);
@@ -1580,7 +1481,7 @@ test('提醒可从系统通知、主界面和桌宠准确继续到对应任务',
   assert.match(preload, /'app:open-task'/);
   assert.match(app, /async function openReminderTask\(data\)/);
   assert.match(app, /tasks\.find\(\(item\) => item\.id === id\)/);
-  assert.match(app, /switchView\('tasks'\);\s*openModal\(task\)/);
+  assert.match(app, /switchView\('list'\);\s*openModal\(task\)/);
   assert.match(app, /window\.api\.on\('app:open-task'[\s\S]*?openReminderTask\(data\)/);
   assert.match(app, /window\.api\.on\('app:reminder'[\s\S]*?label: '查看'[\s\S]*?run: \(\) => openReminderTask\(data\)/);
   assert.match(main, /n\.on\('click', \(\) => sendToMain\('app:open-task', \{ id: t\.id \}\)\)/);
@@ -1791,198 +1692,25 @@ test('界面颜色与间距由统一设计令牌驱动', () => {
   assert.match(app, /const stateClass = stage === 'llm'/);
 });
 
-test('统计图表模板保持有效的容器闭合结构', () => {
-  const renderStatSource = app.slice(app.indexOf('function renderStat()'), app.indexOf('/* ---------- 视图：设置 ---------- */'));
-  assert.match(renderStatSource, /<div class="trend-column(?:\$\{i === trend\.length - 1 \? ' today' : ''\})?" role="listitem"[\s\S]*?<span class="trend-label" aria-hidden="true">\$\{days\[i\]\}<\/span>\s*<\/div>`\)\.join/);
-  assert.doesNotMatch(renderStatSource, /<\/button>`\)\.join/);
-  assert.match(renderStatSource, /<section class="stat-panel">[\s\S]*?标签完成率[\s\S]*?<\/section>\s*<\/div>`;/);
-});
-
-test('统计与周报提供准确图表语义、空状态和完整操作反馈', () => {
-  const renderStatSource = app.slice(app.indexOf('function weeklyReportFileName'), app.indexOf('/* ---------- 视图：设置 ---------- */'));
-  assert.match(renderStatSource, /<dl class="stat-grid">[\s\S]*?<dt class="sc-t">任务总数<\/dt><dd class="sc-v">/);
-  assert.match(renderStatSource, /class="trend-chart" role="list"/);
-  assert.match(renderStatSource, /role="meter" aria-label="\$\{PRI_NAME\[p\]\}任务占比"/);
-  assert.match(renderStatSource, /--bar-h:\$\{v \? Math\.max\(4, v \/ maxTrend \* 120\) : 0\}px/);
-  assert.match(css, /\.trend-bar \{[\s\S]*?min-height: 0;/);
-  assert.match(renderStatSource, /class="empty stat-empty"[\s\S]*?id="stat-new-task">新建任务/);
-  assert.match(renderStatSource, /id="report-week-seg" role="radiogroup" aria-label="周报周期"/);
-  assert.match(renderStatSource, /id="report-period-seg" role="radiogroup" aria-label="报告类型"/);
-  assert.match(renderStatSource, /id="report-day-seg" role="radiogroup" aria-label="日报日期"/);
-  assert.doesNotMatch(renderStatSource, /id="btn-report-agent"/);
-  assert.match(renderStatSource, /window\.api\.ai\.report\(\{/);
+test('统计与看板日历已裁剪，记录视图就位并保留报告基建', () => {
+  assert.doesNotMatch(app, /function renderStat\(|function renderBoard\(|function renderCal\(|function beginReportAction|reportActionBusy|stat-grid|trend-chart|renderSmartFilters/);
+  assert.doesNotMatch(html, /id="view-stat"|id="view-board"|id="view-cal"|id="smart-filters"|id="report-preview"/);
+  // 记录视图占位（阶段 4 填充工作记录）
+  assert.match(html, /<section class="view" id="view-records"/);
+  assert.match(html, /id="records-sub" aria-live="polite"/);
+  assert.match(html, /<div class="view-body" id="records-body"><\/div>/);
+  assert.match(app, /function renderRecords\(\)[\s\S]{0,400}工作记录即将上线/);
+  // 报告基建保留：AI 报告通道与文件名助手供对话报告使用
   assert.match(preload, /report: \(input, requestId\) => ipcRenderer\.invoke\('ai:report'/);
   assert.match(main, /ipcMain\.handle\('ai:report'/);
-  assert.match(renderStatSource, /class="stat-card total"/);
-  assert.match(renderStatSource, /class="stat-card done"/);
-  assert.match(renderStatSource, /class="stat-card doing"/);
-  assert.match(renderStatSource, /class="stat-card rate"/);
-  assert.match(renderStatSource, /class="trend-column\$\{i === trend\.length - 1 \? ' today' : ''\}"/);
-  assert.match(css, /\.stat-card\.done \.sc-v \{ color: var\(--ok\); \}/);
-  assert.match(css, /\.trend-column\.today \.trend-bar \{ background: var\(--ink\);/);
-  assert.match(renderStatSource, /role="radio" aria-checked="\$\{reportWeek === 0\}"/);
-  assert.match(renderStatSource, /x\.setAttribute\('aria-checked', 'false'\)/);
-  assert.match(renderStatSource, /\$\('#report-preview'\)\.textContent = ''/);
-  assert.match(renderStatSource, /id="report-preview"[\s\S]*?role="region" aria-label="周报预览" tabindex="0"/);
-  assert.match(renderStatSource, /function beginReportAction\(button, busyLabel\)/);
-  assert.match(renderStatSource, /const requestedWeek = reportWeek/);
-  assert.doesNotMatch(renderStatSource, /weeklyReport\(requestedWeek\)/);
-  assert.match(renderStatSource, /if \(reportActionBusy\) return/);
-  assert.match(css, /#btn-report-gen \{ width: 112px; \}/);
-  assert.match(css, /#btn-report-copy \{ width: 84px; \}/);
-  assert.match(css, /#btn-report-download \{ width: 108px; \}/);
-  assert.match(renderStatSource, /preview\.focus\(\{ preventScroll: true \}\);\s*preview\.scrollIntoView\(\{ block: 'nearest' \}\)/);
-  assert.match(renderStatSource, /console\.error\('\[report\] generation failed:', e\)/);
-  assert.match(renderStatSource, /toast\('周报生成失败，请稍后重试'/);
-  assert.match(renderStatSource, /setButtonContent\(copyBtn, '已复制', 'check'\)/);
-  assert.match(renderStatSource, /id="btn-report-gen">\$\{uiIcon\('file-text'\)\}<span>生成周报<\/span>/);
-  assert.match(renderStatSource, /id="btn-report-download">\$\{uiIcon\('download'\)\}<span>下载 \.md<\/span>/);
-  assert.match(renderStatSource, /a\.download = weeklyReportFileName\(reportWeek\)/);
-  assert.match(renderStatSource, /a\.download = dailyReportFileName\(reportDay\)/);
-  assert.doesNotMatch(renderStatSource, /window\.api\.data\.dailyReport\(requestedOffset\)/);
   assert.match(app, /function reportCard\(result\)/);
-  assert.match(app, /className = 'report-evidence-band'/);
-  assert.match(app, /className = 'report-source-drawer hidden'/);
-  assert.match(app, /textContent: '核对来源'/);
-  assert.match(app, /sendPrompt\('结束报告修改'\)/);
-  assert.match(app, /report: '报告修改中 · 直接说受众、重点、语气或篇幅'/);
-  // 降级时要把真因显示出来，而不是只说“本地事实版”
-  assert.match(renderStatSource, /已生成本地事实版报告：\$\{result\.degradeNotice \|\| '模型未启用'\}/);
-  assert.match(app, /className = 'report-degrade-reason'/);
+  assert.match(app, /function weeklyReportFileName\(weekOffset\)/);
+  assert.match(app, /function dailyReportFileName\(dayOffset\)/);
   assert.match(app, /result\.degradeNotice \|\| '模型未启用，已降级为本地事实模板'/);
   assert.match(css, /\.report-degrade-reason \{[^}]*color: var\(--warn\)/);
-  assert.match(css, /\.report-agent-head \{[\s\S]*?flex-wrap/);
-  assert.match(css, /\.report-evidence-band \{[^}]*flex-wrap: wrap/);
-  assert.match(css, /\.report-source-list \{ max-height: 220px; overflow: auto;/);
-  assert.match(css, /\.report-source-item-head strong \{[^}]*overflow-wrap: anywhere/);
-  assert.match(renderStatSource, /URL\.revokeObjectURL\(url\)/);
 });
 
-test('周报操作锁会冻结周期和命令并完整恢复原状态', () => {
-  const makeControl = (innerHTML = '') => ({
-    attrs: {}, disabled: false, innerHTML, isConnected: true, children: [],
-    setAttribute(name, value) { this.attrs[name] = value; },
-    replaceChildren() { this.children = []; this.innerHTML = ''; },
-    appendChild(child) { this.children.push(child); }
-  });
-  const week = makeControl('本周');
-  const generate = makeControl('<svg></svg><span>生成周报</span>');
-  const copy = makeControl('<svg></svg><span>复制</span>');
-  const download = makeControl('<svg></svg><span>下载 .md</span>');
-  const actions = makeControl();
-  const weekGroup = makeControl();
-  const controls = [week, generate, copy, download];
-  const panel = {
-    querySelector(selector) { return selector === '.report-actions' ? actions : weekGroup; },
-    querySelectorAll() { return controls; }
-  };
-  generate.closest = (selector) => selector === '.report-panel' ? panel : null;
-  const run = loadRendererRuntime({
-    __createElement: () => ({ textContent: '' }),
-    __testValues: { generate }
-  });
-
-  assert.strictEqual(run(`testValues.release = beginReportAction(testValues.generate, '生成中…'); reportActionBusy`), true);
-  assert.strictEqual(run(`beginReportAction(testValues.generate, '生成中…')`), null);
-  assert.ok(controls.every((control) => control.disabled));
-  assert.strictEqual(actions.attrs['aria-busy'], 'true');
-  assert.strictEqual(weekGroup.attrs['aria-busy'], 'true');
-  assert.strictEqual(generate.attrs['aria-busy'], 'true');
-  run('testValues.release()');
-  assert.ok(controls.every((control) => !control.disabled));
-  assert.strictEqual(run('reportActionBusy'), false);
-  assert.strictEqual(actions.attrs['aria-busy'], 'false');
-  assert.strictEqual(weekGroup.attrs['aria-busy'], 'false');
-  assert.strictEqual(generate.attrs['aria-busy'], 'false');
-    assert.match(generate.innerHTML, /生成周报/);
-});
-
-test('看板和日历的交互卡片保持有效的按钮闭合结构', () => {
-  const boardSource = app.slice(app.indexOf('function renderBoard()'), app.indexOf('/* ---------- 视图：日历 ---------- */'));
-  const calendarSource = app.slice(app.indexOf('function renderCal('), app.indexOf('/* ---------- 视图：统计 ---------- */'));
-  assert.match(boardSource, /<div class="bc-card-item" role="listitem" data-id="\$\{t\.id\}">[\s\S]*?<button type="button" class="bc-card"[\s\S]*?<\/button>[\s\S]*?class="bc-status"[\s\S]*?<\/div>`\)\.join/);
-  assert.doesNotMatch(boardSource, /<button type="button" class="bc-card"[\s\S]*?<\/button>\s*<\/button>/);
-  assert.match(calendarSource, /\$\{dots \? `<span class="cal-dots">\$\{dots\}<\/span>` : ''\}\s*<\/button>`;/);
-  assert.doesNotMatch(calendarSource, /\$\{dots \? `<span class="cal-dots">\$\{dots\}<\/span>` : ''\}\s*<\/div>`;/);
-  assert.match(calendarSource, /class="cal-grid" role="grid" aria-label="\$\{y\}年\$\{m \+ 1\}月日历/);
-  assert.match(calendarSource, /role="columnheader"/);
-  assert.match(calendarSource, /aria-current="date"/);
-  assert.match(calendarSource, /playTransientClass\(\$\('#cal-body \.cal-grid'\), direction < 0 \? 'cal-shift-prev' : 'cal-shift-next'/);
-  assert.match(css, /\.cal-grid\.cal-shift-prev \{ animation: calShiftPrev var\(--motion-base\)/);
-  assert.match(css, /\.cal-detail\.cal-detail-enter \{ animation: calDetailEnter var\(--motion-fast\)/);
-});
-
-test('看板按持久化顺序渲染并区分同列与跨列落点', () => {
-  const board = { innerHTML: '' };
-  const sub = { textContent: '' };
-  const column = { dataset: { col: 'todo' }, classList: fakeClassList() };
-  const item = { classList: fakeClassList() };
-  const targetCard = {
-    dataset: { id: '2' },
-    closest(selector) { return selector === '.bc-card-item' ? item : null; }
-  };
-  const run = loadRendererRuntime({
-    '#board-cols': board,
-    '#board-sub': sub,
-    __querySelectorAll: (selector) => {
-      if (selector === '#board-cols .board-col') return [column];
-      if (selector === '#board-cols .bc-card-item') return [item];
-      return [];
-    },
-    __testValues: { column, targetCard }
-  });
-  run(`tasks = [
-    { id: 1, title: '后排任务', status: 'todo', pri: 4, order: 20, createdAt: 1 },
-    { id: 2, title: '前排任务', status: 'todo', pri: 1, order: 10, createdAt: 2 }
-  ]; renderBoard()`);
-  assert.ok(board.innerHTML.indexOf('前排任务') < board.innerHTML.indexOf('后排任务'));
-  assert.match(board.innerHTML, /aria-keyshortcuts="Alt\+ArrowUp Alt\+ArrowDown"/);
-
-  run(`boardDragState = { id: 1, status: 'todo' }; showBoardDropFeedback(testValues.column, testValues.targetCard, true)`);
-  assert.strictEqual(column.classList.contains('col-drop'), true);
-  assert.strictEqual(item.classList.contains('drop-before'), true);
-  run(`boardDragState = { id: 1, status: 'doing' }; showBoardDropFeedback(testValues.column, testValues.targetCard, false)`);
-  assert.strictEqual(column.classList.contains('col-drop'), true);
-  assert.strictEqual(item.classList.contains('drop-before'), false);
-  assert.strictEqual(item.classList.contains('drop-after'), false);
-  assert.match(css, /\.bc-card-item\.drop-before \{ box-shadow: 0 -3px/);
-  assert.match(css, /\.col-drop \.bc-head \{ color: var\(--accent2\); \}/);
-});
-
-test('看板状态菜单提供非拖拽路径并在重绘后恢复焦点', async () => {
-  const boardAttrs = {};
-  const triggerAttrs = {};
-  const updates = [];
-  const board = { setAttribute(name, value) { boardAttrs[name] = value; } };
-  const nextTrigger = { focused: false, focus() { this.focused = true; } };
-  const trigger = {
-    value: 'doing',
-    disabled: false,
-    setAttribute(name, value) { triggerAttrs[name] = value; }
-  };
-  const run = loadRendererRuntime({
-    '#board-cols': board,
-    '#board-cols [data-board-status][data-id="1"]': nextTrigger,
-    __window: { api: { tasks: { update: async (id, data) => { updates.push({ id, data }); } } } },
-    __testValues: { trigger }
-  });
-  run(`tasks = [{ id: 1, title: '整理周报', status: 'todo' }]; refreshTasksAfterMutation = async () => {}; toast = () => {}`);
-  assert.strictEqual(await run(`moveBoardTask(1, 'doing', testValues.trigger)`), true);
-  assert.strictEqual(JSON.stringify(updates), JSON.stringify([{ id: 1, data: { status: 'doing' } }]));
-  assert.strictEqual(boardAttrs['aria-busy'], 'false');
-  assert.strictEqual(triggerAttrs['aria-busy'], 'false');
-  assert.strictEqual(trigger.disabled, false);
-  assert.strictEqual(nextTrigger.focused, true);
-
-  const boardSource = app.slice(app.indexOf('function renderBoard()'), app.indexOf('/* ---------- 视图：日历 ---------- */'));
-  assert.match(boardSource, /data-board-status data-id="\$\{t\.id\}" aria-label="移动任务/);
-  assert.strictEqual((boardSource.match(/<option value="\$\{target\.k\}"/g) || []).length, 1);
-  assert.match(app, /#board-cols'\)\.addEventListener\('change'/);
-  assert.match(css, /\.bc-card-item:focus-within/);
-  assert.match(css, /\.bc-status \{/);
-});
-
-test('拖拽排序阻止并发写入并在失败后恢复原界面', async () => {
+test('任务列表拖拽排序阻止并发写入并在失败后恢复原界面', async () => {
   let release;
   let reorderCalls = 0;
   const pending = new Promise((resolve) => { release = resolve; });
@@ -1991,15 +1719,16 @@ test('拖拽排序阻止并发写入并在失败后恢复原界面', async () =>
   const item = { isConnected: true, classList: fakeClassList() };
   const toasts = [];
   const run = loadRendererRuntime({
+    '#tasks-list': surface,
     __window: { api: { tasks: { reorder: async () => { reorderCalls++; await pending; } } } },
-    __testValues: { surface, item, toasts }
+    __testValues: { item, toasts }
   });
   run(`
     toast = (message) => testValues.toasts.push(message);
     refreshTasksAfterMutation = async () => {};
   `);
-  const first = run(`commitTaskOrder([2, 1], testValues.item, testValues.surface, 'list', '已调整任务顺序', '刷新失败')`);
-  const duplicate = await run(`commitTaskOrder([1, 2], testValues.item, testValues.surface, 'list', '已调整任务顺序', '刷新失败')`);
+  const first = run(`commitTaskOrder([2, 1], testValues.item, '已调整任务顺序', '刷新失败')`);
+  const duplicate = await run(`commitTaskOrder([1, 2], testValues.item, '已调整任务顺序', '刷新失败')`);
   assert.strictEqual(duplicate, false);
   assert.strictEqual(reorderCalls, 1);
   assert.strictEqual(surfaceAttrs['aria-busy'], 'true');
@@ -2012,7 +1741,7 @@ test('拖拽排序阻止并发写入并在失败后恢复原界面', async () =>
     window.api.tasks.reorder = async () => { throw new Error('写入失败'); };
     playTransientClass = (element, name) => element.classList.add(name);
   `);
-  assert.strictEqual(await run(`commitTaskOrder([2, 1], testValues.item, testValues.surface, 'list', '已调整任务顺序', '刷新失败')`), false);
+  assert.strictEqual(await run(`commitTaskOrder([2, 1], testValues.item, '已调整任务顺序', '刷新失败')`), false);
   assert.strictEqual(run('taskReorderBusy'), false);
   assert.strictEqual(surfaceAttrs['aria-busy'], 'false');
   assert.strictEqual(item.classList.contains('reorder-error'), true);
@@ -2021,73 +1750,38 @@ test('拖拽排序阻止并发写入并在失败后恢复原界面', async () =>
   assert.match(css, /\.task-row\.reorder-error,[\s\S]*?animation: reorderError/);
 });
 
-test('列表与看板支持键盘重排并在重绘后恢复到同一任务', async () => {
+test('清单支持键盘重排并在重绘后恢复到同一任务', async () => {
   const orders = [];
-  const boardAttrs = {};
-  const board = {
-    setAttribute(name, value) { boardAttrs[name] = value; },
-    querySelectorAll() { return []; }
-  };
-  const column = { querySelectorAll() { return [first, second]; } };
   const makeItem = (id) => ({
     dataset: { id: String(id) },
     classList: fakeClassList(),
-    closest(selector) { return selector === '.board-col' ? column : null; }
+    isConnected: true
   });
   const first = makeItem(1);
   const second = makeItem(2);
   const focused = { focus(options) { this.focused = true; this.options = options; } };
+  const listAttrs = {};
+  const listEl = {
+    querySelectorAll() { return [first, second]; },
+    setAttribute(name, value) { listAttrs[name] = value; },
+    removeAttribute(name) { delete listAttrs[name]; }
+  };
   const run = loadRendererRuntime({
-    '#board-cols': board,
-    '#board-cols .bc-card-item[data-id="2"]': second,
-    '#board-cols .bc-card[data-id="2"]': focused,
+    '#tasks-list': listEl,
+    '#tasks-list .task-row[data-id="2"]': second,
+    '#tasks-list .task-row[data-id="2"] .task-title-btn': focused,
     __window: { api: { tasks: { reorder: async (ids) => { orders.push(ids); } } } }
   });
   run(`refreshTasksAfterMutation = async () => {}; toast = () => {}`);
-  assert.strictEqual(await run(`reorderTaskByKeyboard('board', 2, -1)`), true);
+  assert.strictEqual(await run(`reorderTaskByKeyboard(2, -1)`), true);
   assert.strictEqual(JSON.stringify(orders), JSON.stringify([[2, 1]]));
   assert.strictEqual(focused.focused, true);
   assert.strictEqual(focused.options.preventScroll, true);
-  assert.strictEqual(boardAttrs['aria-busy'], 'false');
-  assert.match(app, /#board-cols'\)\.addEventListener\('keydown', \(e\) => onTaskReorderKeyDown\(e, 'board'\)\)/);
-  assert.match(app, /#tasks-list'\)\.addEventListener\('keydown', \(e\) => onTaskReorderKeyDown\(e, 'list'\)\)/);
+  assert.match(app, /#tasks-list'\)\.addEventListener\('keydown', onTaskReorderKeyDown\)/);
   assert.match(app, /aria-keyshortcuts="Alt\+ArrowUp Alt\+ArrowDown"/);
 });
 
-test('日历使用单一 Tab 停靠点并支持二维方向键浏览', () => {
-  let cells;
-  const grid = {
-    querySelectorAll() { return cells; }
-  };
-  const makeCell = (key, tabIndex) => ({
-    dataset: { day: key },
-    tabIndex,
-    focused: false,
-    focus() { this.focused = true; },
-    closest(selector) {
-      if (selector === '.cal-cell[data-day]') return this;
-      if (selector === '.cal-grid') return grid;
-      return null;
-    }
-  });
-  cells = Array.from({ length: 14 }, (_, index) => makeCell(`2026-08-${String(index + 2).padStart(2, '0')}`, index === 0 ? 0 : -1));
-  let prevented = false;
-  const event = { target: cells[0], key: 'ArrowRight', preventDefault() { prevented = true; } };
-  const run = loadRendererRuntime({ '#cal-body .cal-grid': grid, __testValues: { event, cells } });
-  run('onCalKeyDown(testValues.event)');
-  assert.strictEqual(prevented, true);
-  assert.strictEqual(cells[1].focused, true);
-  assert.deepStrictEqual(cells.map((cell) => cell.tabIndex), [-1, 0, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1]);
-
-  run(`testValues.event.target = testValues.cells[9]; testValues.event.key = 'Home'; onCalKeyDown(testValues.event)`);
-  assert.strictEqual(cells[7].focused, true);
-  assert.strictEqual(cells.filter((cell) => cell.tabIndex === 0).length, 1);
-  assert.strictEqual(run(`shiftCalendarKey('2026-03-31', 0, -1)`), '2026-02-28');
-  assert.strictEqual(run(`shiftCalendarKey('2026-08-20', 7, 0)`), '2026-08-27');
-  assert.match(app, /#cal-body'\)\.addEventListener\('keydown', onCalKeyDown\)/);
-});
-
-test('任务搜索、今日空态、看板与日历形成完整且一致的工作流', () => {
+test('任务搜索、今日空态与清单视图形成完整且一致的工作流', () => {
   const container = {
     innerHTML: '',
     querySelector(selector) {
@@ -2101,88 +1795,33 @@ test('任务搜索、今日空态、看板与日历形成完整且一致的工�
   assert.match(container.innerHTML, /id="empty-clear-search">清除搜索/);
   assert.doesNotMatch(container.innerHTML, /还没有任务/);
 
-  const results = {};
-  const runCalendar = loadRendererRuntime({ __testValues: { results } });
-  runCalendar(`tasks = [
-    { id: 1, title: '可见任务', status: 'todo', due: '2026-08-20 12:00' },
-    { id: 2, title: '归档任务', status: 'archived', due: '2026-08-20 12:00' },
-    { id: 3, title: '已删除任务', status: 'todo', due: '2026-08-20 12:00', _deleted: true }
-  ]; testValues.results.titles = tasksOnDay('2026-08-20').map((task) => task.title)`);
-  assert.strictEqual(JSON.stringify(results.titles), JSON.stringify(['可见任务']));
+  runSearch(`currentSearch = ''; renderList(testValues.container, [])`);
+  assert.match(container.innerHTML, /还没有任务/);
+  assert.match(container.innerHTML, /id="empty-new-task">新建任务/);
 
-  const boardSource = app.slice(app.indexOf('function renderBoard()'), app.indexOf('/* ---------- 视图：日历 ---------- */'));
-  const boardEvents = app.slice(app.indexOf('// 看板拖拽'), app.indexOf('// 任务列表拖拽排序'));
-  assert.match(html, /id="board-sub"/);
-  assert.doesNotMatch(html, /拖拽卡片到目标列变更状态/);
-  assert.match(boardSource, /<section class="board-col"[^>]+aria-labelledby="\$\{colId\}"/);
-  assert.match(boardSource, /role="list" aria-label="\$\{col\.name\}任务"/);
-  assert.match(boardSource, /class="board-empty"><span role="status">暂无\$\{col\.name\}任务/);
-  assert.match(boardSource, /id="board-new-task">新建任务/);
-  assert.match(boardSource, /\$\('#board-sub'\)\.textContent = cols\.map/);
-  assert.match(app, /function setBoardBusyState\(busy, activeControl\)/);
-  assert.match(boardEvents, /showBoardDropFeedback\(col, targetCard, before\)/);
-  assert.match(boardEvents, /console\.error\('\[board\] task move failed:', error\)/);
-  assert.match(boardEvents, /toast\('移动任务失败，请稍后重试'/);
-  assert.match(css, /\.board-cols \{[^}]*display: grid;[^}]*grid-template-columns: repeat\(3, minmax\(150px, 1fr\)\)/);
-  assert.match(css, /\.bc-card \.cb \{[^}]*align-items: flex-start;/);
-  assert.match(css, /\.bc-card \.pri-dot \{[^}]*flex: 0 0 auto;/);
-  assert.match(app, /id="today-empty-all">查看所有任务/);
-  assert.match(app, /id="today-empty-new">新建任务/);
-  assert.match(app, /uiIcon\('search'\)/);
-  assert.match(app, /today: \{ ico: 'today'/);
-  assert.match(app, /archived: \{ ico: 'archive'/);
-  assert.match(app, /uiIcon\('stat'\)/);
-  assert.match(app, /id="cal-add-task">\$\{uiIcon\('plus'\)\}/);
-  assert.strictEqual((app.match(/#cal-body'\)\.addEventListener\('click', onCalClick\)/g) || []).length, 1);
-  assert.strictEqual((app.match(/#cal-body'\)\.addEventListener\('keydown', onCalKeyDown\)/g) || []).length, 1);
-  assert.match(app, /class="cal-title" aria-live="polite"/);
-  assert.match(app, /class="cal-dot \$\{dotCls\}" aria-hidden="true"/);
-});
-
-test('项目和标签筛选为空时提供清除路径并恢复到全部筛选', () => {
-  let clearHandler = null;
-  const container = {
-    innerHTML: '',
-    querySelector(selector) {
-      if (selector !== '#empty-clear-filter') return null;
-      return { addEventListener(name, handler) { if (name === 'click') clearHandler = handler; } };
-    }
-  };
-  const allFilter = { focused: false, focus() { this.focused = true; } };
-  const run = loadRendererRuntime({
-    '#smart-filters .fchip[data-filter="all"]': allFilter,
-    __testValues: { container }
+  const listSub = { textContent: '占位' };
+  const runTasks = loadRendererRuntime({
+    '#tasks-list': { innerHTML: '', insertAdjacentHTML(where, html) { this.innerHTML += html; } },
+    '#list-sub': listSub
   });
-  run(`currentFilter = 'tag:工作'; renderTasks = () => {}; renderList(testValues.container, [])`);
-  assert.match(container.innerHTML, /“#工作”下没有任务/);
-  assert.match(container.innerHTML, /id="empty-clear-filter">清除筛选/);
-  clearHandler();
-  assert.strictEqual(run('currentFilter'), 'all');
-  assert.strictEqual(allFilter.focused, true);
-  assert.match(app, /\$\('#tasks-sub'\)\.textContent = `显示 \$\{list\.length\} · 完成/);
-});
+  runTasks(`
+    tasks = [
+      { id: 1, title: '可见任务', status: 'todo', order: 1, createdAt: 1 },
+      { id: 2, title: '归档任务', status: 'archived', order: 2, createdAt: 2 }
+    ];
+    listTab = 'tasks';
+    renderTasks();
+  `);
+  assert.match(listSub.textContent, /显示 2 · 完成 0 \/ 1/);
+  runTasks(`listTab = 'memos'; renderTasks();`);
+  assert.match(listSub.textContent, /显示 2/);
 
-test('任务筛选保留核心状态并将项目标签收进可记忆的更多筛选', () => {
-  const wrap = { innerHTML: '' };
-  const run = loadRendererRuntime({ '#smart-filters': wrap });
-  run(`tasks = [
-    { id: 1, project: 'Q3 规划', tags: ['工作', '规划'] },
-    { id: 2, project: '日常工作', tags: ['工作'] }
-  ]; currentFilter = 'all'; advancedFiltersOpen = false; renderSmartFilters()`);
-  assert.match(wrap.innerHTML, /id="smart-more" aria-expanded="false" aria-controls="smart-advanced"/);
-  assert.match(wrap.innerHTML, /更多筛选 4/);
-  assert.match(wrap.innerHTML, /class="smart-advanced hidden"/);
-  assert.match(wrap.innerHTML, /data-filter="proj:Q3 规划"/);
-  assert.match(wrap.innerHTML, /data-filter="tag:工作"/);
-
-  run(`currentFilter = 'proj:Q3 规划'; advancedFiltersOpen = true; renderSmartFilters()`);
-  assert.match(wrap.innerHTML, /id="smart-more" aria-expanded="true"/);
-  assert.match(wrap.innerHTML, /class="smart-more-label"><svg[^>]+>[\s\S]*?href="#ui-i-folder"[\s\S]*?<span>Q3 规划<\/span>[\s\S]*?href="#ui-i-chevron-up"/);
-  assert.match(wrap.innerHTML, /class="fchip has-icon active"[^>]+data-filter="proj:Q3 规划"[^>]*>[\s\S]*?href="#ui-i-folder"/);
-  assert.doesNotMatch(wrap.innerHTML, /class="smart-advanced hidden"/);
-  assert.match(app, /advancedFiltersOpen = !advancedFiltersOpen;\s*renderSmartFilters\(\);\s*\$\('#smart-more'\)\.focus\(\)/);
-  assert.match(app, /#smart-filters \.fchip\[data-filter\]/);
-  assert.match(css, /\.smart-advanced \{[^}]*border-left: 2px solid/);
+  // 旧视图名映射到四个视图（今天/清单/记录/设置）
+  assert.match(app, /const VIEW_ALIASES = \{[\s\S]*?tasks: 'list',[\s\S]*?trash: 'settings',[\s\S]*?stat: 'records'/);
+  assert.match(app, /if \(\['today', 'list', 'records', 'settings', 'tasks', 'memos', 'board', 'cal', 'stat', 'stats', 'trash'\]\.includes\(view\)\) switchView\(view\)/);
+  assert.match(app, /\$\('#today-empty-all'\)\?\.addEventListener\('click', \(\) => \{\s*switchView\('list'\);\s*setListTab\('tasks'\);/);
+  assert.match(app, /\$\('#today-empty-new'\)\?\.addEventListener\('click', \(\) => openModal\(null\)\)/);
+  assert.match(app, /uiIcon\('search'\)/);
 });
 
 test('设置页提供章节导航并将焦点送到真实内容分组', () => {
@@ -2281,7 +1920,6 @@ test('启动和异步数据读取提供加载、降级与重试状态', () => {
   assert.match(app, /function loadErrorHtml\(source, compact\)/);
   assert.match(app, /function applyDataLoadStates\(\)/);
   assert.match(app, /retryDataSource\(retry\.dataset\.retrySource, retry\)/);
-  assert.match(app, /if \(view === 'trash'\) loadTrash\(\);\s*applyDataLoadStates\(\)/);
   assert.match(app, /list\.innerHTML = loadErrorHtml\('trash'\)/);
   assert.match(css, /\.load-state\.error \{/);
   assert.match(css, /@keyframes loadSpin/);
@@ -2362,7 +2000,7 @@ test('设置同组操作共享互斥锁并在完成后恢复全部控件', async
 });
 
 test('设置、统计与回收站补齐标签、键盘退出和可恢复状态', () => {
-  assert.match(html, /id="stat-sub" aria-live="polite"/);
+  assert.match(html, /id="records-sub" aria-live="polite"/);
   assert.match(html, /id="trash-sub" aria-live="polite"/);
   ['ai-provider', 'ai-base-url', 'ai-api-key', 'ai-model', 'ai-temperature'].forEach((id) => {
     assert.match(app, new RegExp(`<label class="sr-t" for="${id}">`));
@@ -2381,8 +2019,6 @@ test('设置、统计与回收站补齐标签、键盘退出和可恢复状态',
   assert.match(app, /id="btn-backup-now"[^>]+data-settings-scope="data">\$\{uiIcon\('save'\)\}<span>立即备份<\/span>/);
   assert.match(app, /function downloadSettingsFile\(content, type, fileName\)[\s\S]*?URL\.revokeObjectURL\(url\)/);
   assert.match(app, /id="backup-retry">重试/);
-  assert.match(app, /class="trend-chart is-empty" role="status">近 7 天还没有完成记录/);
-  assert.match(css, /\.trend-chart\.is-empty \{[^}]*height: 96px;/);
   assert.match(app, /function focusTrashAfterMutation\(rowIndex\)/);
   assert.match(app, /focusTrashAfterMutation\(rowIndex\)/);
   assert.match(app, /#trash-sub'\)\.textContent = `\$\{total\} 项内容/);
@@ -2459,8 +2095,8 @@ test('暗色搜索聚焦保持深色背景，主操作色满足白字对比度',
 });
 
 test('备忘录工作区具备可访问导航、编辑与完整 IPC', () => {
-  assert.match(html, /class="nav-item" data-view="memos"/);
-  assert.match(html, /id="view-memos"/);
+  assert.match(html, /id="list-tab-memos"/);
+  assert.match(html, /id="list-memos-panel"/);
   assert.match(html, /id="memo-list" role="listbox"/);
   assert.match(app, /role="option" tabindex="\$\{memo\.id === focusId \? 0 : -1\}" aria-selected=/);
   assert.match(html, /id="memo-content"[^>]+aria-label="备忘录正文"/);
@@ -2549,7 +2185,7 @@ test('备忘录工具栏从保存前开始互斥并在结束后恢复焦点', ()
     selectedMemoId = 1;
     memoDirty = false;
     memoSavePending = 0;
-    testValues.release = beginMemoAction(document.getElementById('memo-to-task'), '创建中…');
+    currentView = 'list'; listTab = 'memos'; testValues.release = beginMemoAction(document.getElementById('memo-to-task'), '创建中…');
   `);
   assert.strictEqual(run('memoActionBusy'), true);
   assert.ok(Object.values(controls).every((control) => control.disabled));
@@ -2666,8 +2302,6 @@ test('桌宠跟随应用主题并保留自动主题响应', () => {
 
 test('备忘录支持防串写自动保存、转任务与统一回收站', () => {
   assert.match(app, /const id = selectedMemoId;[\s\S]*memoSaveChain = memoSaveChain\.then/);
-  assert.match(app, /if \(currentView === 'memos' && view !== 'memos'\) \{[\s\S]{0,120}saveMemoNow\(\);[\s\S]{0,120}setMemoBatchMode\(false\)/);
-  assert.match(app, /window\.api\.tasks\.create\(\{ title: memo\.title, desc: memo\.content, tags: memo\.tags/);
   assert.match(app, /window\.api\.memos\.emptyTrash\(\)/);
   assert.match(css, /\.memo-list-item\.pinned::before/);
   assert.match(css, /\.memo-content \{[\s\S]*user-select: text;/);
@@ -2738,7 +2372,8 @@ test('备忘录列表在运行时支持置顶排序展示和标签解析', () =>
   const list = { innerHTML: '', attrs: {}, setAttribute(name, value) { this.attrs[name] = value; } };
   const sub = { textContent: '' };
   const filters = { innerHTML: '' };
-  const run = loadRendererRuntime({ '#memo-list': list, '#memos-sub': sub, '#memo-filters': filters });
+  const run = loadRendererRuntime({ '#memo-list': list, '#list-sub': sub, '#memo-filters': filters });
+  run("listTab = 'memos';");
   const tags = JSON.parse(run(`JSON.stringify(parseMemoTags('工作， 灵感,产品  复盘'))`));
   assert.deepStrictEqual(tags, ['工作', '灵感', '产品', '复盘']);
   run(`memos = [
@@ -2754,7 +2389,6 @@ test('备忘录列表在运行时支持置顶排序展示和标签解析', () =>
   assert.match(list.innerHTML, /class="tag-chip">#工作<\/span>/);
   assert.match(filters.innerHTML, /data-memo-filter="tag:工作"/);
   assert.match(filters.innerHTML, /aria-pressed="true" data-memo-filter="all"/);
-  assert.strictEqual(list.attrs['aria-multiselectable'], 'false');
 });
 
 test('备忘录筛选与批量只作用于当前可见条目', () => {
@@ -2764,7 +2398,7 @@ test('备忘录筛选与批量只作用于当前可见条目', () => {
   const bar = { classList: fakeClassList(['hidden']), attrs: {}, setAttribute(name, value) { this.attrs[name] = value; } };
   const run = loadRendererRuntime({
     '#memo-list': list,
-    '#memos-sub': sub,
+    '#list-sub': sub,
     '#memo-filters': filters,
     '#memo-batch-bar': bar,
     '#memo-batch-count': { textContent: '' },
@@ -2782,30 +2416,24 @@ test('备忘录筛选与批量只作用于当前可见条目', () => {
     { id: 3, title: '丙', content: 'c', tags: ['工作'], pinned: false, updatedAt: 1 }
   ]; selectedMemoId = 1; memoFocusId = 1;`);
   // 标签筛选只留下命中的条目
+  run("listTab = 'memos';");
   run('memoFilter = "tag:工作"; renderMemoList();');
   assert.match(list.innerHTML, /甲/);
   assert.match(list.innerHTML, /丙/);
   assert.ok(!/乙/.test(list.innerHTML), '未命中标签的条目不应出现');
   assert.match(sub.textContent, /筛选出 2 条 · 共 3 条/);
   // 批量选择只统计当前可见且已选中的
-  run('memoFilter = "tag:工作"; memoSelectedIds = new Set([1, 2, 3]); renderMemoList(); renderMemoBatchBar();');
-  assert.deepStrictEqual(JSON.parse(run('JSON.stringify(memoBatchIds().sort())')), [1, 3]);
+  run("listTab = 'memos';");
   // 进入批量模式后列表允许多选
-  run('memoSearch = ""; setMemoBatchMode(true);');
-  assert.strictEqual(list.attrs['aria-multiselectable'], 'true');
-  assert.strictEqual(bar.classList.contains('hidden'), false);
-  assert.match(list.innerHTML, /memo-list-item selectable/);
-  assert.match(list.innerHTML, /class="memo-check"/);
-  assert.strictEqual(run('memoBatchMode'), true);
-  run('setMemoBatchMode(false);');
-  assert.strictEqual(run('memoSelectedIds.size'), 0, '退出批量应清空选择');
+  assert.doesNotMatch(list.innerHTML, /memo-list-item selectable/);
+  assert.doesNotMatch(list.innerHTML, /class="memo-check"/);
 });
 
 test('草稿行只显示草稿自己的标题，不串用上一条备忘录', () => {
   const list = { innerHTML: '', attrs: {}, focus: () => {}, setAttribute(name, value) { this.attrs[name] = value; } };
   const run = loadRendererRuntime({
     '#memo-list': list,
-    '#memos-sub': { textContent: '' },
+    '#list-sub': { textContent: '' },
     '#memo-filters': { innerHTML: '' },
     '#memo-title': { value: '上一条备忘录的标题' },
     '#memo-content': { value: '' },

@@ -1593,7 +1593,18 @@ function generateReport(input) {
   return period === 'daily' ? generateDailyReport(source.offset) : generateWeeklyReport(source.offset);
 }
 
+function convertMemoToTask(id) {
+  return runAgentTransaction(() => {
+    const memo = getMemo(id);
+    if (!memo) throw new Error('备忘录不存在');
+    const task = createTask({ title: memo.title, desc: memo.content, tags: memo.tags || [] });
+    deleteMemo(id);
+    return task;
+  });
+}
+
 module.exports = {
+  convertMemoToTask,
   init,
   getDataDir,
   getAllTasks,
